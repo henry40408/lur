@@ -5,7 +5,7 @@
 //! auto-decompression); UTF-8 is assumed only at the `json` opt and `res.json()`.
 
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use mlua::{Error, Lua, Table, Value};
@@ -19,25 +19,28 @@ use crate::runtime::RunError;
 /// Cap on a redirect chain.
 const MAX_REDIRECTS: usize = 10;
 
-/// Install `lur.http.request` and the method sugar, sharing one gated client.
+/// Install `lur.http.request` and the method sugar. The reqwest client (whose
+/// rustls setup dominates VM cold start) is built lazily on the first call, so
+/// a script that never touches `lur.http` pays nothing for it.
 pub fn install(
     lua: &Lua,
     lur: &Table,
     policy: Arc<Policy>,
     max_body: usize,
 ) -> Result<(), RunError> {
-    let client = Arc::new(build_client(&policy).map_err(|e| RunError::Init(Error::external(e)))?);
+    let cell: Arc<OnceLock<Client>> = Arc::new(OnceLock::new());
     let http = lua.create_table().map_err(RunError::Init)?;
 
     {
-        let client = Arc::clone(&client);
+        let cell = Arc::clone(&cell);
         let policy = Arc::clone(&policy);
         let request = lua
             .create_async_function(
                 move |lua, (method, url, opts): (String, String, Option<Table>)| {
-                    let client = Arc::clone(&client);
+                    let cell = Arc::clone(&cell);
                     let policy = Arc::clone(&policy);
                     async move {
+                        let client = ensure_client(&cell, &policy)?;
                         do_request(&lua, &client, &policy, &method, &url, opts, max_body).await
                     }
                 },
@@ -54,15 +57,16 @@ pub fn install(
         ("delete", "DELETE"),
         ("head", "HEAD"),
     ] {
-        let client = Arc::clone(&client);
+        let cell = Arc::clone(&cell);
         let policy = Arc::clone(&policy);
         let method = method.to_string();
         let f = lua
             .create_async_function(move |lua, (url, opts): (String, Option<Table>)| {
-                let client = Arc::clone(&client);
+                let cell = Arc::clone(&cell);
                 let policy = Arc::clone(&policy);
                 let method = method.clone();
                 async move {
+                    let client = ensure_client(&cell, &policy)?;
                     do_request(&lua, &client, &policy, &method, &url, opts, max_body).await
                 }
             })
@@ -72,6 +76,16 @@ pub fn install(
 
     lur.set("http", http).map_err(RunError::Init)?;
     Ok(())
+}
+
+/// Get the shared client, building it on first use (deferred rustls setup).
+fn ensure_client(cell: &OnceLock<Client>, policy: &Arc<Policy>) -> mlua::Result<Client> {
+    if let Some(client) = cell.get() {
+        return Ok(client.clone());
+    }
+    let client = build_client(policy).map_err(Error::external)?;
+    let _ = cell.set(client);
+    Ok(cell.get().expect("client just set").clone())
 }
 
 /// Build a reqwest client whose redirect policy re-checks each hop and whose
