@@ -77,6 +77,14 @@ fn write_to_a_new_file_canonicalizes_its_parent() {
 }
 
 #[test]
+fn env_allowlist_is_exact() {
+    let p = Policy::strict().with_env(vec!["API_KEY".to_string()]);
+    assert!(p.allows_env("API_KEY"));
+    assert!(!p.allows_env("OTHER"));
+    assert!(!Policy::strict().allows_env("API_KEY"));
+}
+
+#[test]
 fn strict_policy_denies_everything() {
     let dir = tempdir().unwrap();
     let f = dir.path().join("f.txt");

@@ -22,6 +22,10 @@ pub struct Policy {
     fs_read: Vec<PathBuf>,
     /// Canonicalized writable roots.
     fs_write: Vec<PathBuf>,
+    /// Allowlisted environment-variable names (exact match).
+    env_allow: Vec<String>,
+    /// When set, every environment variable is readable (`-A`).
+    env_allow_all: bool,
 }
 
 /// Why a filesystem access was refused.
@@ -52,7 +56,25 @@ impl Policy {
         Ok(Self {
             fs_read: canonicalize_all(read)?,
             fs_write: canonicalize_all(write)?,
+            ..Default::default()
         })
+    }
+
+    /// Add allowlisted environment-variable names (builder style).
+    pub fn with_env(mut self, names: Vec<String>) -> Self {
+        self.env_allow = names;
+        self
+    }
+
+    /// Grant read access to every environment variable (`-A`).
+    pub fn allow_all_env(mut self) -> Self {
+        self.env_allow_all = true;
+        self
+    }
+
+    /// Whether `name` may be read via `lur.env`.
+    pub fn allows_env(&self, name: &str) -> bool {
+        self.env_allow_all || self.env_allow.iter().any(|n| n == name)
     }
 
     /// Check a read. On success, returns the canonicalized path to open.

@@ -38,6 +38,10 @@ struct Cli {
     #[arg(long = "allow-fs", value_name = "PATH")]
     allow_fs: Vec<PathBuf>,
 
+    /// Add an environment-variable name to the allowlist (repeatable).
+    #[arg(long = "allow-env", value_name = "NAME")]
+    allow_env: Vec<String>,
+
     /// Arguments passed to the script (exposed as `lur.args`).
     #[arg(
         trailing_var_arg = true,
@@ -52,7 +56,9 @@ struct Cli {
 fn build_policy(cli: &Cli) -> Result<Policy, String> {
     if cli.allow_all {
         let root = vec![PathBuf::from("/")];
-        return Policy::from_roots(&root, &root).map_err(|e| e.to_string());
+        return Ok(Policy::from_roots(&root, &root)
+            .map_err(|e| e.to_string())?
+            .allow_all_env());
     }
     let mut read = cli.allow_fs_read.clone();
     let mut write = cli.allow_fs_write.clone();
@@ -60,7 +66,9 @@ fn build_policy(cli: &Cli) -> Result<Policy, String> {
         read.push(p.clone());
         write.push(p.clone());
     }
-    Policy::from_roots(&read, &write).map_err(|e| format!("invalid --allow-fs path: {e}"))
+    Ok(Policy::from_roots(&read, &write)
+        .map_err(|e| format!("invalid --allow-fs path: {e}"))?
+        .with_env(cli.allow_env.clone()))
 }
 
 fn main() -> ExitCode {
