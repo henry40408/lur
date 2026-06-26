@@ -6,6 +6,7 @@
 pub mod args;
 pub mod async_ops;
 pub mod base64;
+pub mod db;
 pub mod env;
 pub mod fs;
 pub mod http;
@@ -30,6 +31,7 @@ pub fn install(lua: &Lua, config: &RuntimeConfig) -> Result<(), RunError> {
     fs::install(lua, &lur, config.policy.clone())?;
     http::install(lua, &lur, config.policy.clone(), config.max_http_body)?;
     env::install(lua, &lur, config.policy.clone())?;
+    db::install(lua, &lur, config.db_path.clone())?;
     async_ops::install(lua, &lur)?;
     args::install(lua, &lur, &config.args)?;
 
