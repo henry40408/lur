@@ -1,0 +1,5 @@
+assert(lur.args.flags.name == "alice", "name flag")
+assert(lur.args.flags.mode == "fast", "--mode=fast form")
+assert(lur.args.flags.verbose == true, "boolean flag")
+assert(lur.args.positional[1] == "input.txt", "positional[1]")
+assert(#lur.args.positional == 1, "exactly one positional")

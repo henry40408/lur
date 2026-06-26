@@ -1,7 +1,6 @@
 use std::path::PathBuf;
-use std::process::Command;
 
-use assert_cmd::prelude::*;
+use assert_cmd::Command;
 use predicates::prelude::*;
 
 fn fixture(name: &str) -> PathBuf {
@@ -51,6 +50,54 @@ fn out_of_memory_exits_137() {
         .arg("2097152") // 2 MiB
         .assert()
         .code(137);
+}
+
+#[test]
+fn stdout_write_emits_raw_bytes_without_newline() {
+    lur()
+        .arg(fixture("stdout.lua"))
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("ABC"));
+}
+
+#[test]
+fn stdin_read_all_returns_every_byte() {
+    lur()
+        .arg(fixture("stdin_all.lua"))
+        .write_stdin("hello world")
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("hello world"));
+}
+
+#[test]
+fn stdin_read_n_returns_up_to_n_bytes() {
+    lur()
+        .arg(fixture("stdin_n.lua"))
+        .write_stdin("abcdef")
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("abc"));
+}
+
+#[test]
+fn stdin_lines_iterates_newline_stripped_lines() {
+    lur()
+        .arg(fixture("stdin_lines.lua"))
+        .write_stdin("a\nb\nc\n")
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("a,b,c"));
+}
+
+#[test]
+fn script_args_expose_flags_and_positional() {
+    lur()
+        .arg(fixture("args.lua"))
+        .args(["--name", "alice", "--mode=fast", "input.txt", "--verbose"])
+        .assert()
+        .code(0);
 }
 
 #[test]

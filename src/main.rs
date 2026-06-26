@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::Parser;
-use lur::runtime::{DEFAULT_MEMORY_LIMIT_BYTES, RunError, Runtime};
+use lur::runtime::{DEFAULT_MEMORY_LIMIT_BYTES, RunError, Runtime, RuntimeConfig};
 
 /// `lur` — run a sandboxed Lua (Luau) script.
 #[derive(Parser)]
@@ -19,6 +19,14 @@ struct Cli {
     /// Memory cap in bytes (0 means unlimited).
     #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MEMORY_LIMIT_BYTES)]
     max_memory: usize,
+
+    /// Arguments passed to the script (exposed as `lur.args`).
+    #[arg(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        value_name = "ARGS"
+    )]
+    script_args: Vec<String>,
 }
 
 fn main() -> ExitCode {
@@ -32,7 +40,11 @@ fn main() -> ExitCode {
         }
     };
 
-    let rt = match Runtime::with_memory_limit(cli.max_memory) {
+    let config = RuntimeConfig {
+        memory_limit: cli.max_memory,
+        args: cli.script_args,
+    };
+    let rt = match Runtime::with_config(config) {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("lur: {e}");

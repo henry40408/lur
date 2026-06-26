@@ -29,6 +29,25 @@ pub enum RunError {
 /// Default per-VM memory cap applied by [`Runtime::new`].
 pub const DEFAULT_MEMORY_LIMIT_BYTES: usize = 256 * 1024 * 1024;
 
+/// Configuration for building a [`Runtime`].
+#[derive(Clone, Debug)]
+pub struct RuntimeConfig {
+    /// Per-VM memory cap in bytes (0 means unlimited).
+    pub memory_limit: usize,
+    /// The script's argument vector — everything after the script path. Parsed
+    /// into `lur.args.flags` / `lur.args.positional`.
+    pub args: Vec<String>,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            memory_limit: DEFAULT_MEMORY_LIMIT_BYTES,
+            args: Vec::new(),
+        }
+    }
+}
+
 /// A single sandboxed Luau VM that can execute scripts.
 pub struct Runtime {
     lua: Lua,
@@ -38,15 +57,22 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// Build a new sandboxed runtime with the default memory cap
-    /// ([`DEFAULT_MEMORY_LIMIT_BYTES`]).
+    /// Build a new sandboxed runtime with default configuration.
     pub fn new() -> Result<Self, RunError> {
-        Self::with_memory_limit(DEFAULT_MEMORY_LIMIT_BYTES)
+        Self::with_config(RuntimeConfig::default())
     }
 
     /// Build a new sandboxed runtime capped at `memory_limit` bytes
     /// (0 means unlimited).
     pub fn with_memory_limit(memory_limit: usize) -> Result<Self, RunError> {
+        Self::with_config(RuntimeConfig {
+            memory_limit,
+            ..Default::default()
+        })
+    }
+
+    /// Build a new sandboxed runtime from an explicit [`RuntimeConfig`].
+    pub fn with_config(config: RuntimeConfig) -> Result<Self, RunError> {
         let lua = Lua::new();
         // `require` survives `sandbox(true)` and loads on-disk .luau files,
         // bypassing the capability layer — strip it before freezing globals.
@@ -54,7 +80,7 @@ impl Runtime {
             .set("require", mlua::Value::Nil)
             .map_err(RunError::Init)?;
 
-        inject_capabilities(&lua)?;
+        crate::capabilities::install(&lua, &config)?;
 
         lua.sandbox(true).map_err(RunError::Init)?;
 
@@ -74,7 +100,8 @@ impl Runtime {
 
         // Apply the memory cap last, after construction/sandbox/injection have
         // done their own allocations.
-        lua.set_memory_limit(memory_limit).map_err(RunError::Init)?;
+        lua.set_memory_limit(config.memory_limit)
+            .map_err(RunError::Init)?;
 
         Ok(Self { lua, deadline })
     }
@@ -148,27 +175,4 @@ fn exit_code_of(values: MultiValue) -> i32 {
         Some(Value::Nil) | Some(Value::Boolean(false)) => 1,
         Some(_) => 0,
     }
-}
-
-/// Build the flat `lur.*` capability table and install it as a global.
-///
-/// Must run before `sandbox(true)` freezes the global table.
-fn inject_capabilities(lua: &Lua) -> Result<(), RunError> {
-    let lur = lua.create_table().map_err(RunError::Init)?;
-
-    // `lur.log(msg)` — write a line to stderr. Bytes are passed through
-    // verbatim (§4 byte semantics); no UTF-8 validation at this boundary.
-    let log = lua
-        .create_function(|_, msg: mlua::String| {
-            use std::io::Write;
-            let mut err = std::io::stderr().lock();
-            let _ = err.write_all(&msg.as_bytes());
-            let _ = err.write_all(b"\n");
-            Ok(())
-        })
-        .map_err(RunError::Init)?;
-    lur.set("log", log).map_err(RunError::Init)?;
-
-    lua.globals().set("lur", lur).map_err(RunError::Init)?;
-    Ok(())
 }
