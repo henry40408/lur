@@ -72,6 +72,46 @@ fn kv_set_get_delete_round_trip() {
 }
 
 #[test]
+fn tx_commits_on_normal_return() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = db_runtime(dir.path().join("test.db"));
+    rt.run(
+        "lur.db.exec('CREATE TABLE acct (id INTEGER PRIMARY KEY, bal INTEGER)')\n\
+         lur.db.exec('INSERT INTO acct VALUES (1, 100)')\n\
+         lur.db.exec('INSERT INTO acct VALUES (2, 0)')\n\
+         lur.db.tx(function(tx)\n\
+           tx.exec('UPDATE acct SET bal = bal - 50 WHERE id = 1')\n\
+           tx.exec('UPDATE acct SET bal = bal + 50 WHERE id = 2')\n\
+         end)\n\
+         local a = lur.db.query('SELECT bal FROM acct WHERE id = 1')[1].bal\n\
+         local b = lur.db.query('SELECT bal FROM acct WHERE id = 2')[1].bal\n\
+         assert(a == 50, 'id1 = ' .. a)\n\
+         assert(b == 50, 'id2 = ' .. b)",
+    )
+    .expect("tx commits on return");
+}
+
+#[test]
+fn tx_rolls_back_on_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = db_runtime(dir.path().join("test.db"));
+    rt.run(
+        "lur.db.exec('CREATE TABLE acct (id INTEGER PRIMARY KEY, bal INTEGER)')\n\
+         lur.db.exec('INSERT INTO acct VALUES (1, 100)')\n\
+         local ok = pcall(function()\n\
+           lur.db.tx(function(tx)\n\
+             tx.exec('UPDATE acct SET bal = 999 WHERE id = 1')\n\
+             error('boom')\n\
+           end)\n\
+         end)\n\
+         assert(ok == false, 'tx must propagate the error')\n\
+         local a = lur.db.query('SELECT bal FROM acct WHERE id = 1')[1].bal\n\
+         assert(a == 100, 'must be rolled back, got ' .. a)",
+    )
+    .expect("tx rolls back on error");
+}
+
+#[test]
 fn db_without_a_path_errors() {
     let rt = Runtime::new().expect("runtime builds"); // db_path is None
     assert!(
