@@ -20,7 +20,14 @@ pub enum RunError {
     /// The script exceeded its wall-clock deadline and was interrupted.
     #[error("script exceeded its time limit")]
     Timeout,
+
+    /// The script tried to allocate past its memory cap.
+    #[error("script exceeded its memory limit")]
+    OutOfMemory,
 }
+
+/// Default per-VM memory cap applied by [`Runtime::new`].
+pub const DEFAULT_MEMORY_LIMIT_BYTES: usize = 256 * 1024 * 1024;
 
 /// A single sandboxed Luau VM that can execute scripts.
 pub struct Runtime {
@@ -31,8 +38,15 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// Build a new sandboxed runtime.
+    /// Build a new sandboxed runtime with the default memory cap
+    /// ([`DEFAULT_MEMORY_LIMIT_BYTES`]).
     pub fn new() -> Result<Self, RunError> {
+        Self::with_memory_limit(DEFAULT_MEMORY_LIMIT_BYTES)
+    }
+
+    /// Build a new sandboxed runtime capped at `memory_limit` bytes
+    /// (0 means unlimited).
+    pub fn with_memory_limit(memory_limit: usize) -> Result<Self, RunError> {
         let lua = Lua::new();
         // `require` survives `sandbox(true)` and loads on-disk .luau files,
         // bypassing the capability layer — strip it before freezing globals.
@@ -57,6 +71,10 @@ impl Runtime {
                 _ => Ok(VmState::Continue),
             }
         });
+
+        // Apply the memory cap last, after construction/sandbox/injection have
+        // done their own allocations.
+        lua.set_memory_limit(memory_limit).map_err(RunError::Init)?;
 
         Ok(Self { lua, deadline })
     }
@@ -100,10 +118,24 @@ impl Runtime {
 
         *self.deadline.lock().expect("deadline mutex poisoned") = None;
 
-        result.map_err(|e| match at {
-            Some(at) if Instant::now() >= at => RunError::Timeout,
-            _ => RunError::Script(e),
+        result.map_err(|e| {
+            if is_memory_error(&e) {
+                RunError::OutOfMemory
+            } else if matches!(at, Some(at) if Instant::now() >= at) {
+                RunError::Timeout
+            } else {
+                RunError::Script(e)
+            }
         })
+    }
+}
+
+/// Whether `e` (or a cause it wraps) is a Lua out-of-memory error.
+fn is_memory_error(e: &mlua::Error) -> bool {
+    match e {
+        mlua::Error::MemoryError(_) => true,
+        mlua::Error::CallbackError { cause, .. } => is_memory_error(cause),
+        _ => false,
     }
 }
 

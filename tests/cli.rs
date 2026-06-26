@@ -44,6 +44,16 @@ fn timeout_exits_124() {
 }
 
 #[test]
+fn out_of_memory_exits_137() {
+    lur()
+        .arg(fixture("alloc.lua"))
+        .arg("--max-memory")
+        .arg("2097152") // 2 MiB
+        .assert()
+        .code(137);
+}
+
+#[test]
 fn lur_log_reaches_stderr() {
     lur()
         .arg(fixture("log.lua"))

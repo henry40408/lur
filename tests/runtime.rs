@@ -29,6 +29,16 @@ fn lur_log_is_injected_and_callable() {
 }
 
 #[test]
+fn memory_limit_aborts_a_runaway_allocation() {
+    // 2 MiB cap; the script tries to allocate far more.
+    let rt = Runtime::with_memory_limit(2 * 1024 * 1024).expect("runtime builds");
+    let err = rt
+        .run("local t = {} for i = 1, 1e9 do t[i] = string.rep('x', 1024) end")
+        .expect_err("runaway allocation must be stopped");
+    assert!(matches!(err, RunError::OutOfMemory), "got {err:?}");
+}
+
+#[test]
 fn exit_code_maps_a_returned_number() {
     let rt = Runtime::new().expect("runtime builds");
     assert_eq!(rt.run_to_exit_code("return 3", None).unwrap(), 3);
