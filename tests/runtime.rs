@@ -70,6 +70,29 @@ fn exit_code_propagates_timeout() {
 }
 
 #[test]
+fn async_sleep_completes_within_budget() {
+    let rt = Runtime::new().expect("runtime builds");
+    rt.run_with_timeout("lur.async.sleep(10)", Duration::from_millis(500))
+        .expect("a short sleep completes");
+}
+
+#[test]
+fn io_park_is_killed_by_the_wall_clock_layer() {
+    // While parked on sleep no Lua runs, so the interrupt can't fire — only the
+    // tokio wall-clock layer can cut this off (spec §5 second timeout layer).
+    let rt = Runtime::new().expect("runtime builds");
+    let started = std::time::Instant::now();
+    let err = rt
+        .run_with_timeout("lur.async.sleep(5000)", Duration::from_millis(50))
+        .expect_err("a sleep past the deadline must be cut off");
+    assert!(matches!(err, RunError::Timeout), "got {err:?}");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "must be cut at the deadline, not after the full sleep"
+    );
+}
+
+#[test]
 fn deadline_interrupt_aborts_an_infinite_loop() {
     let rt = Runtime::new().expect("runtime builds");
     let err = rt

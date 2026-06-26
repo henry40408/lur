@@ -122,5 +122,9 @@ fn main() -> ExitCode {
             eprintln!("lur: {e}");
             ExitCode::FAILURE
         }
+        Err(RunError::AsyncRuntime(e)) => {
+            eprintln!("lur: {e}");
+            ExitCode::FAILURE
+        }
     }
 }

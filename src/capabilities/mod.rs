@@ -4,6 +4,7 @@
 //! orchestrates them and must run before `sandbox(true)` freezes the globals.
 
 pub mod args;
+pub mod async_ops;
 pub mod base64;
 pub mod env;
 pub mod fs;
@@ -27,6 +28,7 @@ pub fn install(lua: &Lua, config: &RuntimeConfig) -> Result<(), RunError> {
     io::install(lua, &lur)?;
     fs::install(lua, &lur, config.policy.clone())?;
     env::install(lua, &lur, config.policy.clone())?;
+    async_ops::install(lua, &lur)?;
     args::install(lua, &lur, &config.args)?;
 
     lua.globals().set("lur", lur).map_err(RunError::Init)?;
