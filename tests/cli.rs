@@ -101,6 +101,32 @@ fn script_args_expose_flags_and_positional() {
 }
 
 #[test]
+fn fs_read_works_with_an_allow_fs_read_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("f.txt");
+    std::fs::write(&f, b"granted").unwrap();
+
+    lur()
+        .arg("--allow-fs-read")
+        .arg(dir.path())
+        .arg(fixture("read_arg.lua"))
+        .arg(&f)
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("granted"));
+}
+
+#[test]
+fn fs_read_is_denied_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("f.txt");
+    std::fs::write(&f, b"secret").unwrap();
+
+    // No grant: strict default denies, the script errors out.
+    lur().arg(fixture("read_arg.lua")).arg(&f).assert().code(1);
+}
+
+#[test]
 fn lur_log_reaches_stderr() {
     lur()
         .arg(fixture("log.lua"))

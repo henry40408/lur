@@ -5,6 +5,7 @@
 
 pub mod args;
 pub mod base64;
+pub mod fs;
 pub mod io;
 pub mod json;
 pub mod log;
@@ -23,6 +24,7 @@ pub fn install(lua: &Lua, config: &RuntimeConfig) -> Result<(), RunError> {
     json::install(lua, &lur)?;
     base64::install(lua, &lur)?;
     io::install(lua, &lur)?;
+    fs::install(lua, &lur, config.policy.clone())?;
     args::install(lua, &lur, &config.args)?;
 
     lua.globals().set("lur", lur).map_err(RunError::Init)?;
