@@ -16,6 +16,14 @@ fn lur_null_is_a_distinct_non_nil_singleton() {
 }
 
 #[test]
+fn base64_round_trips_and_rejects_garbage() {
+    run("assert(lur.base64.encode('hi') == 'aGk=', 'encode')\n\
+         assert(lur.base64.decode('aGk=') == 'hi', 'decode')\n\
+         local ok = pcall(function() return lur.base64.decode('!!!') end)\n\
+         assert(ok == false, 'invalid base64 must be rejected')");
+}
+
+#[test]
 fn json_encode_objects_and_arrays() {
     run("assert(lur.json.encode({a=1}) == '{\"a\":1}', 'object')\n\
          assert(lur.json.encode({1, 2, 3}) == '[1,2,3]', 'array')");

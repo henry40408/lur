@@ -1,1 +1,1 @@
-lur.log("hello from script")
+lur.log.info("hello from script")

@@ -18,14 +18,17 @@ fn require_is_removed_from_the_sandbox() {
 }
 
 #[test]
-fn lur_log_is_injected_and_callable() {
+fn lur_log_exposes_level_functions() {
     let rt = Runtime::new().expect("runtime builds");
     rt.run(
         "assert(type(lur) == 'table', 'lur table missing')\n\
-         assert(type(lur.log) == 'function', 'lur.log missing')\n\
-         lur.log('hello from lua')",
+         assert(type(lur.log) == 'table', 'lur.log is a table')\n\
+         assert(type(lur.log.info) == 'function', 'info missing')\n\
+         assert(type(lur.log.warn) == 'function', 'warn missing')\n\
+         assert(type(lur.log.error) == 'function', 'error missing')\n\
+         lur.log.info('hi'); lur.log.warn('w'); lur.log.error('e')",
     )
-    .expect("lur.log is injected and callable post-sandbox");
+    .expect("lur.log level loggers callable post-sandbox");
 }
 
 #[test]

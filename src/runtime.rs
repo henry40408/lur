@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 use mlua::{Lua, MultiValue, Value, VmState};
 use thiserror::Error;
 
+use crate::policy::Policy;
+
 /// Errors that can arise while building or running a script.
 #[derive(Debug, Error)]
 pub enum RunError {
@@ -37,6 +39,9 @@ pub struct RuntimeConfig {
     /// The script's argument vector — everything after the script path. Parsed
     /// into `lur.args.flags` / `lur.args.positional`.
     pub args: Vec<String>,
+    /// Capability policy enforced by the gated `lur.*` modules. Shared into
+    /// host callbacks, hence `Arc`.
+    pub policy: Arc<Policy>,
 }
 
 impl Default for RuntimeConfig {
@@ -44,6 +49,7 @@ impl Default for RuntimeConfig {
         Self {
             memory_limit: DEFAULT_MEMORY_LIMIT_BYTES,
             args: Vec::new(),
+            policy: Arc::new(Policy::strict()),
         }
     }
 }

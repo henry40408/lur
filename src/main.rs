@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
+use lur::policy::Policy;
 use lur::runtime::{DEFAULT_MEMORY_LIMIT_BYTES, RunError, Runtime, RuntimeConfig};
 
 /// `lur` — run a sandboxed Lua (Luau) script.
@@ -20,6 +22,22 @@ struct Cli {
     #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MEMORY_LIMIT_BYTES)]
     max_memory: usize,
 
+    /// Grant full filesystem access for this run.
+    #[arg(short = 'A', long = "allow-all")]
+    allow_all: bool,
+
+    /// Add a readable path root (repeatable).
+    #[arg(long = "allow-fs-read", value_name = "PATH")]
+    allow_fs_read: Vec<PathBuf>,
+
+    /// Add a writable path root (repeatable).
+    #[arg(long = "allow-fs-write", value_name = "PATH")]
+    allow_fs_write: Vec<PathBuf>,
+
+    /// Add a path to both the read and write allowlists (repeatable).
+    #[arg(long = "allow-fs", value_name = "PATH")]
+    allow_fs: Vec<PathBuf>,
+
     /// Arguments passed to the script (exposed as `lur.args`).
     #[arg(
         trailing_var_arg = true,
@@ -27,6 +45,22 @@ struct Cli {
         value_name = "ARGS"
     )]
     script_args: Vec<String>,
+}
+
+/// Resolve the capability policy from the CLI flags. Roots are canonicalized
+/// (and must exist) by [`Policy::from_roots`]; `-A` grants the whole tree.
+fn build_policy(cli: &Cli) -> Result<Policy, String> {
+    if cli.allow_all {
+        let root = vec![PathBuf::from("/")];
+        return Policy::from_roots(&root, &root).map_err(|e| e.to_string());
+    }
+    let mut read = cli.allow_fs_read.clone();
+    let mut write = cli.allow_fs_write.clone();
+    for p in &cli.allow_fs {
+        read.push(p.clone());
+        write.push(p.clone());
+    }
+    Policy::from_roots(&read, &write).map_err(|e| format!("invalid --allow-fs path: {e}"))
 }
 
 fn main() -> ExitCode {
@@ -40,9 +74,18 @@ fn main() -> ExitCode {
         }
     };
 
+    let policy = match build_policy(&cli) {
+        Ok(p) => Arc::new(p),
+        Err(e) => {
+            eprintln!("lur: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
     let config = RuntimeConfig {
         memory_limit: cli.max_memory,
         args: cli.script_args,
+        policy,
     };
     let rt = match Runtime::with_config(config) {
         Ok(rt) => rt,
