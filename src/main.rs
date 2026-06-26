@@ -56,6 +56,10 @@ struct Cli {
     #[arg(long = "allow-private")]
     allow_private: bool,
 
+    /// SQLite database path for lur.db / lur.kv.
+    #[arg(long = "db", value_name = "PATH")]
+    db: Option<PathBuf>,
+
     /// Arguments passed to the script (exposed as `lur.args`).
     #[arg(
         trailing_var_arg = true,
@@ -116,6 +120,7 @@ fn main() -> ExitCode {
         args: cli.script_args,
         policy,
         max_http_body: cli.max_http_body,
+        db_path: cli.db,
     };
     let rt = match Runtime::with_config(config) {
         Ok(rt) => rt,

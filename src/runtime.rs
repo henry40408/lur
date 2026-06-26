@@ -1,6 +1,7 @@
 //! The shared execution core: a single sandboxed Luau VM.
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -52,6 +53,9 @@ pub struct RuntimeConfig {
     pub policy: Arc<Policy>,
     /// Cap on a buffered `lur.http` response body, in bytes.
     pub max_http_body: usize,
+    /// SQLite database path for `lur.db` / `lur.kv` (`--db`). `None` makes those
+    /// modules raise a clear error when used.
+    pub db_path: Option<PathBuf>,
 }
 
 impl Default for RuntimeConfig {
@@ -61,6 +65,7 @@ impl Default for RuntimeConfig {
             args: Vec::new(),
             policy: Arc::new(Policy::strict()),
             max_http_body: DEFAULT_MAX_HTTP_BODY_BYTES,
+            db_path: None,
         }
     }
 }
