@@ -11,9 +11,62 @@
 //! swapped after the check). Full mitigation belongs to the reserved §5
 //! Layer-B OS hardening, not v1.
 
+use std::net::{IpAddr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
+
+/// A network allowlist entry: a host (any port) or a host with a fixed port.
+/// The host `*` matches any host (still subject to the private-network deny).
+#[derive(Clone, Debug)]
+struct HostRule {
+    host: String,
+    port: Option<u16>,
+}
+
+impl HostRule {
+    fn parse(s: &str) -> Self {
+        // Bracketed IPv6, optionally with a port: [::1] or [::1]:6379.
+        if let Some(rest) = s.strip_prefix('[') {
+            if let Some((h, p)) = rest.split_once("]:") {
+                return Self {
+                    host: h.to_lowercase(),
+                    port: p.parse().ok(),
+                };
+            }
+            if let Some(h) = rest.strip_suffix(']') {
+                return Self {
+                    host: h.to_lowercase(),
+                    port: None,
+                };
+            }
+        }
+        // A bare IPv6 literal contains colons but no port.
+        if s.parse::<Ipv6Addr>().is_ok() {
+            return Self {
+                host: s.to_lowercase(),
+                port: None,
+            };
+        }
+        // host:port (single colon) or a bare host.
+        if let Some((h, p)) = s.rsplit_once(':')
+            && let Ok(port) = p.parse::<u16>()
+        {
+            return Self {
+                host: h.to_lowercase(),
+                port: Some(port),
+            };
+        }
+        Self {
+            host: s.to_lowercase(),
+            port: None,
+        }
+    }
+
+    fn matches(&self, host: &str, port: u16) -> bool {
+        (self.host == "*" || self.host == host) && self.port.is_none_or(|p| p == port)
+    }
+}
 
 /// A resolved capability policy.
 #[derive(Clone, Debug, Default)]
@@ -26,6 +79,11 @@ pub struct Policy {
     env_allow: Vec<String>,
     /// When set, every environment variable is readable (`-A`).
     env_allow_all: bool,
+    /// Allowed network hosts (host or host:port).
+    net_allow: Vec<HostRule>,
+    /// When set, connections to loopback/private/link-local IPs are permitted
+    /// (off by default — SSRF deny, §5).
+    allow_private_net: bool,
 }
 
 /// Why a filesystem access was refused.
@@ -77,6 +135,45 @@ impl Policy {
         self.env_allow_all || self.env_allow.iter().any(|n| n == name)
     }
 
+    /// Add allowlisted network hosts (`host`, `host:port`, or `*`).
+    pub fn with_net(mut self, hosts: Vec<String>) -> Self {
+        self.net_allow = hosts.iter().map(|h| HostRule::parse(h)).collect();
+        self
+    }
+
+    /// Permit connections to private/loopback/link-local IPs (`--allow-private`).
+    pub fn allow_private(mut self) -> Self {
+        self.allow_private_net = true;
+        self
+    }
+
+    /// Whether `host:port` is on the network allowlist.
+    pub fn allows_net(&self, host: &str, port: u16) -> bool {
+        let host = host.to_lowercase();
+        self.net_allow.iter().any(|r| r.matches(&host, port))
+    }
+
+    /// Whether connections to private/loopback IPs are permitted.
+    pub fn allows_private_net(&self) -> bool {
+        self.allow_private_net
+    }
+
+    /// Whether `ip` is in a loopback / private / link-local / unique-local range
+    /// (the SSRF deny set, §5). IPv4-mapped IPv6 addresses are unwrapped first.
+    pub fn is_private_ip(ip: IpAddr) -> bool {
+        match ip {
+            IpAddr::V4(v4) => {
+                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+            }
+            IpAddr::V6(v6) => {
+                if let Some(mapped) = v6.to_ipv4_mapped() {
+                    return Self::is_private_ip(IpAddr::V4(mapped));
+                }
+                v6.is_loopback() || v6.is_unspecified() || is_unique_local(v6) || is_link_local(v6)
+            }
+        }
+    }
+
     /// Check a read. On success, returns the canonicalized path to open.
     pub fn allows_read(&self, path: &Path) -> Result<PathBuf, PolicyError> {
         let resolved = resolve_existing(path)?;
@@ -101,6 +198,16 @@ fn gate(op: &'static str, roots: &[PathBuf], resolved: PathBuf) -> Result<PathBu
     } else {
         Err(PolicyError::Denied { op, path: resolved })
     }
+}
+
+/// `fc00::/7` — unique local addresses.
+fn is_unique_local(ip: Ipv6Addr) -> bool {
+    ip.segments()[0] & 0xfe00 == 0xfc00
+}
+
+/// `fe80::/10` — link-local addresses.
+fn is_link_local(ip: Ipv6Addr) -> bool {
+    ip.segments()[0] & 0xffc0 == 0xfe80
 }
 
 fn canonicalize_all(roots: &[PathBuf]) -> std::io::Result<Vec<PathBuf>> {

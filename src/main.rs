@@ -42,6 +42,14 @@ struct Cli {
     #[arg(long = "allow-env", value_name = "NAME")]
     allow_env: Vec<String>,
 
+    /// Add a network host (`host` or `host:port`) to the allowlist (repeatable).
+    #[arg(long = "allow-net", value_name = "HOST")]
+    allow_net: Vec<String>,
+
+    /// Permit connections to loopback/private/link-local IPs (off by default).
+    #[arg(long = "allow-private")]
+    allow_private: bool,
+
     /// Arguments passed to the script (exposed as `lur.args`).
     #[arg(
         trailing_var_arg = true,
@@ -58,7 +66,9 @@ fn build_policy(cli: &Cli) -> Result<Policy, String> {
         let root = vec![PathBuf::from("/")];
         return Ok(Policy::from_roots(&root, &root)
             .map_err(|e| e.to_string())?
-            .allow_all_env());
+            .allow_all_env()
+            .with_net(vec!["*".to_string()])
+            .allow_private());
     }
     let mut read = cli.allow_fs_read.clone();
     let mut write = cli.allow_fs_write.clone();
@@ -66,9 +76,14 @@ fn build_policy(cli: &Cli) -> Result<Policy, String> {
         read.push(p.clone());
         write.push(p.clone());
     }
-    Ok(Policy::from_roots(&read, &write)
+    let mut policy = Policy::from_roots(&read, &write)
         .map_err(|e| format!("invalid --allow-fs path: {e}"))?
-        .with_env(cli.allow_env.clone()))
+        .with_env(cli.allow_env.clone())
+        .with_net(cli.allow_net.clone());
+    if cli.allow_private {
+        policy = policy.allow_private();
+    }
+    Ok(policy)
 }
 
 fn main() -> ExitCode {

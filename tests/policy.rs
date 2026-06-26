@@ -85,6 +85,50 @@ fn env_allowlist_is_exact() {
 }
 
 #[test]
+fn net_allowlist_matches_host_and_port() {
+    let p = Policy::strict().with_net(vec![
+        "api.github.com".to_string(),
+        "10.0.0.5:6379".to_string(),
+    ]);
+    assert!(p.allows_net("api.github.com", 443));
+    assert!(p.allows_net("api.github.com", 80)); // host-only → any port
+    assert!(p.allows_net("10.0.0.5", 6379));
+    assert!(!p.allows_net("10.0.0.5", 5432)); // wrong port
+    assert!(!p.allows_net("evil.com", 443));
+    assert!(!Policy::strict().allows_net("api.github.com", 443));
+}
+
+#[test]
+fn net_wildcard_allows_any_host() {
+    let p = Policy::strict().with_net(vec!["*".to_string()]);
+    assert!(p.allows_net("anything.example", 443));
+}
+
+#[test]
+fn private_ip_ranges_are_detected() {
+    use std::net::IpAddr;
+    for s in [
+        "127.0.0.1",
+        "10.1.2.3",
+        "192.168.0.1",
+        "172.16.5.5",
+        "169.254.169.254",
+        "::1",
+    ] {
+        assert!(
+            Policy::is_private_ip(s.parse::<IpAddr>().unwrap()),
+            "{s} should be private"
+        );
+    }
+    for s in ["8.8.8.8", "1.1.1.1", "93.184.216.34"] {
+        assert!(
+            !Policy::is_private_ip(s.parse::<IpAddr>().unwrap()),
+            "{s} should be public"
+        );
+    }
+}
+
+#[test]
 fn strict_policy_denies_everything() {
     let dir = tempdir().unwrap();
     let f = dir.path().join("f.txt");

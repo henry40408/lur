@@ -118,7 +118,7 @@ impl Runtime {
             .map_err(RunError::Init)?;
 
         let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
+            .enable_all()
             .build()
             .map_err(RunError::AsyncRuntime)?;
 
