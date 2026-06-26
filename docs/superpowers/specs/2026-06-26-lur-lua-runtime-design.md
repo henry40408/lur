@@ -34,7 +34,7 @@ interfaces.
 One binary, two execution modes, shared core.
 
 ```
-Shared core: Lua VM (mlua, safe mode) · host modules (lur.*) · policy/sandbox
+Shared core: Lua VM (mlua / Luau backend, sandboxed — see §14) · host modules (lur.*) · policy/sandbox
              · tokio async · state layer (short-term + long-term)
    ├─ one-shot mode   lur script.lua       build a single VM, exit when done
    └─ server mode     lur serve app.lua    build a VM pool, long-running event loop
@@ -142,8 +142,9 @@ The runtime is **byte-transparent by default; Unicode is opt-in**.
 - All data-carrying APIs are **binary-safe / encoding-agnostic**: `lur.stdin.read[(n)]`,
   `lur.fs.read`, and `lur.http` response bodies return **raw bytes**; `lur.stdout.write`
   and `lur.fs.write` write the bytes as-is. No UTF-8 validation is performed on these paths.
-- For **text / codepoint handling**, scripts use Lua 5.4's built-in `utf8` library
-  (kept as a pure, safe native): `utf8.len`, `utf8.char`, `utf8.codepoint`, `utf8.codes`.
+- For **text / codepoint handling**, scripts use the built-in `utf8` library (present in
+  both PUC Lua 5.4 and the Luau backend; kept as a pure, safe native): `utf8.len`,
+  `utf8.char`, `utf8.codepoint`, `utf8.codes`.
 - **The only place UTF-8 is assumed is the JSON boundary.** JSON is defined as UTF-8, so
   `lur.json.encode` requires strings to be valid UTF-8 and errors on invalid bytes. To put
   binary data into JSON, the script must `lur.base64.encode` it first.
@@ -157,10 +158,13 @@ Both modes share the same enforcement:
 
 1. **Clean environment**: do not pollute `_G`; give the script a custom global table
    (only `lur` + allowlisted pure libs) and run the chunk under mlua's environment mechanism.
+   On the Luau backend, `Lua::sandbox(true)` additionally makes the base libraries readonly
+   and drops dangerous stdlib (e.g. `os.execute` → nil) at the VM level (see §14).
 2. **Safe mode**: mlua does not load unsafe C functions / FFI.
 3. **Memory cap**: `Lua::set_memory_limit`.
-4. **Timeout / interrupt**: VM instruction-count hook; on timeout or a cancellation
-   signal, raise an error and abort.
+4. **Timeout / interrupt**: a periodic VM callback (`set_interrupt` on the Luau backend;
+   the instruction-count `set_hook` on PUC Lua); on timeout or a cancellation signal, raise
+   an error and abort.
 5. **Capability gate**: every host-function entry point checks `Policy` (host/path not
    in the allowlist → raise a Lua error with a clear message).
 6. **Layer-B reserved**: `Policy` has an `os_hardening: Option<OsHardening>` field for a
@@ -255,7 +259,7 @@ Server mode: a single failing handler **must not bring down the whole server** �
 
 ## 10. Key Dependencies (candidates; verify versions per the 7-day cooldown rule in CLAUDE.md before release)
 
-- `mlua` (Lua 5.4, features: async, send, safe)
+- `mlua` (Luau backend, features: `luau`, async, send; see §14 for the backend decision)
 - `tokio` (async runtime)
 - `clap` (CLI parsing)
 - `reqwest` (HTTP client for `lur.http`)
@@ -364,7 +368,7 @@ don't chase zero variance. Inputs are fixtures checked into the repo (no network
 | VM lifecycle | cold start: build VM + inject `lur.*` + teardown (dominates one-shot latency) |
 | Lua execution | CPU-bound loop — canary for `mlua`/Lua upgrades |
 | Host-call boundary | `lur.json.encode` / `lur.state.get` round-trips — the cost *we* add |
-| Sandbox overhead | a loop with vs. without the instruction hook + memory limit |
+| Sandbox overhead | a loop with vs. without the interrupt callback + memory limit |
 | State | `incr`/`update` under concurrency — atomic-op + contention cost |
 | Storage | `lur.kv` / `lur.db` round-trip (SQLite) |
 | Server mode | HTTP req/s + p50/p99 latency (run on demand, not in the per-PR gate) |
@@ -390,3 +394,43 @@ but doesn't block the functional tests.
 - A perf-affecting PR carries before/after numbers; an intentional trade-off is called out and the baseline re-blessed.
 - Budgets are **TBD until the first baseline lands**; initial guardrail intents: one-shot cold start in single-digit ms,
   host-call overhead in low single-digit µs, sandbox-hook overhead < ~10%. Measured numbers replace these once the suite runs.
+
+## 14. Decision Record — Lua VM backend: Luau (not PUC Lua 5.4)
+
+**Status**: Decided — 2026-06-26. **Backend**: Luau via `mlua`'s `luau` feature.
+
+**Context.** §1 explicitly admits untrusted scripts ("from others / the internet"), so the
+sandbox (§5) is security-critical, not best-effort. Two backends were weighed, both reachable
+through the same `mlua` binding: stock **PUC Lua 5.4** (with a fully hand-rolled sandbox) vs
+**Luau**, Roblox's Lua 5.1 fork built specifically to run untrusted code.
+
+**Decision.** Use the **Luau** backend. The deciding factor is that the threat model already
+includes untrusted scripts, and Luau moves the most dangerous, hardest-to-maintain part of §5
+— making globals readonly and removing dangerous stdlib — into a VM hardened against a
+Roblox-scale attack surface, instead of into lur's own code (every bug in a hand-rolled sandbox
+is a lur CVE). Migration cost is low: the same `mlua` crate switches backends by feature flag.
+
+**Evidence** (in-repo probe, `mlua` 0.11.6 with `luau`; all §5 primitives confirmed working):
+
+| §5 primitive | Luau backend |
+|---|---|
+| capability injection (`lur.*`) | `globals().set` — ok, callable post-sandbox |
+| readonly globals | `Lua::sandbox(true)` — base libraries become readonly |
+| remove dangerous stdlib | the sandbox drops them (`os.execute` → `nil`) |
+| timeout / interrupt | `set_interrupt` (raise to abort) — replaces PUC `set_hook` |
+| memory cap | `set_memory_limit` — shared by both backends |
+
+**Consequences.**
+
+- **§5 wording**: the periodic interrupt is `set_interrupt` on Luau (not the instruction-count
+  `set_hook` of PUC Lua) — same semantics: a periodic callback that aborts by raising.
+- **Dialect**: Luau is Lua 5.1 + its own extensions, **not 5.4**. The `utf8` library is present
+  (so §3 holds), but other 5.4-specific semantics — the integer subtype, bitwise operators,
+  `<close>` to-be-closed variables, `goto` — differ and must be re-checked before relying on them.
+  Luau also *adds* features (optional gradual typing, `+=`, `continue`, string interpolation).
+- **Ecosystem**: smaller third-party library pool than PUC Lua — largely moot because lur exposes
+  capabilities through `lur.*`, not arbitrary `require` / C modules.
+
+**Revisit if** the threat model later narrows to semi-trusted-only scripts **and** full Lua 5.4
+semantics or the larger ecosystem become hard requirements — then PUC Lua 5.4 with the hand-rolled
+§5 sandbox is the documented fallback.
