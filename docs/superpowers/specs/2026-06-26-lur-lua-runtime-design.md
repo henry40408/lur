@@ -376,9 +376,9 @@ Both modes share the same enforcement:
    and drops dangerous stdlib (e.g. `os.execute` → nil) at the VM level (see §14).
 2. **Safe mode**: mlua does not load unsafe C functions / FFI.
 3. **Memory cap**: `Lua::set_memory_limit`.
-4. **Timeout / interrupt**: a periodic VM callback (`set_interrupt` on the Luau backend;
-   the instruction-count `set_hook` on PUC Lua); on timeout or a cancellation signal, raise
-   an error and abort.
+4. **Timeout / interrupt** (see *Timeout model* below): a **two-layer** kill — a deadline-checking
+   periodic VM callback (`set_interrupt` on Luau; instruction-count `set_hook` on PUC) for CPU-bound
+   code, plus a `tokio` wall-clock timeout wrapping the whole task for code parked on async I/O.
 5. **Capability gate**: every host-function entry point checks `Policy` per the *Allowlist
    matching* rules below (host/path/IP not allowed → raise a Lua error with a clear message).
 6. **Layer-B reserved**: `Policy` has an `os_hardening: Option<OsHardening>` field for a
@@ -447,6 +447,51 @@ default: (1) `-A` for a one-off full-access run of a trusted script; (2) a user 
 (`~/.config/lur/config`) may set `default_profile = loose` so an individual's own machine
 defaults permissive, while the binary remains safe-by-default for everyone else. See §12
 for the concrete CLI surface.
+
+### Timeout model
+
+The interrupt callback (item 4) only fires **while Lua bytecode is running** — verified by probe on a
+hot loop. When a script is **parked on async I/O** (`lur.http`, `lur.db`, sleep) the VM has yielded to
+tokio and no Lua executes, so the interrupt alone **cannot** kill a script stuck on a slow/hung
+request. Enforcement therefore uses **two complementary layers** sharing one deadline:
+
+1. **Deadline-checking interrupt (CPU guard, in-VM).** The periodic callback checks `now >= deadline`
+   (or a cancel flag) and raises to abort — kills CPU-bound code like `while true do end`.
+2. **`tokio::time::timeout` around the whole task (I/O guard, out-of-VM).** When the deadline elapses
+   the future is dropped, cancelling the awaited async op and tearing the task down — kills code parked
+   on I/O, where the interrupt can't fire.
+
+The two layers cover **different** stuck-states, not the same one redundantly: the interrupt is the
+*only* thing that can stop a CPU-bound loop (dropping a future can't preempt a thread synchronously
+running Lua), while the `tokio` timeout is the *only* thing that can stop a script parked on I/O (no
+Lua runs, so the interrupt never fires). So whether a script burns CPU *or* waits on a slow request,
+it dies at the deadline.
+
+- **Metric is wall-clock, not CPU.** A hard total-time ceiling for untrusted scripts; time spent
+  awaiting an allowed-but-slow API **counts** against the timeout (intended).
+- **Three nested layers, outer wins.** `limits.timeout` (one-shot) / `per_event_timeout` (server, per
+  event) is the **outer** deadline over a whole script/handler; `lur.http` `opts.timeout` /
+  `--http-timeout` is the **inner** per-request bound. If the outer deadline passes mid-request the
+  whole run is cancelled regardless of the inner one.
+- **A `pcall`-loop cannot outlive the deadline** — essential against untrusted scripts, which could
+  otherwise neutralize a timeout with `while true do pcall(function() while true do end end) end`.
+  Probe finding (in-repo, mlua/Luau): the interrupt-raised error is an **ordinary catchable** Lua error
+  — a `pcall` *does* catch a single abort — so the defense is **not** uncatchability. It is that the
+  deadline-interrupt **keeps raising on every callback** once `now >= deadline`, and an adversarial
+  script must have some **outermost driving loop/recursion that cannot wrap itself in `pcall`** (the
+  main chunk is unprotected from Lua's side); the moment an interrupt lands in that unprotected
+  bytecode it propagates straight to the host. Interrupts fire densely enough that this happens within
+  milliseconds — verified: `while true do pcall(hot loop) end` terminates with the deadline error. A
+  *fire-once* abort would instead be swallowed, so the **keep-raising** behavior is load-bearing. (The
+  `tokio` timeout is **not** a CPU-loop backstop — it can't preempt a non-yielding thread — it covers
+  only the I/O-parked case above.)
+- **One abort path, several sources.** Timeout, graceful shutdown (SIGTERM cancels in-flight), and
+  (server) client disconnect (reserved) all funnel through the same deadline/cancel + future-drop
+  mechanism. Exit/error mapping is §8 (one-shot timeout → 124; server per-event timeout → 5xx + log,
+  no crash).
+- **Defaults are profile-tunable** (strict should set sane deadlines; loose may leave them open);
+  concrete numbers are TBD with the benchmark budgets (§13). The interrupt frequency is an overhead
+  knob measured by the §13 sandbox-overhead benchmark.
 
 ## 6. State Layer
 
@@ -576,7 +621,7 @@ I/O, §4), but the two live at different layers and must not be conflated:
 |---|---|
 | Script error | `pcall` catches it → print traceback to stderr → exit 1 |
 | Policy violation | Raise a Lua error with a clear message (host/path/env blocked) |
-| Timeout | exit 124 (aligned with GNU `timeout`) |
+| Timeout | one-shot → exit 124 (aligned with GNU `timeout`); server per-event → 5xx + log. A `pcall`-loop can't outlive the deadline (§5 *Timeout model*) |
 | Out of memory | exit 137 |
 | Normal completion | stdout is whatever the script wrote; exit code is mapped from the `return` value: a number → that exit code, `nil`/`false` → 1, anything else (including no `return`) → 0 |
 
