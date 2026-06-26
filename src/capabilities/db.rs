@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use mlua::{Error, Lua, Table, Value, Variadic};
+use mlua::{Error, Function, Lua, MultiValue, Table, Value, Variadic};
 use sqlx::sqlite::{
     SqliteArguments, SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions,
     SqliteRow,
@@ -74,10 +74,106 @@ pub fn install(lua: &Lua, lur: &Table, db_path: Option<PathBuf>) -> Result<(), R
         db.set("query", query).map_err(RunError::Init)?;
     }
 
+    {
+        let cell = Arc::clone(&cell);
+        let path = Arc::clone(&path);
+        let tx = lua
+            .create_async_function(move |lua, func: Function| {
+                let cell = Arc::clone(&cell);
+                let path = Arc::clone(&path);
+                async move { run_tx(lua, &cell, &path, func).await }
+            })
+            .map_err(RunError::Init)?;
+        db.set("tx", tx).map_err(RunError::Init)?;
+    }
+
     lur.set("db", db).map_err(RunError::Init)?;
 
     install_kv(lua, lur, &cell, &path)?;
     Ok(())
+}
+
+/// Pinned-connection transaction: build a `tx` handle whose exec/query run on
+/// one connection, call `func(tx)`, then commit on a normal return or roll back
+/// and re-raise on error (spec §6).
+async fn run_tx(
+    lua: Lua,
+    cell: &OnceLock<SqlitePool>,
+    path: &Option<PathBuf>,
+    func: Function,
+) -> mlua::Result<()> {
+    let pool = ensure_pool(cell, path).await?;
+    let txn = pool
+        .begin()
+        .await
+        .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
+    let shared = Arc::new(tokio::sync::Mutex::new(Some(txn)));
+
+    let handle = lua.create_table()?;
+    {
+        let shared = Arc::clone(&shared);
+        let exec =
+            lua.create_async_function(move |lua, (sql, params): (String, Variadic<Value>)| {
+                let shared = Arc::clone(&shared);
+                async move {
+                    let mut guard = shared.lock().await;
+                    let txn = guard
+                        .as_mut()
+                        .ok_or_else(|| Error::runtime("lur.db.tx: transaction already finished"))?;
+                    let res = bind_all(sqlx::query(&sql), &params)?
+                        .execute(&mut **txn)
+                        .await
+                        .map_err(|e| Error::runtime(format!("lur.db.tx exec: {e}")))?;
+                    let t = lua.create_table()?;
+                    t.set("rows_affected", res.rows_affected())?;
+                    t.set("last_insert_id", res.last_insert_rowid())?;
+                    Ok(t)
+                }
+            })?;
+        handle.set("exec", exec)?;
+    }
+    {
+        let shared = Arc::clone(&shared);
+        let query =
+            lua.create_async_function(move |lua, (sql, params): (String, Variadic<Value>)| {
+                let shared = Arc::clone(&shared);
+                async move {
+                    let mut guard = shared.lock().await;
+                    let txn = guard
+                        .as_mut()
+                        .ok_or_else(|| Error::runtime("lur.db.tx: transaction already finished"))?;
+                    let rows = bind_all(sqlx::query(&sql), &params)?
+                        .fetch_all(&mut **txn)
+                        .await
+                        .map_err(|e| Error::runtime(format!("lur.db.tx query: {e}")))?;
+                    let out = lua.create_table()?;
+                    for (i, row) in rows.iter().enumerate() {
+                        out.raw_set(i as i64 + 1, read_row(&lua, row)?)?;
+                    }
+                    Ok(out)
+                }
+            })?;
+        handle.set("query", query)?;
+    }
+
+    let result = func.call_async::<MultiValue>(handle).await;
+    let txn = shared.lock().await.take();
+    match result {
+        Ok(_) => {
+            if let Some(txn) = txn {
+                txn.commit()
+                    .await
+                    .map_err(|e| Error::runtime(format!("lur.db.tx: commit: {e}")))?;
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if let Some(txn) = txn {
+                let _ = txn.rollback().await;
+            }
+            Err(e)
+        }
+    }
 }
 
 /// Install `lur.kv` over the internal `lur_kv(key TEXT, value BLOB)` table,
