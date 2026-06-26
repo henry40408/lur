@@ -48,7 +48,7 @@ Shared core: Lua VM (mlua / Luau backend, sandboxed — see §14) · host module
 | `policy` | `Policy` struct: capability switches, fs/network allowlist, resource limits; `loose`/`strict` presets | — |
 | `runtime` | Owns `mlua::Lua` (safe) + tokio; VM lifecycle; injects `lur.*`; wires timeout/memory/interrupt | `mlua`, `tokio` |
 | `host` | The `lur.*` capability modules; each takes `Policy` to gate | `reqwest`, etc. |
-| `state` | Short-term (in-memory) + long-term (storage backend) state | `dashmap`, `sqlx`/`rusqlite` |
+| `state` | Short-term (in-memory) + long-term (storage backend) state | `dashmap`, `sqlx` |
 | `serve` | Server mode: `Source` trait (http/cron/...) driving the event loop + VM pool | `axum`/`hyper`, `cron` |
 | `output` | Map the script's `return` value to an exit code; stdout stays script-controlled | — |
 
@@ -175,8 +175,9 @@ lur.base64.encode/decode()
 
 -- state (see §6)
 lur.state.get/set/incr/update()   -- short-term, host memory, shared across requests, atomic
-lur.db.query/exec()               -- long-term, raw SQL
+lur.db.query/exec/tx()            -- long-term, raw SQL (? params); tx(fn) = pinned-conn transaction
 lur.kv.get/set/delete()           -- long-term, persistent KV
+lur.null                          -- singleton sentinel for SQL NULL / JSON null (≠ nil; see §6)
 
 -- server registration (server mode only); see §3 for the req/response shape
 lur.serve.http(method, path, handler) -- method "GET".."ANY", path "/users/:id"; handler(req) -> { status, body, headers }
@@ -463,10 +464,72 @@ pool shares it. The Lua state inside each VM is treated as stateless.
   - `lur.state.get/set(key[, val])`
 
 ### Long-term state `lur.db` + `lur.kv`
-- A `StorageBackend` trait; v1 implements **SQLite** (connection pool), interface
-  reserved for **Postgres**.
-- `lur.db.query(sql, ...)` / `lur.db.exec(sql, ...)`: raw SQL + parameter binding.
-- `lur.kv.get/set/delete`: a persistent key-value abstraction backed by a single table.
+
+A `StorageBackend` trait; v1 implements **SQLite** over **`sqlx`** (async, pooled). `sqlx` is chosen
+over `rusqlite` because lur is already async, server mode needs a non-blocking pool, and `sqlx`'s
+same-API multi-backend path is exactly the reserved **Postgres** route (§10). Queries use the
+runtime `query()` API (not the compile-time `query!` macro), so no database is needed at build time.
+
+**Core API.** Positional `?` placeholders bound from varargs (named params reserved):
+
+```lua
+local rows = lur.db.query("SELECT id, name FROM u WHERE age > ?", 18)
+--  → { { id=1, name="a" }, … }   -- array of row tables keyed by column name (alias duplicate columns)
+local r = lur.db.exec("INSERT INTO u(name) VALUES (?)", "c")
+--  → { rows_affected = 1, last_insert_id = 3 }
+
+lur.db.tx(function(tx)             -- one pinned connection; commit on return, rollback on error
+  tx.exec("UPDATE acct SET bal = bal - ? WHERE id = ?", 100, 1)
+  tx.exec("UPDATE acct SET bal = bal + ? WHERE id = ?", 100, 2)
+end)
+```
+
+`lur.db.tx` is required because a pool would otherwise scatter a hand-written `BEGIN`/`COMMIT` across
+different checked-out connections; the explicit `tx.` handle pins one connection and marks the
+transaction boundary (an implicit context would be unsafe if the body spawned `lur.async` tasks).
+
+**Type mapping.** Lua (Luau) values ↔ SQLite storage classes:
+
+| Read (SQLite → Lua) | | Write (Lua → SQLite) | |
+|---|---|---|---|
+| NULL | **`lur.null`** sentinel | `nil` / `lur.null` | NULL |
+| INTEGER | number (f64) | boolean | INTEGER 0/1 (reads back as number) |
+| REAL | number | number | INTEGER if integral, else REAL |
+| TEXT | string (bytes, not validated) | string | TEXT (`lur.blob()` for explicit BLOB is reserved) |
+| BLOB | string (raw bytes) | table | **error** — encode it (`lur.json.encode`) yourself |
+
+Two sharp edges to document: **(1)** SQL NULL maps to a unique singleton **`lur.null`**, not Lua
+`nil` — assigning `nil` to a table key *deletes* it, so a NULL column would silently vanish and
+couldn't round-trip. `lur.null` is also the runtime's **shared JSON null** (`lur.json` decodes JSON
+`null` to it and encodes it back), so the DB-NULL and JSON-null boundaries use one sentinel. **(2)**
+Luau has no integer subtype (§14), so INTEGER → f64 and values **> 2⁵³ lose precision** (as in JS) —
+store exact large integers (snowflake IDs) as TEXT.
+
+**`lur.kv`** — `get`/`set`/`delete` over an auto-created internal table `lur_kv(key TEXT PRIMARY KEY,
+value BLOB)`; **keys are strings, values are raw bytes** (encode structured values yourself). TTL is
+reserved.
+
+**Pool, WAL & path.** SQLite is opened in **WAL** mode (concurrent readers + a single writer — writes
+serialize); pool size defaults to `max_concurrency`. `--db <path>` selects the file; calling
+`lur.db`/`lur.kv` with no `--db` is a clear error (in-memory DB reserved).
+
+**Schema management — user-owned, idempotent DDL (no framework in v1).** Like peer script runtimes
+(Val Town, redbean, Deno+SQLite), the script owns its application schema and lur stays out of the
+migration business. lur only auto-creates/owns its internal `lur_kv` table; everything else is the
+script's. Run DDL where the model already has an init point: at the top of a one-shot script, or in
+`app.lua` at load time (§3, before handlers register):
+
+```lua
+lur.db.exec[[ CREATE TABLE IF NOT EXISTS u (id INTEGER PRIMARY KEY, name TEXT) ]]
+```
+
+`CREATE TABLE IF NOT EXISTS` handles first-time creation but does not *evolve* a schema; the
+framework-free middle path for versioning is SQLite's built-in **`PRAGMA user_version`** (read it,
+apply the matching steps, bump it — pure SQL, no tooling). A full managed migration runner is a
+**reserved** extension that would lean on **`sqlx`'s** own `migrations/*.sql` + `_sqlx_migrations`
+mechanism (e.g. `lur serve --migrations ./migrations`), not a hand-rolled one — most relevant to
+long-running server apps.
+
 - Both coexist: use `lur.db` when you want SQL, `lur.kv` when you just need simple persistence.
 
 ## 7. Concurrency Model
@@ -534,7 +597,8 @@ Server mode: a single failing handler **must not bring down the whole server** �
   verify cron triggering.
 - **State concurrency**: hit the counter API concurrently from many requests, verify
   `incr`/`update` atomicity (no lost updates).
-- **storage**: SQLite round-trip (`lur.db` and `lur.kv`).
+- **storage**: SQLite round-trip (`lur.db` and `lur.kv`); type mapping (NULL ↔ `lur.null`, INTEGER
+  precision, BLOB/TEXT bytes); `lur.db.tx` commit-on-return / rollback-on-error.
 - **performance**: a `criterion` benchmark suite gates regressions on the perf-sensitive paths
   (VM cold start, host-call boundary, sandbox-hook overhead, state contention, storage, server
   throughput). See §13 for the full plan, budgets, and CI gate.
@@ -547,7 +611,10 @@ Server mode: a single failing handler **must not bring down the whole server** �
 - `reqwest` (HTTP client for `lur.http`)
 - `serde_json` (JSON encode/decode, output serialization)
 - `dashmap` (short-term state concurrent KV)
-- `rusqlite` or `sqlx` (SQLite backend; server mode prefers async `sqlx`)
+- `sqlx` (async SQLite backend + connection pool; runtime `query()` API, no build-time DB; its
+  multi-backend API is the reserved Postgres path, and its migration runner the reserved managed-
+  migrations path — see §6). Chosen over `rusqlite` (sync) since lur is async and server mode needs a
+  non-blocking pool.
 - Server-mode HTTP: `axum` / `hyper`
 - Cron scheduling: **`cron`** (the parser/next-fire calculator only; ≥ 0.17). lur drives the timer
   loop itself as a `Source`, rather than `tokio-cron-scheduler`, whose own scheduler loop, task
