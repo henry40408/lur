@@ -74,6 +74,8 @@ result, the script does it explicitly: `print(lur.json.encode(result))`.
 ### server
 1. `cli` parses `lur serve [OPTIONS] app.lua`.
 2. `serve` builds a **VM pool** (a pre-warmed set of stateless Lua states used round-robin).
+   Probe-verified: with mlua's `send` feature a pooled VM can be checked out across a multi-threaded
+   tokio runtime (held exclusively per use) and run async Lua, across distinct worker threads.
 3. Run `app.lua` once to collect handler registrations (`lur.serve.http(...)`, etc.).
 4. Start each `Source` (HTTP listener, cron scheduler, ...) and enter the event loop.
 5. On an incoming event → borrow a VM from the pool → run the matching handler →
@@ -194,9 +196,25 @@ lur.async.any({ fn1, fn2, ... })     -- first to *succeed* wins; if all fail →
 ### Removed / restricted native libraries
 
 - **strict**: remove `os.execute`, `io`, `package`, `require`, `loadfile`, `dofile`,
-  `load`, `os.getenv`, `os.remove`, `os.rename`, etc. Keep pure libs `string`/`table`/
-  `math`/`utf8`/`coroutine`/`print` (`coroutine` is pure control flow — no ambient I/O — and
-  underpins the async layer, see §7; `print` goes to stdout).
+  `load`, `loadstring`, `getfenv`, `setfenv`, `os.getenv`, `os.remove`, `os.rename`, etc. Keep
+  pure libs `string`/`table`/`math`/`utf8`/`coroutine`/`print` (`coroutine` is pure control flow —
+  no ambient I/O — and underpins the async layer, see §7; `print` goes to stdout).
+  **Probe finding — `sandbox(true)` is *not* sufficient by itself**: it drops `os.execute`,
+  `os.getenv`, `io`, `package`, `load`, `dofile`, `loadfile`, but **leaves `require`, `loadstring`,
+  `getfenv`, `setfenv` present** (and keeps pure `os.time`/`collectgarbage`/`bit32`). These are not
+  equally dangerous — only one is a real hole:
+  - **`require` *is* a capability escape** — probe-verified it carries an active filesystem resolver
+    (`./`, `../`, `@` prefixes) and **loaded + executed an on-disk `.luau` file**, i.e. ambient
+    read-and-execute that bypasses `lur.fs`. lur's clean-environment step (§5.1) **must** remove it.
+    Mechanics (probe-verified): there is no Cargo flag for this, but **(v1)** dropping the global —
+    `require = nil` before `sandbox(true)` — removes it cleanly, and **(future)** mlua's
+    `Lua::create_require_function` + the `Require` trait can install a deny-all or **policy-gated**
+    resolver (a deny-all returns *"require is not supported in this context"*) — the natural future
+    replacement that gates module loading by policy instead of dropping it.
+  - **`loadstring`, `getfenv`, `setfenv` are *not* capability escapes** — probe-verified that the code
+    and environments they yield still **cannot see `io`/`os`** (they expose only a writable but
+    capability-free global namespace). lur's security is the capability boundary (`lur.*`), not hiding
+    language features, so these grant nothing extra; lur strips them anyway for least-surface / defense-in-depth.
 - **loose**: optionally restore parts of `os`/`io` (still recommend the managed `lur.*` versions).
 
 Key point: **removing `io`/`os` does not remove I/O capability** — it removes
@@ -374,7 +392,11 @@ Both modes share the same enforcement:
 1. **Clean environment**: do not pollute `_G`; give the script a custom global table
    (only `lur` + allowlisted pure libs) and run the chunk under mlua's environment mechanism.
    On the Luau backend, `Lua::sandbox(true)` additionally makes the base libraries readonly
-   and drops dangerous stdlib (e.g. `os.execute` → nil) at the VM level (see §14).
+   and drops dangerous stdlib (e.g. `os.execute` → nil) at the VM level (see §14). **It is not
+   sufficient alone** — probe-verified that `sandbox(true)` leaves `require`/`loadstring`/`getfenv`/
+   `setfenv` reachable. Of those, `require` is a **genuine hole** (it loaded an on-disk `.luau` file,
+   bypassing `lur.fs`) and must be removed here; `loadstring`/`getfenv`/`setfenv` are capability-neutral
+   (can't reach `io`/`os`) but are stripped too for least-surface (see §4 removal list).
 2. **Safe mode**: mlua does not load unsafe C functions / FFI.
 3. **Memory cap**: `Lua::set_memory_limit` (probe-verified to *enforce* on Luau — allocating past the
    cap raises a memory error, not just accept the call → §8 exit 137).
