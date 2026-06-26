@@ -92,6 +92,15 @@ fn stdin_lines_iterates_newline_stripped_lines() {
 }
 
 #[test]
+fn script_args_expose_flags_and_positional() {
+    lur()
+        .arg(fixture("args.lua"))
+        .args(["--name", "alice", "--mode=fast", "input.txt", "--verbose"])
+        .assert()
+        .code(0);
+}
+
+#[test]
 fn lur_log_reaches_stderr() {
     lur()
         .arg(fixture("log.lua"))
