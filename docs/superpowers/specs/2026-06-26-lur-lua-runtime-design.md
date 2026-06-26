@@ -210,7 +210,8 @@ remain safe to provide even under strict.
 The runtime is **byte-transparent by default; Unicode is opt-in**.
 
 - A **Lua string is an arbitrary byte sequence with no encoding**. mlua maps strings
-  to/from Rust as bytes in both directions and never transcodes implicitly.
+  to/from Rust as bytes in both directions and never transcodes implicitly (probe-verified: a
+  `NUL` + invalid-UTF-8 byte string round-trips identical, length intact).
 - All data-carrying APIs are **binary-safe / encoding-agnostic**: `lur.stdin.read[(n)]`,
   `lur.fs.read`, `lur.http` response bodies, and — in server mode — the request body
   (`req.body` / `req.read[(n)]`) return **raw bytes**; `lur.stdout.write`, `lur.fs.write`, and
@@ -375,7 +376,8 @@ Both modes share the same enforcement:
    On the Luau backend, `Lua::sandbox(true)` additionally makes the base libraries readonly
    and drops dangerous stdlib (e.g. `os.execute` → nil) at the VM level (see §14).
 2. **Safe mode**: mlua does not load unsafe C functions / FFI.
-3. **Memory cap**: `Lua::set_memory_limit`.
+3. **Memory cap**: `Lua::set_memory_limit` (probe-verified to *enforce* on Luau — allocating past the
+   cap raises a memory error, not just accept the call → §8 exit 137).
 4. **Timeout / interrupt** (see *Timeout model* below): a **two-layer** kill — a deadline-checking
    periodic VM callback (`set_interrupt` on Luau; instruction-count `set_hook` on PUC) for CPU-bound
    code, plus a `tokio` wall-clock timeout wrapping the whole task for code parked on async I/O.
@@ -419,6 +421,10 @@ but *subdomain* wildcards (`*.example.com`) and CIDR ranges are **reserved**; IP
 - (Pinning the checked IP through to connect — full rebinding defence — is **reserved**; v1 ships
   the range default-deny.)
 
+Both hooks are **probe-verified implementable on `reqwest`**: a custom `redirect::Policy` sees and can
+stop/allow each hop's URL (per-hop re-check), and a custom `dns::Resolve` that filters private IPs
+fails the connection before it is made (private-network deny).
+
 **Filesystem (`fs_read_allow` / `fs_write_allow`).** Read and write are **separate** allowlists
 (`--allow-fs-read` / `--allow-fs-write`; `--allow-fs` is sugar for both). An entry that is a
 **directory grants its whole subtree**; a **file grants only that file**; globs are reserved. The
@@ -450,8 +456,9 @@ for the concrete CLI surface.
 
 ### Timeout model
 
-The interrupt callback (item 4) only fires **while Lua bytecode is running** — verified by probe on a
-hot loop. When a script is **parked on async I/O** (`lur.http`, `lur.db`, sleep) the VM has yielded to
+The interrupt callback (item 4) only fires **while Lua bytecode is running** — probe-verified (~2M
+fires in a CPU loop vs ~0 during a 150 ms async park). When a script is **parked on async I/O**
+(`lur.http`, `lur.db`, sleep) the VM has yielded to
 tokio and no Lua executes, so the interrupt alone **cannot** kill a script stuck on a slow/hung
 request. Enforcement therefore uses **two complementary layers** sharing one deadline:
 
@@ -548,7 +555,8 @@ Two sharp edges to document: **(1)** SQL NULL maps to a unique singleton **`lur.
 couldn't round-trip. `lur.null` is also the runtime's **shared JSON null** (`lur.json` decodes JSON
 `null` to it and encodes it back), so the DB-NULL and JSON-null boundaries use one sentinel. **(2)**
 Luau has no integer subtype (§14), so INTEGER → f64 and values **> 2⁵³ lose precision** (as in JS) —
-store exact large integers (snowflake IDs) as TEXT.
+store exact large integers (snowflake IDs) as TEXT. (Probe-verified: `math.type` is absent and
+`2⁵³ == 2⁵³+1`; `utf8` *is* present, so §3 holds.)
 
 **`lur.kv`** — `get`/`set`/`delete` over an auto-created internal table `lur_kv(key TEXT PRIMARY KEY,
 value BLOB)`; **keys are strings, values are raw bytes** (encode structured values yourself). TTL is
@@ -579,7 +587,8 @@ long-running server apps.
 
 ## 7. Concurrency Model
 
-- `tokio` underneath; `lur.http.*` is async (mlua async + tokio).
+- `tokio` underneath; `lur.http.*` is async (mlua async + tokio) — probe-verified that mlua async
+  functions run under the Luau backend on a tokio runtime.
 - The `lur.async.*` family wraps multiple Lua functions into tokio tasks and runs them
   concurrently — fire many requests, then await them together. The four combinators mirror
   JS `Promise.all` / `Promise.race` / `Promise.allSettled` / `Promise.any`:
