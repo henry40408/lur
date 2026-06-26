@@ -104,6 +104,7 @@ The handler receives one `req` table and returns `{ status, body, headers }`:
 | `req.headers.NAME` | headers; **case-insensitive, keys normalized to lower case** — read e.g. `req.headers["content-type"]` |
 | `req.body` | the **full** request body as raw bytes (sugar for `req.read()`); bounded by `limits.max_body` |
 | `req.read([n])` | mirrors `lur.stdin.read([n])`: no arg → read the whole body; `n` → read up to `n` bytes; EOF → `nil` |
+| `req.json()` | explicit shorthand for `lur.json.decode(req.body)` — decoded only when called, no `Content-Type` magic; materializes the full body, so it can't be combined with chunked `req.read(n)` |
 
 `req.body` and chunked `req.read(n)` are **mutually exclusive** — the body is a one-shot stream,
 so once `read(n)` has consumed part of it `req.body` is no longer available. A body larger than
@@ -159,9 +160,11 @@ lur.stdout.write(data)    -- write raw bytes to stdout, no newline, binary-safe
 lur.stdout.flush()        -- flush stdout
 lur.env("API_KEY")        -- allowlisted environment variable
 
--- capability modules (policy-gated)
-lur.http.get(url, opts)   -- async; returns { status, body, headers }
-lur.http.post(url, opts)
+-- capability modules (policy-gated); see §4 "HTTP client" for opts/response detail
+lur.http.request(method, url[, opts])           -- core; async
+lur.http.get/post/put/patch/delete/head(url[, opts]) -- sugar over request()
+--   opts  = { headers, query, body | json, timeout, redirect }
+--   reply = { status, body(raw bytes), headers, headers_all, json() }
 lur.fs.read(path)         -- path allowlist enforced; returns raw bytes
 lur.fs.write(path, data)  -- writes raw bytes as-is
 lur.log.info/warn/error() -- writes to stderr (stdout is the script's data channel)
@@ -227,6 +230,44 @@ The runtime is **byte-transparent by default; Unicode is opt-in**.
 In one sentence: `lur` passes strings around as bytes everywhere and only assumes UTF-8 at
 `lur.json.encode` and within the `utf8.*` library.
 
+### HTTP client
+
+`lur.http.request(method, url[, opts])` is the core call; `get`/`post`/`put`/`patch`/`delete`/`head`
+are sugar over it (rarer methods go through `request`). Every request **and every redirect hop** is
+validated against the §5 network allowlist + private-network deny.
+
+**Request `opts`:**
+
+| Field | Meaning |
+|---|---|
+| `headers` | name→value table, sent as given |
+| `query` | table appended as a percent-encoded query string (`{q="lur"}` → `?q=lur`) |
+| `body` | raw byte body (§4 byte-transparent); mutually exclusive with `json` |
+| `json` | a Lua value encoded as a JSON body + `content-type: application/json` (hits the UTF-8 boundary) |
+| `timeout` | per-request timeout, overriding the default (whole-script deadline / interrupt: §5) |
+| `redirect` | `"follow"` (default; capped hop count, each hop re-checked) / `"manual"` / `"error"` |
+
+`form`-urlencoded bodies, retries, a cookie jar, and proxies are **reserved** (explicit-first, YAGNI).
+
+**Response:** `{ status, body, headers, headers_all, json() }`
+
+- `status` — number; `body` — **raw bytes** (no auto-decoding).
+- `headers` — **case-insensitive, lower-cased keys** (`res.headers["content-type"]`), matching the
+  server `req.headers` convention (§3); `headers_all["set-cookie"]` is the array form for repeated headers.
+- `res.json()` — **explicit** shorthand for `lur.json.decode(res.body)`, decoded **only when called**
+  and **without** consulting `Content-Type` (the script asserts it is JSON; errors like `lur.json.decode`
+  on invalid JSON / non-UTF-8). The runtime never auto-parses a body. The server side mirrors this with
+  `req.json()`.
+
+**Safety / resource limits:**
+
+- **TLS verification is always on**; a script cannot disable certificate checks via `opts` (that is a
+  host-level policy decision, not a capability the untrusted script holds). A policy-level opt-out is
+  **reserved**.
+- The response body is **buffered with a size cap** (`--max-http-body`) so a large download can't blow
+  the VM memory cap; exceeding it errors. **Streaming downloads** (`res.read(n)` / writing straight to
+  `lur.fs`) are **reserved**, symmetric with streaming response bodies on the server side.
+
 ### Example scripts
 
 What a user actually writes — ordinary Lua, but all I/O flows through `lur.*` instead of
@@ -258,7 +299,7 @@ if res.status ~= 200 then
   lur.log.error("github returned " .. res.status)   -- diagnostics go to stderr
   return res.status                                 -- return number → that exit code (§8)
 end
-local data = lur.json.decode(res.body)
+local data = res.json()                                    -- explicit shorthand for lur.json.decode(res.body)
 print(lur.json.encode({ stars = data.stargazers_count }))  -- result is print'd for `jq` to consume
 ```
 
@@ -352,7 +393,7 @@ Policy {
   net_allow: Vec<HostRule>,         // allowed network hosts (host or host:port)
   allow_private_net: bool,          // default false — block loopback/private/link-local IPs (SSRF)
   env_allow: Vec<String>,           // allowed environment-variable names
-  limits: { timeout, memory, max_concurrency, per_event_timeout, max_body },
+  limits: { timeout, memory, max_concurrency, per_event_timeout, max_body, max_http_body },
   os_hardening: Option<OsHardening> // reserved, None in v1
 }
 ```
@@ -589,6 +630,7 @@ $ lur serve --bind 127.0.0.1:8080 --allow-net "*" --db ./app.db app.lua
 | `--max-concurrency <n>` | Concurrency limit |
 | `--bind <addr>` | (server) listen address |
 | `--max-body <size>` | (server) max request-body size; larger requests get 413 (e.g. `2m`) |
+| `--max-http-body <size>` | max buffered `lur.http` response-body size; larger responses error (e.g. `16m`) |
 | `--db <path>` | SQLite database path |
 
 ### Defaults & precedence
