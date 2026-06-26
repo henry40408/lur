@@ -54,7 +54,7 @@ impl Runtime {
             .set("require", mlua::Value::Nil)
             .map_err(RunError::Init)?;
 
-        inject_capabilities(&lua)?;
+        crate::capabilities::install(&lua)?;
 
         lua.sandbox(true).map_err(RunError::Init)?;
 
@@ -148,27 +148,4 @@ fn exit_code_of(values: MultiValue) -> i32 {
         Some(Value::Nil) | Some(Value::Boolean(false)) => 1,
         Some(_) => 0,
     }
-}
-
-/// Build the flat `lur.*` capability table and install it as a global.
-///
-/// Must run before `sandbox(true)` freezes the global table.
-fn inject_capabilities(lua: &Lua) -> Result<(), RunError> {
-    let lur = lua.create_table().map_err(RunError::Init)?;
-
-    // `lur.log(msg)` — write a line to stderr. Bytes are passed through
-    // verbatim (§4 byte semantics); no UTF-8 validation at this boundary.
-    let log = lua
-        .create_function(|_, msg: mlua::String| {
-            use std::io::Write;
-            let mut err = std::io::stderr().lock();
-            let _ = err.write_all(&msg.as_bytes());
-            let _ = err.write_all(b"\n");
-            Ok(())
-        })
-        .map_err(RunError::Init)?;
-    lur.set("log", log).map_err(RunError::Init)?;
-
-    lua.globals().set("lur", lur).map_err(RunError::Init)?;
-    Ok(())
 }
