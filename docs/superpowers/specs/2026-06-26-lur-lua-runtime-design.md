@@ -80,6 +80,38 @@ result, the script does it explicitly: `print(lur.json.encode(result))`.
    return the VM to the pool.
 6. All cross-request / cross-event state lives host-side (see §6); the VM itself is stateless.
 
+#### HTTP routing & the `req` object
+
+Routes are declared `lur.serve.http(method, path, handler)`:
+
+- **method** is matched case-insensitively and normalized to upper case (`"get"` ≡ `"GET"`);
+  `"ANY"` is the wildcard that matches every method. To serve several specific methods,
+  register the handler more than once (no list syntax in v1 — YAGNI).
+- **path** uses `:name` segments for path parameters, e.g. `/users/:id`.
+- **route resolution**: a **static segment beats a dynamic `:param`** (`/users/me` wins over
+  `/users/:id`), so matching never depends on registration order. Registering the **same
+  `(method, path)` twice is an error at load time** (fail-fast, no silent last-wins). A request
+  matching **no** route gets an automatic **404** (distinct from a registration conflict).
+
+The handler receives one `req` table and returns `{ status, body, headers }`:
+
+| `req` field | Value |
+|---|---|
+| `req.method` | the request method, upper-cased (`"GET"`) |
+| `req.path` | the request path (`"/users/42"`) |
+| `req.params.NAME` | path parameters from `:name`; **percent-decoded to raw bytes**, always strings (no `tonumber`) |
+| `req.query.NAME` | query parameters; **case-sensitive** (`?Foo` ≠ `?foo`); repeated keys → last value, full list via `req.query_all.NAME` |
+| `req.headers.NAME` | headers; **case-insensitive, keys normalized to lower case** — read e.g. `req.headers["content-type"]` |
+| `req.body` | the **full** request body as raw bytes (sugar for `req.read()`); bounded by `limits.max_body` |
+| `req.read([n])` | mirrors `lur.stdin.read([n])`: no arg → read the whole body; `n` → read up to `n` bytes; EOF → `nil` |
+
+`req.body` and chunked `req.read(n)` are **mutually exclusive** — the body is a one-shot stream,
+so once `read(n)` has consumed part of it `req.body` is no longer available. A body larger than
+`limits.max_body` is rejected at the host edge with **413 Payload Too Large** before the handler
+runs, so the VM never allocates it; to read a very large body whole, raise `--max-body` (and accept
+the memory cost), otherwise stream it with `req.read(n)` to a sink. Streaming response bodies are a
+reserved extension, not in v1.
+
 ## 4. `lur.*` API Surface (everything flat under `lur.`)
 
 The only global is `lur`. Categorized below (all on the same level):
@@ -111,20 +143,24 @@ lur.state.get/set/incr/update()   -- short-term, host memory, shared across requ
 lur.db.query/exec()               -- long-term, raw SQL
 lur.kv.get/set/delete()           -- long-term, persistent KV
 
--- server registration (server mode only)
-lur.serve.http(path, handler)     -- handler(req) -> { status, body, headers }
-lur.serve.cron(spec, handler)     -- handler()
+-- server registration (server mode only); see §3 for the req/response shape
+lur.serve.http(method, path, handler) -- method "GET".."ANY", path "/users/:id"; handler(req) -> { status, body, headers }
+lur.serve.cron(spec, handler)         -- handler()
 -- lur.serve.socket(...) etc. for future extension
 
--- concurrency
-lur.spawn_all({ fn1, fn2, ... })  -- run multiple Lua functions concurrently, collect results
+-- concurrency (run multiple Lua functions concurrently; see §7)
+lur.async.all({ fn1, fn2, ... })     -- all must succeed → results in order, else re-raise the first error
+lur.async.race({ fn1, fn2, ... })    -- first to settle wins (ok or err) → its result, or raise if it errored; rest cancelled
+lur.async.settled({ fn1, fn2, ... }) -- wait for all, never raises → per-task { ok=true, value=… } / { ok=false, err=… }
+lur.async.any({ fn1, fn2, ... })     -- first to *succeed* wins; if all fail → raise an aggregate error; rest cancelled
 ```
 
 ### Removed / restricted native libraries
 
 - **strict**: remove `os.execute`, `io`, `package`, `require`, `loadfile`, `dofile`,
   `load`, `os.getenv`, `os.remove`, `os.rename`, etc. Keep pure libs `string`/`table`/
-  `math`/`utf8`/`print` (`print` goes to stdout).
+  `math`/`utf8`/`coroutine`/`print` (`coroutine` is pure control flow — no ambient I/O — and
+  underpins the async layer, see §7; `print` goes to stdout).
 - **loose**: optionally restore parts of `os`/`io` (still recommend the managed `lur.*` versions).
 
 Key point: **removing `io`/`os` does not remove I/O capability** — it removes
@@ -140,8 +176,15 @@ The runtime is **byte-transparent by default; Unicode is opt-in**.
 - A **Lua string is an arbitrary byte sequence with no encoding**. mlua maps strings
   to/from Rust as bytes in both directions and never transcodes implicitly.
 - All data-carrying APIs are **binary-safe / encoding-agnostic**: `lur.stdin.read[(n)]`,
-  `lur.fs.read`, and `lur.http` response bodies return **raw bytes**; `lur.stdout.write`
-  and `lur.fs.write` write the bytes as-is. No UTF-8 validation is performed on these paths.
+  `lur.fs.read`, `lur.http` response bodies, and — in server mode — the request body
+  (`req.body` / `req.read[(n)]`) return **raw bytes**; `lur.stdout.write`, `lur.fs.write`, and
+  a handler's returned `body` write the bytes as-is. No UTF-8 validation is performed on these paths.
+- **HTTP request fields carry no encoding either**: `req.params.*` and `req.query.*` are
+  **percent-decoded to raw bytes** — not assumed to be UTF-8 and not validated; `req.headers.*`
+  values are exposed as bytes. lur **never transcodes based on a `Content-Type: charset`** — a
+  Shift_JIS / Big5 body arrives as the original bytes. v1 ships **no charset conversion** (iconv
+  is a non-goal); a script that needs codepoints validates with `utf8.*`, and the only UTF-8
+  assumption remains the JSON boundary below.
 - For **text / codepoint handling**, scripts use the built-in `utf8` library (present in
   both PUC Lua 5.4 and the Luau backend; kept as a pure, safe native): `utf8.len`,
   `utf8.char`, `utf8.codepoint`, `utf8.codes`.
@@ -151,6 +194,99 @@ The runtime is **byte-transparent by default; Unicode is opt-in**.
 
 In one sentence: `lur` passes strings around as bytes everywhere and only assumes UTF-8 at
 `lur.json.encode` and within the `utf8.*` library.
+
+### Example scripts
+
+What a user actually writes — ordinary Lua, but all I/O flows through `lur.*` instead of
+`os`/`io` (which strict removes, §4). These tie together the modes (§3), state (§6), and the
+concurrency family (§7).
+
+**one-shot — Unix filter (stdin → stdout):**
+
+```lua
+-- top_ips.lua  ──  cat access.log | lur top_ips.lua | sort -rn | head
+local counts = {}
+for line in lur.stdin.lines() do
+  local ip = line:match("^(%d+%.%d+%.%d+%.%d+)")
+  if ip then counts[ip] = (counts[ip] or 0) + 1 end
+end
+for ip, n in pairs(counts) do
+  print(n .. "\t" .. ip)          -- stdout is the data channel; format is the script's call
+end
+-- no return → exit 0
+```
+
+**one-shot — call an API, emit a structured result:**
+
+```lua
+-- fetch.lua  ──  lur --allow-net api.github.com fetch.lua -- --repo cli/cli
+local repo = lur.args.flags.repo or error("need --repo")
+local res = lur.http.get("https://api.github.com/repos/" .. repo)
+if res.status ~= 200 then
+  lur.log.error("github returned " .. res.status)   -- diagnostics go to stderr
+  return res.status                                 -- return number → that exit code (§8)
+end
+local data = lur.json.decode(res.body)
+print(lur.json.encode({ stars = data.stargazers_count }))  -- result is print'd for `jq` to consume
+```
+
+**one-shot — fan out four ways (`lur.async.all` / `.race` / `.settled` / `.any`):**
+
+```lua
+-- concurrency.lua
+-- all: every fetch must succeed; fail-fast, results in order
+local pages = lur.async.all({
+  function() return lur.http.get("https://a.example/p").body end,
+  function() return lur.http.get("https://b.example/p").body end,
+})
+
+-- race: whichever mirror settles first wins (success or failure); the rest are cancelled
+local fastest = lur.async.race({
+  function() return lur.http.get("https://mirror1.example/file").body end,
+  function() return lur.http.get("https://mirror2.example/file").body end,
+})
+
+-- any: first mirror to *succeed* wins; raises only if every mirror fails
+local ok = lur.async.any({
+  function() return lur.http.get("https://primary.example/file").body end,
+  function() return lur.http.get("https://backup.example/file").body end,
+})
+
+-- settled: probe many endpoints, keep going even if some fail
+local checks = lur.async.settled({
+  function() return lur.http.get("https://a.example/health").status end,
+  function() return lur.http.get("https://b.example/health").status end,
+})
+for i, r in ipairs(checks) do
+  if r.ok then lur.log.info("endpoint " .. i .. " -> " .. r.value)
+  else         lur.log.warn("endpoint " .. i .. " failed: " .. tostring(r.err)) end
+end
+```
+
+**server — register handlers (running `app.lua` only collects registrations, §3):**
+
+```lua
+-- app.lua  ──  lur serve --bind 127.0.0.1:8080 --db ./app.db app.lua
+lur.serve.http("GET", "/users/:id", function(req)
+  local n = lur.state.incr("hits")            -- cross-request, atomic, host-side (§6)
+  return { status = 200, body = "user " .. req.params.id .. ", hit #" .. n }
+end)
+
+lur.serve.http("POST", "/save", function(req)
+  if req.headers["content-type"] ~= "application/json" then return { status = 415 } end
+  lur.kv.set("last", req.body)                 -- req.body = full body as raw bytes (§6)
+  return { status = 201 }
+end)
+
+lur.serve.http("ANY", "/webhook", function(req) -- ANY matches every method
+  lur.log.info(req.method .. " " .. req.path .. "?q=" .. tostring(req.query.q))
+  return { status = 204 }
+end)
+
+lur.serve.cron("0 * * * *", function()         -- once an hour
+  lur.log.info("hourly tick, hits=" .. (lur.state.get("hits") or 0))
+end)
+```
 
 ## 5. Sandbox (Approach A: capability injection, in-process)
 
@@ -178,7 +314,7 @@ Policy {
   fs_allow: Vec<PathRule>,          // readable/writable paths
   net_allow: Vec<HostRule>,         // allowed network hosts
   env_allow: Vec<String>,           // allowed environment-variable names
-  limits: { timeout, memory, max_concurrency, per_event_timeout },
+  limits: { timeout, memory, max_concurrency, per_event_timeout, max_body },
   os_hardening: Option<OsHardening> // reserved, None in v1
 }
 ```
@@ -220,8 +356,38 @@ pool shares it. The Lua state inside each VM is treated as stateless.
 ## 7. Concurrency Model
 
 - `tokio` underneath; `lur.http.*` is async (mlua async + tokio).
-- `lur.spawn_all({...})` wraps multiple Lua functions into tokio tasks, runs them
-  concurrently, and collects results, letting a script fire many requests then await them together.
+- The `lur.async.*` family wraps multiple Lua functions into tokio tasks and runs them
+  concurrently — fire many requests, then await them together. The four combinators mirror
+  JS `Promise.all` / `Promise.race` / `Promise.allSettled` / `Promise.any`:
+  - `lur.async.all{...}` — await every task; return results in argument order. If any task
+    errors, the whole call **re-raises that error** (fail-fast); the rest are cancelled.
+  - `lur.async.race{...}` — return as soon as the **first** task settles (success *or* failure):
+    its value on success, or re-raise its error if that first-settling task failed. Rest cancelled.
+  - `lur.async.settled{...}` — await every task but **never raise**; return a per-task array of
+    `{ ok = true, value = … }` / `{ ok = false, err = … }`, so one failure doesn't discard the
+    others' results.
+  - `lur.async.any{...}` — return the **first task to *succeed***; only if **every** task fails
+    does it raise an aggregate error. The remaining tasks are cancelled once one succeeds.
+
+### Coroutines vs. the async layer
+
+Luau's built-in `coroutine` library is kept under strict (it is pure control flow — no ambient
+I/O, §4), but the two live at different layers and must not be conflated:
+
+- **`coroutine.*` is the mechanism, not the concurrency API.** Use it for cooperative control
+  flow — generators, lazy iterators, state machines. On its own it gives **no parallel I/O**:
+  `resume`/`yield` only hand control between your own code; there is no scheduler behind it.
+- **`lur.async.*` is the concurrency API**, built on top of `coroutine` + mlua-async + tokio:
+  awaiting `lur.http.*` suspends the Lua coroutine and tokio drives it. This yields **concurrency,
+  not parallelism** — on one VM Lua code still runs one piece at a time, interleaving only at I/O
+  await points (exactly like single-threaded JS `Promise.all`). True parallelism comes from the
+  VM pool spreading *events* across VMs (§3).
+- **Footgun**: do **not** manually `coroutine.resume` a coroutine that internally awaits
+  `lur.http` (or any async host call) — that yield must be driven by the runtime, and resuming it
+  by hand hits a "yield across an async boundary" error. Drive concurrency through `lur.async.*`,
+  not hand-rolled coroutine scheduling. (Verify the exact mlua-Luau behavior with a probe before
+  implementing, per the workspace's pre-implementation rule.)
+
 - Concurrency limit controlled by `policy.limits.max_concurrency`.
 - Server mode: VM-pool size aligns with `max_concurrency`; event parallelism is driven by tokio.
 
@@ -277,7 +443,7 @@ Server mode: a single failing handler **must not bring down the whole server** �
 3. State layer: `lur.state` (short-term) → `lur.db`/`lur.kv` (SQLite).
 4. Server mode: VM pool + `lur.serve.http` + event loop.
 5. Server extension: `lur.serve.cron`.
-6. Concurrency helper `lur.spawn_all`, profile config file, docs and examples.
+6. Concurrency helpers `lur.async.*` (`all`/`race`/`settled`/`any`), profile config file, docs and examples.
 
 Throughout: stand up the `criterion` benchmark harness + CI perf gate alongside step 1 (start
 with VM cold start, host-call boundary, and sandbox-hook overhead), and add a benchmark with each
@@ -338,6 +504,7 @@ $ lur serve --bind 127.0.0.1:8080 --allow-net "*" --db ./app.db app.lua
 | `--memory <size>` | Memory cap (e.g. `128m`) |
 | `--max-concurrency <n>` | Concurrency limit |
 | `--bind <addr>` | (server) listen address |
+| `--max-body <size>` | (server) max request-body size; larger requests get 413 (e.g. `2m`) |
 | `--db <path>` | SQLite database path |
 
 ### Defaults & precedence
