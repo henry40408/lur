@@ -3,4 +3,14 @@ name = "lur"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "lur"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lur"
+path = "src/main.rs"
+
 [dependencies]
+mlua = { version = "0.11.6", features = ["luau"] }
+thiserror = "2.0.18"
