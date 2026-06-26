@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use mlua::{Lua, VmState};
+use mlua::{Lua, MultiValue, Value, VmState};
 use thiserror::Error;
 
 /// Errors that can arise while building or running a script.
@@ -65,26 +65,56 @@ impl Runtime {
 
     /// Run `source` to completion with no time limit.
     pub fn run(&self, source: &str) -> Result<(), RunError> {
-        self.lua.load(source).exec().map_err(RunError::Script)
+        self.guarded(None, |lua| lua.load(source).exec())
     }
 
     /// Run `source` to completion, interrupting it if it runs longer than
     /// `timeout` of wall-clock time.
     pub fn run_with_timeout(&self, source: &str, timeout: Duration) -> Result<(), RunError> {
-        let at = Instant::now() + timeout;
-        *self.deadline.lock().expect("deadline mutex poisoned") = Some(at);
+        self.guarded(Some(timeout), |lua| lua.load(source).exec())
+    }
 
-        let result = self.lua.load(source).exec();
+    /// Run `source` and map its top-level `return` value to a process exit
+    /// code per spec §8: a number → that code, `nil`/`false` → 1, anything
+    /// else (including no `return`) → 0.
+    pub fn run_to_exit_code(
+        &self,
+        source: &str,
+        timeout: Option<Duration>,
+    ) -> Result<i32, RunError> {
+        let values = self.guarded(timeout, |lua| lua.load(source).eval::<MultiValue>())?;
+        Ok(exit_code_of(values))
+    }
+
+    /// Set the deadline around `f`, then classify any error as a timeout if the
+    /// deadline has passed, or a script error otherwise.
+    fn guarded<T>(
+        &self,
+        timeout: Option<Duration>,
+        f: impl FnOnce(&Lua) -> mlua::Result<T>,
+    ) -> Result<T, RunError> {
+        let at = timeout.map(|d| Instant::now() + d);
+        *self.deadline.lock().expect("deadline mutex poisoned") = at;
+
+        let result = f(&self.lua);
 
         *self.deadline.lock().expect("deadline mutex poisoned") = None;
 
-        result.map_err(|e| {
-            if Instant::now() >= at {
-                RunError::Timeout
-            } else {
-                RunError::Script(e)
-            }
+        result.map_err(|e| match at {
+            Some(at) if Instant::now() >= at => RunError::Timeout,
+            _ => RunError::Script(e),
         })
+    }
+}
+
+/// Map a chunk's top-level return values to an exit code (spec §8).
+fn exit_code_of(values: MultiValue) -> i32 {
+    match values.into_iter().next() {
+        None => 0,
+        Some(Value::Integer(n)) => n as i32,
+        Some(Value::Number(f)) => f as i32,
+        Some(Value::Nil) | Some(Value::Boolean(false)) => 1,
+        Some(_) => 0,
     }
 }
 

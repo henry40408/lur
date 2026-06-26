@@ -29,6 +29,34 @@ fn lur_log_is_injected_and_callable() {
 }
 
 #[test]
+fn exit_code_maps_a_returned_number() {
+    let rt = Runtime::new().expect("runtime builds");
+    assert_eq!(rt.run_to_exit_code("return 3", None).unwrap(), 3);
+}
+
+#[test]
+fn exit_code_is_one_for_a_falsy_return() {
+    let rt = Runtime::new().expect("runtime builds");
+    assert_eq!(rt.run_to_exit_code("return nil", None).unwrap(), 1);
+    assert_eq!(rt.run_to_exit_code("return false", None).unwrap(), 1);
+}
+
+#[test]
+fn exit_code_is_zero_with_no_return() {
+    let rt = Runtime::new().expect("runtime builds");
+    assert_eq!(rt.run_to_exit_code("local x = 1", None).unwrap(), 0);
+}
+
+#[test]
+fn exit_code_propagates_timeout() {
+    let rt = Runtime::new().expect("runtime builds");
+    let err = rt
+        .run_to_exit_code("while true do end", Some(Duration::from_millis(50)))
+        .expect_err("infinite loop must time out");
+    assert!(matches!(err, RunError::Timeout), "got {err:?}");
+}
+
+#[test]
 fn deadline_interrupt_aborts_an_infinite_loop() {
     let rt = Runtime::new().expect("runtime builds");
     let err = rt
