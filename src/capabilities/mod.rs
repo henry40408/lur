@@ -3,6 +3,7 @@
 //! Each submodule installs its slice of the single `lur` table; [`install`]
 //! orchestrates them and must run before `sandbox(true)` freezes the globals.
 
+pub mod io;
 pub mod json;
 pub mod log;
 pub mod null;
@@ -18,6 +19,7 @@ pub fn install(lua: &Lua) -> Result<(), RunError> {
     null::install(lua, &lur)?;
     log::install(lua, &lur)?;
     json::install(lua, &lur)?;
+    io::install(lua, &lur)?;
 
     lua.globals().set("lur", lur).map_err(RunError::Init)?;
     Ok(())
