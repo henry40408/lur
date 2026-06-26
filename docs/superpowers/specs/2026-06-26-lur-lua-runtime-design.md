@@ -337,8 +337,8 @@ Both modes share the same enforcement:
 4. **Timeout / interrupt**: a periodic VM callback (`set_interrupt` on the Luau backend;
    the instruction-count `set_hook` on PUC Lua); on timeout or a cancellation signal, raise
    an error and abort.
-5. **Capability gate**: every host-function entry point checks `Policy` (host/path not
-   in the allowlist → raise a Lua error with a clear message).
+5. **Capability gate**: every host-function entry point checks `Policy` per the *Allowlist
+   matching* rules below (host/path/IP not allowed → raise a Lua error with a clear message).
 6. **Layer-B reserved**: `Policy` has an `os_hardening: Option<OsHardening>` field for a
    future landlock/seccomp/sandbox-exec layer; not implemented in v1.
 
@@ -347,8 +347,10 @@ Both modes share the same enforcement:
 ```
 Policy {
   profile: Loose | Strict,
-  fs_allow: Vec<PathRule>,          // readable/writable paths
-  net_allow: Vec<HostRule>,         // allowed network hosts
+  fs_read_allow:  Vec<PathRule>,    // readable path roots (read & write are separate, like Deno)
+  fs_write_allow: Vec<PathRule>,    // writable path roots
+  net_allow: Vec<HostRule>,         // allowed network hosts (host or host:port)
+  allow_private_net: bool,          // default false — block loopback/private/link-local IPs (SSRF)
   env_allow: Vec<String>,           // allowed environment-variable names
   limits: { timeout, memory, max_concurrency, per_event_timeout, max_body },
   os_hardening: Option<OsHardening> // reserved, None in v1
@@ -356,7 +358,44 @@ Policy {
 ```
 
 The profile is selected and overridden by flags or a config file. `loose` defaults to
-permissive; `strict` defaults to tight (allowlists empty by default).
+permissive; `strict` defaults to tight (allowlists empty by default). The matching rules below
+are **security-critical** under §1's untrusted-script threat model.
+
+### Allowlist matching
+
+**Network (`net_allow`).** An entry is `host` (any port) or `host:port` (that port only); matching
+is **scheme-agnostic** (`lur.http` is the only egress, so http/https both count). Host matching is
+**exact** in v1 — a lone `*` means **any host** (still subject to the private-network deny below),
+but *subdomain* wildcards (`*.example.com`) and CIDR ranges are **reserved**; IP literals are accepted. Two non-negotiable hardenings against SSRF / DNS-rebinding on untrusted scripts:
+
+- **Private-network default-deny**: even when the hostname is allowlisted, a connection whose
+  **resolved IP** falls in loopback / private / link-local / metadata ranges (`127/8`, `::1`,
+  `10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `fc00::/7`, …) is **refused** unless
+  `allow_private_net` is set (`--allow-private`) or that IP/host is explicitly allowlisted.
+- **Per-hop re-check**: every redirect target is re-validated against `net_allow` (a 3xx to a
+  non-allowlisted or private host is blocked), so an allowed host can't bounce egress elsewhere.
+- (Pinning the checked IP through to connect — full rebinding defence — is **reserved**; v1 ships
+  the range default-deny.)
+
+**Filesystem (`fs_read_allow` / `fs_write_allow`).** Read and write are **separate** allowlists
+(`--allow-fs-read` / `--allow-fs-write`; `--allow-fs` is sugar for both). An entry that is a
+**directory grants its whole subtree**; a **file grants only that file**; globs are reserved. The
+escape-proofing rule: a requested path is **canonicalized** (resolve `.`/`..`/symlinks to the real
+absolute path) **before** the prefix check, so `--allow-fs-read ./out` cannot be escaped via
+`./out/../../etc/passwd` or a symlink pointing outside the root. Relative paths resolve against the
+**launch cwd**; allowlist roots are canonicalized to absolute at startup; a write to a not-yet-existing
+file canonicalizes its **parent**. Known limitation: canonicalize-then-open has a **TOCTOU** window
+(a symlink swapped after the check) — full mitigation (`openat2`/`O_NOFOLLOW`) belongs to the §5
+Layer-B OS-hardening, not v1.
+
+**Environment (`env_allow`).** Exact name match (prefix wildcards reserved). `lur.env("X")` for a
+non-allowlisted name returns **`nil`** (indistinguishable from unset) rather than erroring, so it
+can't be used as an oracle for which variables exist.
+
+**Layering is additive.** Allowlists from the user config and the CLI flags are **unioned**, not
+overridden — config holds standing grants, flags add per-run ones. To ignore config entirely for an
+untrusted run, `--no-config` falls back to pure shipped `strict` (zero grants). Scalar settings
+(`default_profile`, `timeout`, `memory`) still follow last-wins precedence (§12).
 
 **The shipped default profile is `strict` — secure by default, like Deno.** A bare
 `lur script.lua` has zero ambient access; capabilities are granted explicitly via
@@ -538,8 +577,12 @@ $ lur serve --bind 127.0.0.1:8080 --allow-net "*" --db ./app.db app.lua
 | `-A`, `--allow-all` | Grant full access for this run (overrides strict default) |
 | `--strict` / `--loose` | Select profile, overriding the default |
 | `--config <file>` | Load a policy config file (default: `~/.config/lur/config`) |
-| `--allow-net <host>` | Add a network host to the allowlist (repeatable) |
-| `--allow-fs <path>` | Add a filesystem path to the allowlist (repeatable) |
+| `--no-config` | Ignore the user config entirely → pure shipped `strict`, zero grants |
+| `--allow-net <host>` | Add a network host (`host` or `host:port`) to the allowlist (repeatable) |
+| `--allow-private` | Permit connections to loopback/private/link-local IPs (off by default; see §5 SSRF) |
+| `--allow-fs-read <path>` | Add a readable path root (repeatable) |
+| `--allow-fs-write <path>` | Add a writable path root (repeatable) |
+| `--allow-fs <path>` | Sugar: add the path to **both** read and write allowlists (repeatable) |
 | `--allow-env <name>` | Add an environment variable to the allowlist (repeatable) |
 | `--timeout <dur>` | Execution timeout (e.g. `5s`, `2m`) |
 | `--memory <size>` | Memory cap (e.g. `128m`) |
@@ -551,9 +594,21 @@ $ lur serve --bind 127.0.0.1:8080 --allow-net "*" --db ./app.db app.lua
 ### Defaults & precedence
 
 - **Default profile is `strict`** (secure by default; see §5). A bare run has zero access.
-- Permission resolution order (later overrides earlier): shipped default (`strict`) →
-  user config (`~/.config/lur/config`, may set `default_profile` and standing allowlists)
-  → command-line flags (`--allow-*`, `-A`, `--strict`/`--loose`).
+- Resolution layers: shipped default (`strict`) → user config (`~/.config/lur/config`) →
+  command-line flags. **Allowlists combine additively** (config standing grants ∪ flag per-run
+  grants; see §5); **scalar settings** (`default_profile`, `timeout`, `memory`, …) follow
+  **last-wins**. `--no-config` drops the config layer for an untrusted run.
+- **Config format is TOML** (`~/.config/lur/config`):
+
+  ```toml
+  default_profile = "loose"     # individual machine may opt permissive; binary stays strict-by-default
+  [allow]
+  net      = ["api.github.com", "10.0.0.5:6379"]
+  fs_read  = ["~/data"]
+  fs_write = ["./out"]
+  env      = ["API_KEY"]
+  ```
+
 - Argument passing: bare tokens after the script are positional (`lur.args.positional`);
   everything after `--` is parsed into `lur.args.flags` (`--key value` / bare `--flag` → true).
 
