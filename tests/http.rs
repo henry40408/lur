@@ -184,6 +184,22 @@ fn http_private_ip_denied_by_default() {
 }
 
 #[test]
+fn http_body_exceeding_cap_errors() {
+    let port = spawn(Resp::Fixed(200, "hello-http")); // 10 bytes
+    let rt = Runtime::with_config(RuntimeConfig {
+        policy: Arc::new(loopback_policy()),
+        max_http_body: 4, // smaller than the response
+        ..Default::default()
+    })
+    .expect("runtime builds");
+    assert!(
+        rt.run(&format!("lur.http.get('http://127.0.0.1:{port}/')"))
+            .is_err(),
+        "a response body over the cap must error"
+    );
+}
+
+#[test]
 fn http_redirect_to_disallowed_host_is_blocked() {
     // Redirect to a host that is not on the allowlist must be refused per-hop.
     let target = spawn(Resp::Redirect("http://evil.example:9/".to_string()));

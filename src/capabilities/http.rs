@@ -20,7 +20,12 @@ use crate::runtime::RunError;
 const MAX_REDIRECTS: usize = 10;
 
 /// Install `lur.http.request` and the method sugar, sharing one gated client.
-pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunError> {
+pub fn install(
+    lua: &Lua,
+    lur: &Table,
+    policy: Arc<Policy>,
+    max_body: usize,
+) -> Result<(), RunError> {
     let client = Arc::new(build_client(&policy).map_err(|e| RunError::Init(Error::external(e)))?);
     let http = lua.create_table().map_err(RunError::Init)?;
 
@@ -32,7 +37,9 @@ pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunErr
                 move |lua, (method, url, opts): (String, String, Option<Table>)| {
                     let client = Arc::clone(&client);
                     let policy = Arc::clone(&policy);
-                    async move { do_request(&lua, &client, &policy, &method, &url, opts).await }
+                    async move {
+                        do_request(&lua, &client, &policy, &method, &url, opts, max_body).await
+                    }
                 },
             )
             .map_err(RunError::Init)?;
@@ -55,7 +62,9 @@ pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunErr
                 let client = Arc::clone(&client);
                 let policy = Arc::clone(&policy);
                 let method = method.clone();
-                async move { do_request(&lua, &client, &policy, &method, &url, opts).await }
+                async move {
+                    do_request(&lua, &client, &policy, &method, &url, opts, max_body).await
+                }
             })
             .map_err(RunError::Init)?;
         http.set(name, f).map_err(RunError::Init)?;
@@ -142,6 +151,7 @@ async fn do_request(
     method: &str,
     url_str: &str,
     opts: Option<Table>,
+    max_body: usize,
 ) -> mlua::Result<Table> {
     let url = Url::parse(url_str)
         .map_err(|e| Error::runtime(format!("lur.http: invalid url {url_str:?}: {e}")))?;
@@ -162,7 +172,7 @@ async fn do_request(
         .send()
         .await
         .map_err(|e| Error::runtime(format!("lur.http: {e}")))?;
-    build_response(lua, resp).await
+    build_response(lua, resp, max_body).await
 }
 
 /// Apply the `opts` table (headers / query / body | json / timeout) to a request.
@@ -225,7 +235,14 @@ fn value_to_string(v: &Value) -> mlua::Result<String> {
 }
 
 /// Build the `{ status, body, headers, headers_all, json() }` response table.
-async fn build_response(lua: &Lua, resp: reqwest::Response) -> mlua::Result<Table> {
+/// The body is buffered with a hard cap so an untrusted script can't be served
+/// a response large enough to blow past the VM memory limit (which does not
+/// cover reqwest's Rust-side allocation).
+async fn build_response(
+    lua: &Lua,
+    mut resp: reqwest::Response,
+    max_body: usize,
+) -> mlua::Result<Table> {
     let status = resp.status().as_u16();
 
     let headers = lua.create_table()?;
@@ -246,11 +263,27 @@ async fn build_response(lua: &Lua, resp: reqwest::Response) -> mlua::Result<Tabl
         arr.raw_set(next as i64, &val)?;
     }
 
-    let bytes = resp
-        .bytes()
+    // Reject early if the advertised length already exceeds the cap.
+    if resp.content_length().is_some_and(|n| n as usize > max_body) {
+        return Err(Error::runtime(format!(
+            "lur.http: response body exceeds the {max_body}-byte limit"
+        )));
+    }
+    // Stream so a chunked response without a length is also bounded.
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
         .await
-        .map_err(|e| Error::runtime(format!("lur.http: reading body: {e}")))?;
-    let body = lua.create_string(&bytes)?;
+        .map_err(|e| Error::runtime(format!("lur.http: reading body: {e}")))?
+    {
+        if buf.len() + chunk.len() > max_body {
+            return Err(Error::runtime(format!(
+                "lur.http: response body exceeds the {max_body}-byte limit"
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    let body = lua.create_string(&buf)?;
 
     let res = lua.create_table()?;
     res.set("status", status)?;

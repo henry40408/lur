@@ -28,7 +28,7 @@ pub fn install(lua: &Lua, config: &RuntimeConfig) -> Result<(), RunError> {
     base64::install(lua, &lur)?;
     io::install(lua, &lur)?;
     fs::install(lua, &lur, config.policy.clone())?;
-    http::install(lua, &lur, config.policy.clone())?;
+    http::install(lua, &lur, config.policy.clone(), config.max_http_body)?;
     env::install(lua, &lur, config.policy.clone())?;
     async_ops::install(lua, &lur)?;
     args::install(lua, &lur, &config.args)?;

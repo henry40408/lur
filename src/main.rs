@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use clap::Parser;
 use lur::policy::Policy;
-use lur::runtime::{DEFAULT_MEMORY_LIMIT_BYTES, RunError, Runtime, RuntimeConfig};
+use lur::runtime::{
+    DEFAULT_MAX_HTTP_BODY_BYTES, DEFAULT_MEMORY_LIMIT_BYTES, RunError, Runtime, RuntimeConfig,
+};
 
 /// `lur` — run a sandboxed Lua (Luau) script.
 #[derive(Parser)]
@@ -21,6 +23,10 @@ struct Cli {
     /// Memory cap in bytes (0 means unlimited).
     #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MEMORY_LIMIT_BYTES)]
     max_memory: usize,
+
+    /// Cap on a buffered lur.http response body, in bytes.
+    #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_HTTP_BODY_BYTES)]
+    max_http_body: usize,
 
     /// Grant full filesystem access for this run.
     #[arg(short = 'A', long = "allow-all")]
@@ -109,6 +115,7 @@ fn main() -> ExitCode {
         memory_limit: cli.max_memory,
         args: cli.script_args,
         policy,
+        max_http_body: cli.max_http_body,
     };
     let rt = match Runtime::with_config(config) {
         Ok(rt) => rt,

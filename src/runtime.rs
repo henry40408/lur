@@ -36,6 +36,9 @@ pub enum RunError {
 /// Default per-VM memory cap applied by [`Runtime::new`].
 pub const DEFAULT_MEMORY_LIMIT_BYTES: usize = 256 * 1024 * 1024;
 
+/// Default cap on a buffered `lur.http` response body.
+pub const DEFAULT_MAX_HTTP_BODY_BYTES: usize = 16 * 1024 * 1024;
+
 /// Configuration for building a [`Runtime`].
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
@@ -47,6 +50,8 @@ pub struct RuntimeConfig {
     /// Capability policy enforced by the gated `lur.*` modules. Shared into
     /// host callbacks, hence `Arc`.
     pub policy: Arc<Policy>,
+    /// Cap on a buffered `lur.http` response body, in bytes.
+    pub max_http_body: usize,
 }
 
 impl Default for RuntimeConfig {
@@ -55,6 +60,7 @@ impl Default for RuntimeConfig {
             memory_limit: DEFAULT_MEMORY_LIMIT_BYTES,
             args: Vec::new(),
             policy: Arc::new(Policy::strict()),
+            max_http_body: DEFAULT_MAX_HTTP_BODY_BYTES,
         }
     }
 }
