@@ -176,7 +176,7 @@ lur.json.encode/decode()
 lur.base64.encode/decode()
 
 -- state (see §6)
-lur.state.get/set/incr/update()   -- short-term, host memory, shared across requests, atomic
+lur.state.get/set/incr/update()   -- short-term, host memory, shared, atomic; primitive values only (§6)
 lur.db.query/exec/tx()            -- long-term, raw SQL (? params); tx(fn) = pinned-conn transaction
 lur.kv.get/set/delete()           -- long-term, persistent KV
 lur.null                          -- singleton sentinel for SQL NULL / JSON null (≠ nil; see §6)
@@ -529,13 +529,48 @@ cross-request state must live host-side** and be exposed via `lur.*` so every VM
 pool shares it. The Lua state inside each VM is treated as stateless.
 
 ### Short-term state `lur.state`
-- A host-side concurrent KV (`DashMap` or `Mutex<HashMap>`), **process-scoped**, shared
-  across requests, gone when the process exits.
-- Because multiple VMs access it concurrently, it must offer **atomic** operations, not
-  just get/set:
-  - `lur.state.incr(key)` → returns the incremented value (the counter API relies on this)
-  - `lur.state.update(key, fn)` → atomic read-modify-write
-  - `lur.state.get/set(key[, val])`
+
+A host-side concurrent KV (`DashMap` or `Mutex<HashMap>`), **process-scoped**, shared across requests,
+gone when the process exits. Because many pooled VMs touch it concurrently it must offer **atomic**
+operations, not just get/set.
+
+**Value types — primitives only.** mlua values are bound to their own VM, so a live Lua `table` can't
+be shared host-side across VMs. `lur.state` therefore stores only **`nil` / `boolean` / `number` (f64)
+/ `string` (bytes)** — held VM-independently and copied in/out per VM; `table`/`function`/`userdata` →
+**error**. For structured data, `lur.json.encode` it to a string yourself (consistent with `lur.kv`).
+`set(key, nil)` deletes; `get` returns `nil` if absent; numeric counters share the f64 **2⁵³**
+precision ceiling (§6 type mapping). TTL/expiry is reserved.
+
+```lua
+lur.state.get(key) / lur.state.set(key, val)   -- val is a primitive (or nil to delete)
+lur.state.incr(key[, n])                        -- atomic +n (default 1); absent → starts at 0; returns the new value
+lur.state.update(key, fn)                       -- atomic read-modify-write; see below
+```
+
+**`update(key, fn)` — optimistic, version-stamped (no lock held during `fn`).** The naive "lock the
+key, run `fn` under the lock" design is rejected: an untrusted/slow `fn` would hold the lock (DoS),
+`fn` re-entering `lur.state` would deadlock, and awaiting I/O under a lock would stall everyone.
+Instead (the Clojure-`atom`/`swap!` model):
+
+1. **read** snapshots the current `(value, version)` under a brief host-only lock, then unlocks;
+2. **`fn(old)` runs with no host lock held**, computing the new value;
+3. **write-back** takes the brief lock again and stores the new value **iff the key's version is still
+   the snapshotted one** (then bumps the version); otherwise someone else wrote in between, so it
+   **retries** from step 1.
+
+Conflict detection compares a **monotonic per-key version counter, never the values** — this sidesteps
+f64 equality traps (`NaN ≠ NaN` would livelock, `-0.0 == 0.0`, precision) and the ABA problem
+(`5→6→5`), and the only locks are momentary pure-Rust sections, never spanning user code. Consequences:
+
+- **`fn` must be a pure transform** `value → value` and **safe to re-run** (it may run more than once
+  under contention).
+- **`fn` must not perform I/O or re-enter `lur.state`** → doing so raises a clear error (not a
+  deadlock). Need I/O? Do it **outside** `update` and pass the result in — `local d = lur.http.get(u).body;
+  lur.state.update(k, function() return d end)` — so a retry never re-fires the request. (True
+  serialization across an I/O call belongs to `lur.db.tx`, not `lur.state`.)
+- **`fn` error** leaves the value unchanged and propagates. A runaway `fn` is killed by the §5 timeout,
+  and since no lock is held there is none to leak.
+- `incr` is the fn-free atomic fast path (host increments directly; no retry).
 
 ### Long-term state `lur.db` + `lur.kv`
 
@@ -672,7 +707,8 @@ Server mode: a single failing handler **must not bring down the whole server** �
 - **server integration**: start the server → hit HTTP → verify response and state change;
   verify cron triggering.
 - **State concurrency**: hit the counter API concurrently from many requests, verify
-  `incr`/`update` atomicity (no lost updates).
+  `incr`/`update` atomicity (no lost updates); `update` retries under contention and rejects a
+  non-primitive value or an `fn` that performs I/O / re-enters `lur.state`.
 - **storage**: SQLite round-trip (`lur.db` and `lur.kv`); type mapping (NULL ↔ `lur.null`, INTEGER
   precision, BLOB/TEXT bytes); `lur.db.tx` commit-on-return / rollback-on-error.
 - **performance**: a `criterion` benchmark suite gates regressions on the perf-sensitive paths
