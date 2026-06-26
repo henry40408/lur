@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use clap::Parser;
 use lur::policy::Policy;
-use lur::runtime::{DEFAULT_MEMORY_LIMIT_BYTES, RunError, Runtime, RuntimeConfig};
+use lur::runtime::{
+    DEFAULT_MAX_HTTP_BODY_BYTES, DEFAULT_MEMORY_LIMIT_BYTES, RunError, Runtime, RuntimeConfig,
+};
 
 /// `lur` — run a sandboxed Lua (Luau) script.
 #[derive(Parser)]
@@ -21,6 +23,10 @@ struct Cli {
     /// Memory cap in bytes (0 means unlimited).
     #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MEMORY_LIMIT_BYTES)]
     max_memory: usize,
+
+    /// Cap on a buffered lur.http response body, in bytes.
+    #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_HTTP_BODY_BYTES)]
+    max_http_body: usize,
 
     /// Grant full filesystem access for this run.
     #[arg(short = 'A', long = "allow-all")]
@@ -38,6 +44,18 @@ struct Cli {
     #[arg(long = "allow-fs", value_name = "PATH")]
     allow_fs: Vec<PathBuf>,
 
+    /// Add an environment-variable name to the allowlist (repeatable).
+    #[arg(long = "allow-env", value_name = "NAME")]
+    allow_env: Vec<String>,
+
+    /// Add a network host (`host` or `host:port`) to the allowlist (repeatable).
+    #[arg(long = "allow-net", value_name = "HOST")]
+    allow_net: Vec<String>,
+
+    /// Permit connections to loopback/private/link-local IPs (off by default).
+    #[arg(long = "allow-private")]
+    allow_private: bool,
+
     /// Arguments passed to the script (exposed as `lur.args`).
     #[arg(
         trailing_var_arg = true,
@@ -52,7 +70,11 @@ struct Cli {
 fn build_policy(cli: &Cli) -> Result<Policy, String> {
     if cli.allow_all {
         let root = vec![PathBuf::from("/")];
-        return Policy::from_roots(&root, &root).map_err(|e| e.to_string());
+        return Ok(Policy::from_roots(&root, &root)
+            .map_err(|e| e.to_string())?
+            .allow_all_env()
+            .with_net(vec!["*".to_string()])
+            .allow_private());
     }
     let mut read = cli.allow_fs_read.clone();
     let mut write = cli.allow_fs_write.clone();
@@ -60,7 +82,14 @@ fn build_policy(cli: &Cli) -> Result<Policy, String> {
         read.push(p.clone());
         write.push(p.clone());
     }
-    Policy::from_roots(&read, &write).map_err(|e| format!("invalid --allow-fs path: {e}"))
+    let mut policy = Policy::from_roots(&read, &write)
+        .map_err(|e| format!("invalid --allow-fs path: {e}"))?
+        .with_env(cli.allow_env.clone())
+        .with_net(cli.allow_net.clone());
+    if cli.allow_private {
+        policy = policy.allow_private();
+    }
+    Ok(policy)
 }
 
 fn main() -> ExitCode {
@@ -86,6 +115,7 @@ fn main() -> ExitCode {
         memory_limit: cli.max_memory,
         args: cli.script_args,
         policy,
+        max_http_body: cli.max_http_body,
     };
     let rt = match Runtime::with_config(config) {
         Ok(rt) => rt,
@@ -111,6 +141,10 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
         Err(RunError::Init(e)) => {
+            eprintln!("lur: {e}");
+            ExitCode::FAILURE
+        }
+        Err(RunError::AsyncRuntime(e)) => {
             eprintln!("lur: {e}");
             ExitCode::FAILURE
         }

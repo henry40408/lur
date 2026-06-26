@@ -1,5 +1,6 @@
 //! The shared execution core: a single sandboxed Luau VM.
 
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -26,10 +27,17 @@ pub enum RunError {
     /// The script tried to allocate past its memory cap.
     #[error("script exceeded its memory limit")]
     OutOfMemory,
+
+    /// The async runtime backing I/O could not be started.
+    #[error("failed to start the async runtime: {0}")]
+    AsyncRuntime(#[source] std::io::Error),
 }
 
 /// Default per-VM memory cap applied by [`Runtime::new`].
 pub const DEFAULT_MEMORY_LIMIT_BYTES: usize = 256 * 1024 * 1024;
+
+/// Default cap on a buffered `lur.http` response body.
+pub const DEFAULT_MAX_HTTP_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 /// Configuration for building a [`Runtime`].
 #[derive(Clone, Debug)]
@@ -42,6 +50,8 @@ pub struct RuntimeConfig {
     /// Capability policy enforced by the gated `lur.*` modules. Shared into
     /// host callbacks, hence `Arc`.
     pub policy: Arc<Policy>,
+    /// Cap on a buffered `lur.http` response body, in bytes.
+    pub max_http_body: usize,
 }
 
 impl Default for RuntimeConfig {
@@ -50,6 +60,7 @@ impl Default for RuntimeConfig {
             memory_limit: DEFAULT_MEMORY_LIMIT_BYTES,
             args: Vec::new(),
             policy: Arc::new(Policy::strict()),
+            max_http_body: DEFAULT_MAX_HTTP_BODY_BYTES,
         }
     }
 }
@@ -60,6 +71,9 @@ pub struct Runtime {
     /// When set, the interrupt hook keeps raising past this instant so that no
     /// `pcall`-loop can outlive the deadline.
     deadline: Arc<Mutex<Option<Instant>>>,
+    /// Current-thread runtime that drives async host calls (`lur.http`,
+    /// `lur.async.sleep`, …) and the wall-clock timeout layer.
+    rt: tokio::runtime::Runtime,
 }
 
 impl Runtime {
@@ -109,20 +123,25 @@ impl Runtime {
         lua.set_memory_limit(config.memory_limit)
             .map_err(RunError::Init)?;
 
-        Ok(Self { lua, deadline })
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(RunError::AsyncRuntime)?;
+
+        Ok(Self { lua, deadline, rt })
     }
 
     // ---------------------------------------------------------------------
 
     /// Run `source` to completion with no time limit.
     pub fn run(&self, source: &str) -> Result<(), RunError> {
-        self.guarded(None, |lua| lua.load(source).exec())
+        self.guarded(None, self.lua.load(source).exec_async())
     }
 
     /// Run `source` to completion, interrupting it if it runs longer than
     /// `timeout` of wall-clock time.
     pub fn run_with_timeout(&self, source: &str, timeout: Duration) -> Result<(), RunError> {
-        self.guarded(Some(timeout), |lua| lua.load(source).exec())
+        self.guarded(Some(timeout), self.lua.load(source).exec_async())
     }
 
     /// Run `source` and map its top-level `return` value to a process exit
@@ -133,33 +152,43 @@ impl Runtime {
         source: &str,
         timeout: Option<Duration>,
     ) -> Result<i32, RunError> {
-        let values = self.guarded(timeout, |lua| lua.load(source).eval::<MultiValue>())?;
+        let values = self.guarded(timeout, self.lua.load(source).eval_async::<MultiValue>())?;
         Ok(exit_code_of(values))
     }
 
-    /// Set the deadline around `f`, then classify any error as a timeout if the
-    /// deadline has passed, or a script error otherwise.
+    /// Drive `fut` on the async runtime under both timeout layers (spec §5):
+    /// the deadline-checking interrupt kills CPU-bound code, while
+    /// `tokio::time::timeout` kills code parked on async I/O where the interrupt
+    /// cannot fire. Any error is then classified.
     fn guarded<T>(
         &self,
         timeout: Option<Duration>,
-        f: impl FnOnce(&Lua) -> mlua::Result<T>,
+        fut: impl Future<Output = mlua::Result<T>>,
     ) -> Result<T, RunError> {
         let at = timeout.map(|d| Instant::now() + d);
         *self.deadline.lock().expect("deadline mutex poisoned") = at;
 
-        let result = f(&self.lua);
+        // Outer Err = the tokio wall-clock layer fired (I/O-parked code).
+        let outcome: Result<mlua::Result<T>, ()> = self.rt.block_on(async {
+            match timeout {
+                Some(d) => tokio::time::timeout(d, fut).await.map_err(|_| ()),
+                None => Ok(fut.await),
+            }
+        });
 
         *self.deadline.lock().expect("deadline mutex poisoned") = None;
 
-        result.map_err(|e| {
-            if is_memory_error(&e) {
+        match outcome {
+            Err(()) => Err(RunError::Timeout),
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(e)) => Err(if is_memory_error(&e) {
                 RunError::OutOfMemory
             } else if matches!(at, Some(at) if Instant::now() >= at) {
                 RunError::Timeout
             } else {
                 RunError::Script(e)
-            }
-        })
+            }),
+        }
     }
 }
 

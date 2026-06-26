@@ -36,7 +36,7 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 }
 
 /// Convert a `serde_json::Value` to a Lua value (JSON `null` → `lur.null`).
-fn json_to_lua(lua: &Lua, value: &Json) -> mlua::Result<Value> {
+pub(crate) fn json_to_lua(lua: &Lua, value: &Json) -> mlua::Result<Value> {
     match value {
         Json::Null => null::value(lua),
         Json::Bool(b) => Ok(Value::Boolean(*b)),
@@ -67,7 +67,7 @@ fn json_to_lua(lua: &Lua, value: &Json) -> mlua::Result<Value> {
 }
 
 /// Convert a Lua value to a `serde_json::Value`.
-fn lua_to_json(value: &Value) -> mlua::Result<Json> {
+pub(crate) fn lua_to_json(value: &Value) -> mlua::Result<Json> {
     match value {
         Value::Nil => Ok(Json::Null),
         Value::Boolean(b) => Ok(Json::Bool(*b)),

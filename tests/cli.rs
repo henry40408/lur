@@ -127,6 +127,31 @@ fn fs_read_is_denied_by_default() {
 }
 
 #[test]
+fn env_returns_value_when_allowlisted() {
+    lur()
+        .arg("--allow-env")
+        .arg("LUR_TEST_VAR")
+        .arg(fixture("env_read.lua"))
+        .arg("LUR_TEST_VAR")
+        .env("LUR_TEST_VAR", "secret-value")
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("secret-value"));
+}
+
+#[test]
+fn env_returns_nil_when_not_allowlisted() {
+    // Set but not granted → nil (indistinguishable from unset; oracle-proof).
+    lur()
+        .arg(fixture("env_read.lua"))
+        .arg("LUR_TEST_VAR")
+        .env("LUR_TEST_VAR", "secret-value")
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("nil"));
+}
+
+#[test]
 fn lur_log_reaches_stderr() {
     lur()
         .arg(fixture("log.lua"))
