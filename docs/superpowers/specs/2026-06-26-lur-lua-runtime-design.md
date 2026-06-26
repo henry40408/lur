@@ -249,6 +249,9 @@ Server mode: a single failing handler **must not bring down the whole server** �
 - **State concurrency**: hit the counter API concurrently from many requests, verify
   `incr`/`update` atomicity (no lost updates).
 - **storage**: SQLite round-trip (`lur.db` and `lur.kv`).
+- **performance**: a `criterion` benchmark suite gates regressions on the perf-sensitive paths
+  (VM cold start, host-call boundary, sandbox-hook overhead, state contention, storage, server
+  throughput). See §13 for the full plan, budgets, and CI gate.
 
 ## 10. Key Dependencies (candidates; verify versions per the 7-day cooldown rule in CLAUDE.md before release)
 
@@ -261,6 +264,7 @@ Server mode: a single failing handler **must not bring down the whole server** �
 - `rusqlite` or `sqlx` (SQLite backend; server mode prefers async `sqlx`)
 - Server-mode HTTP: `axum` / `hyper`
 - Cron scheduling: TBD (e.g. `tokio-cron-scheduler`)
+- `criterion` (dev-dependency: micro-benchmarks; see §13)
 
 ## 11. Suggested Implementation Order
 
@@ -270,6 +274,10 @@ Server mode: a single failing handler **must not bring down the whole server** �
 4. Server mode: VM pool + `lur.serve.http` + event loop.
 5. Server extension: `lur.serve.cron`.
 6. Concurrency helper `lur.spawn_all`, profile config file, docs and examples.
+
+Throughout: stand up the `criterion` benchmark harness + CI perf gate alongside step 1 (start
+with VM cold start, host-call boundary, and sandbox-hook overhead), and add a benchmark with each
+new perf-sensitive feature as it lands — so performance is guarded continuously, not retrofitted (§13).
 
 ## 12. CLI Surface
 
@@ -336,3 +344,49 @@ $ lur serve --bind 127.0.0.1:8080 --allow-net "*" --db ./app.db app.lua
   → command-line flags (`--allow-*`, `-A`, `--strict`/`--loose`).
 - Argument passing: bare tokens after the script are positional (`lur.args.positional`);
   everything after `--` is parsed into `lur.args.flags` (`--key value` / bare `--flag` → true).
+
+## 13. Benchmarking & Performance Guarding
+
+Goal: keep performance at a known-good level **throughout** development — no silent regressions.
+This operationalizes the workspace rule "baseline before a perf change, compare after; regressions
+must not be committed." Stand the harness up **early** (with the first runtime work) and add a
+benchmark with each perf-sensitive feature, so nothing is retrofitted.
+
+**Approach: `criterion` + CI gate.** One `criterion` suite in `benches/`; CI runs it on each PR and
+compares to the `main` baseline with `critcmp`; a regression beyond the threshold fails the build.
+Wall-clock is the metric — tame CI noise with a consistent runner, warm-up, and adequate samples;
+don't chase zero variance. Inputs are fixtures checked into the repo (no network in benches).
+
+### What to benchmark
+
+| Area | Benchmark |
+|---|---|
+| VM lifecycle | cold start: build VM + inject `lur.*` + teardown (dominates one-shot latency) |
+| Lua execution | CPU-bound loop — canary for `mlua`/Lua upgrades |
+| Host-call boundary | `lur.json.encode` / `lur.state.get` round-trips — the cost *we* add |
+| Sandbox overhead | a loop with vs. without the instruction hook + memory limit |
+| State | `incr`/`update` under concurrency — atomic-op + contention cost |
+| Storage | `lur.kv` / `lur.db` round-trip (SQLite) |
+| Server mode | HTTP req/s + p50/p99 latency (run on demand, not in the per-PR gate) |
+
+### How CI gets the baseline
+
+`critcmp` needs **both** the PR's numbers and `main`'s to compare, so the gate is one self-contained
+CI job that produces both on the **same runner, in the same run** — this cancels the cross-machine
+noise that would otherwise poison a wall-clock metric:
+
+1. check out `main` → `cargo bench` → save as the `main` baseline;
+2. check out the PR → `cargo bench` → save as `pr`;
+3. `critcmp main pr` with the regression threshold → a regression exits non-zero and fails the job.
+
+This re-runs `main` on every PR (≈2× bench time), accepted deliberately: lur's micro-benchmarks are
+short, and same-runner/same-moment measurement matters more than the saved minutes. The job is a
+**required check** run on a fixed runner spec, parallel to `fmt`/`clippy`/`nextest` — it gates merge
+but doesn't block the functional tests.
+
+### Regression gate & budgets
+
+- A **> 5%** regression on a tracked benchmark fails CI; calibrate the 5% once the first runs reveal real noise.
+- A perf-affecting PR carries before/after numbers; an intentional trade-off is called out and the baseline re-blessed.
+- Budgets are **TBD until the first baseline lands**; initial guardrail intents: one-shot cold start in single-digit ms,
+  host-call overhead in low single-digit µs, sandbox-hook overhead < ~10%. Measured numbers replace these once the suite runs.
