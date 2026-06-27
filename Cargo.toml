@@ -25,7 +25,7 @@ reqwest = { version = "0.13.4", default-features = false, features = ["rustls", 
 serde_json = "1.0.150"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "sqlite"] }
 thiserror = "2.0.18"
-tokio = { version = "1.52", features = ["rt", "rt-multi-thread", "time", "net", "sync"] }
+tokio = { version = "1.52", features = ["rt", "rt-multi-thread", "time", "net", "sync", "signal", "macros"] }
 toml = "1.1.2"
 
 [dev-dependencies]

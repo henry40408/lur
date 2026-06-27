@@ -7,6 +7,7 @@
 //! is a thin adapter on top of [`Server::dispatch`].
 
 use std::convert::Infallible;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +40,8 @@ pub struct Server {
     per_event_timeout: Option<Duration>,
     /// Request-body cap; a larger body gets a 413 before the handler runs.
     max_body: Option<usize>,
+    /// Grace period for draining in-flight work on graceful shutdown.
+    shutdown_grace: Duration,
 }
 
 /// One pre-warmed VM in the pool: its sandboxed Lua state and the handler
@@ -277,6 +280,7 @@ impl Server {
             rt,
             per_event_timeout: config.per_event_timeout,
             max_body: config.max_body,
+            shutdown_grace: config.shutdown_grace,
         })
     }
 
@@ -308,33 +312,82 @@ impl Server {
         self.rt.block_on(self.dispatch_async(req))
     }
 
-    /// Bind `addr` and serve requests forever on the multi-threaded runtime.
-    /// Each connection is a spawned task; handlers run on whichever VM the pool
-    /// hands out, across worker threads.
+    /// Bind `addr` and serve requests until a shutdown signal (SIGTERM/SIGINT),
+    /// then drain (spec §3/§5). Each connection is a spawned task; handlers run
+    /// on whichever VM the pool hands out, across worker threads.
     pub fn run(self, addr: SocketAddr) -> std::io::Result<()> {
+        self.run_with_shutdown(addr, wait_for_signal())
+    }
+
+    /// As [`Self::run`], but driven by an arbitrary `shutdown` future instead of
+    /// OS signals. On shutdown: stop accepting, stop cron scheduling, then wait
+    /// for in-flight requests and jobs to finish within the grace period before
+    /// returning (anything still running is aborted when the runtime drops).
+    pub fn run_with_shutdown(
+        self,
+        addr: SocketAddr,
+        shutdown: impl Future<Output = ()> + Send + 'static,
+    ) -> std::io::Result<()> {
+        let grace = self.shutdown_grace;
         let server = Arc::new(self);
         let driver = server.clone();
         driver.rt.block_on(async move {
             let listener = TcpListener::bind(addr).await?;
             eprintln!("lur: listening on http://{addr}");
+
+            // Fan the single shutdown future out to the accept loop and every
+            // cron loop via a watch channel.
+            let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+            tokio::spawn(async move {
+                shutdown.await;
+                let _ = shutdown_tx.send(true);
+            });
+
+            // A liveness token cloned into every in-flight connection and cron
+            // run; draining waits until only this original handle remains.
+            let active = Arc::new(());
+
             // One scheduler task per cron job; they draw VMs from the same pool.
             for job in &server.cron_jobs {
-                tokio::spawn(cron_loop(server.clone(), job.clone()));
+                tokio::spawn(cron_loop(
+                    server.clone(),
+                    job.clone(),
+                    shutdown_rx.clone(),
+                    active.clone(),
+                ));
             }
+
+            let mut accept_shutdown = shutdown_rx.clone();
             loop {
-                let (stream, _) = listener.accept().await?;
-                let io = TokioIo::new(stream);
-                let server = server.clone();
-                tokio::spawn(async move {
-                    let service = service_fn(move |req| {
+                tokio::select! {
+                    _ = accept_shutdown.changed() => break,
+                    res = listener.accept() => {
+                        let (stream, _) = res?;
+                        let io = TokioIo::new(stream);
                         let server = server.clone();
-                        async move { server.handle(req).await }
-                    });
-                    if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
-                        eprintln!("lur: connection error: {e}");
+                        let guard = active.clone();
+                        tokio::spawn(async move {
+                            let _guard = guard;
+                            let service = service_fn(move |req| {
+                                let server = server.clone();
+                                async move { server.handle(req).await }
+                            });
+                            if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
+                                eprintln!("lur: connection error: {e}");
+                            }
+                        });
                     }
-                });
+                }
             }
+
+            // Drain: wait for in-flight connections and jobs to finish, bounded
+            // by the grace period.
+            eprintln!("lur: shutting down, draining for up to {}ms", grace.as_millis());
+            let deadline = Instant::now() + grace;
+            while Arc::strong_count(&active) > 1 && Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Ok(())
         })
     }
 
@@ -483,14 +536,26 @@ async fn call_handler(
 /// it, then run (single-flight by default — a tick is skipped, not queued, while
 /// the previous run is still in flight). Fire-forward: missed ticks are never
 /// replayed (spec §3).
-async fn cron_loop(server: Arc<Server>, job: CronJob) {
+async fn cron_loop(
+    server: Arc<Server>,
+    job: CronJob,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    active: Arc<()>,
+) {
     let in_flight = Arc::new(AtomicBool::new(false));
     loop {
         let Some(next) = job.schedule.upcoming(Utc).next() else {
             return; // no further fires (e.g. a one-shot past spec)
         };
         let wait = (next - Utc::now()).to_std().unwrap_or(Duration::ZERO);
-        tokio::time::sleep(wait).await;
+        // Wake on the next fire or on shutdown, whichever comes first.
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            _ = shutdown.changed() => return,
+        }
+        if *shutdown.borrow() {
+            return; // shutdown raced the timer → stop scheduling new runs
+        }
 
         if !job.overlap && in_flight.swap(true, Ordering::SeqCst) {
             continue; // previous run still in flight → skip this tick
@@ -499,10 +564,23 @@ async fn cron_loop(server: Arc<Server>, job: CronJob) {
         let server = server.clone();
         let job = job.clone();
         let in_flight = in_flight.clone();
+        let guard = active.clone();
         tokio::spawn(async move {
+            let _guard = guard;
             server.run_cron(&job).await;
             in_flight.store(false, Ordering::SeqCst);
         });
+    }
+}
+
+/// Resolve once an OS shutdown signal (SIGTERM or SIGINT) arrives.
+async fn wait_for_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+    let mut intr = signal(SignalKind::interrupt()).expect("install SIGINT handler");
+    tokio::select! {
+        _ = term.recv() => {}
+        _ = intr.recv() => {}
     }
 }
 
