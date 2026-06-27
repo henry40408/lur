@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782549159184,
+  "lastUpdate": 1782549327436,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -293,6 +293,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 206202,
             "range": "± 5756",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "12bb0ab6be3f43b203fbb1f394c162053c16ff1f",
+          "message": "chore: add cargo-deny supply-chain checks (#32)\n\nAdd deny.toml and a hard-gate `cargo-deny` CI job that checks advisories\n(RUSTSEC), bans, licenses, and sources on every push and PR. The license\nallowlist enumerates the permissive licenses present in the current graph;\nsources are restricted to crates.io; duplicate versions surface as warnings.\n\nAlso declare `license = \"MIT\"` in Cargo.toml so the crate itself passes the\nlicense check.\n\nCo-authored-by: Claude Opus 4.8 <noreply@anthropic.com>",
+          "timestamp": "2026-06-27T16:34:13+08:00",
+          "tree_id": "fc6f2bd2d10c7ed37ff6b0e0295d731a4d899b90",
+          "url": "https://github.com/henry40408/lur/commit/12bb0ab6be3f43b203fbb1f394c162053c16ff1f"
+        },
+        "date": 1782549326560,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 261252,
+            "range": "± 11771",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5291,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208145,
+            "range": "± 2803",
             "unit": "ns/iter"
           }
         ]
