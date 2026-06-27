@@ -112,11 +112,19 @@ pub(crate) fn build_lua(
     serve: Option<&Registry>,
 ) -> Result<(Lua, Deadline), RunError> {
     let lua = Lua::new();
-    // `require` survives `sandbox(true)` and loads on-disk .luau files,
-    // bypassing the capability layer — strip it before freezing globals.
-    lua.globals()
-        .set("require", mlua::Value::Nil)
-        .map_err(RunError::Init)?;
+    // These survive `sandbox(true)` and each defeats the runtime's guarantees,
+    // so strip them before freezing globals:
+    //   - `require` loads on-disk .luau files, bypassing the lur.fs capability;
+    //   - `getfenv`/`setfenv` reach the writable global env directly, and
+    //     `loadstring` compiles a chunk whose env is that same global env —
+    //     each bypasses the per-call handler environment that isolates server
+    //     requests, letting a global bleed across requests on a pooled VM
+    //     (spec §3 cross-request isolation, §5.1 clean environment).
+    for name in ["require", "getfenv", "setfenv", "loadstring"] {
+        lua.globals()
+            .set(name, mlua::Value::Nil)
+            .map_err(RunError::Init)?;
+    }
 
     crate::capabilities::install(&lua, config, serve)?;
 

@@ -18,6 +18,36 @@ fn require_is_removed_from_the_sandbox() {
 }
 
 #[test]
+fn global_env_escapes_are_removed_from_the_sandbox() {
+    let rt = Runtime::new().expect("runtime builds");
+    // getfenv/setfenv reach the writable global env directly, and loadstring
+    // compiles a chunk whose env is that same global env — each bypasses the
+    // per-call handler environment that isolates server requests (§3/§5.1).
+    rt.run(
+        "assert(getfenv == nil, 'getfenv must be removed')\n\
+         assert(setfenv == nil, 'setfenv must be removed')\n\
+         assert(loadstring == nil, 'loadstring must be removed')",
+    )
+    .expect("env-escape globals should be nil");
+}
+
+#[test]
+fn dangerous_lua_stdlib_is_absent_under_strict() {
+    let rt = Runtime::new().expect("runtime builds");
+    // Locks the Luau-backend security posture (spec §9 sandbox blocking): the
+    // Lua 5.x escape hatches are not present at all.
+    rt.run(
+        "for _, name in ipairs({ 'io', 'package', 'loadfile', 'dofile', 'load' }) do\n\
+         \tassert(_G[name] == nil, name .. ' must be absent')\n\
+         end\n\
+         assert(type(os) == 'table', 'os table present')\n\
+         assert(os.execute == nil, 'os.execute must be absent')\n\
+         assert(type(os.time) == 'function', 'safe os.time kept')",
+    )
+    .expect("dangerous stdlib absent, safe os.* kept");
+}
+
+#[test]
 fn lur_log_exposes_level_functions() {
     let rt = Runtime::new().expect("runtime builds");
     rt.run(

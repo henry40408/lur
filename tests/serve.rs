@@ -295,6 +295,18 @@ fn global_writes_do_not_bleed_across_requests() {
 }
 
 #[test]
+fn handlers_cannot_reach_the_global_env_escapes() {
+    // getfenv/setfenv/loadstring would each reach the writable global env and
+    // bleed state across requests on the same pooled VM; they must be gone.
+    let s = serve(
+        "lur.serve.http('GET', '/e', function()\n\
+         \treturn { body = tostring(getfenv) .. ',' .. tostring(setfenv) .. ',' .. tostring(loadstring) }\n\
+         end)",
+    );
+    assert_eq!(s.dispatch("GET", "/e", b"").unwrap().body, b"nil,nil,nil");
+}
+
+#[test]
 fn multi_vm_pool_resolves_routes_on_every_vm() {
     // Build a 3-VM pool: every VM collects the same registrations, so the
     // host-assigned handler ids must line up and routing works on each.
