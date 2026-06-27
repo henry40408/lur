@@ -1190,6 +1190,7 @@ dependencies = [
  "clap",
  "criterion",
  "cron",
+ "futures-util",
  "http-body-util",
  "hyper",
  "hyper-util",
