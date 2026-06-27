@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782557308784,
+  "lastUpdate": 1782571396617,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -377,6 +377,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 209492,
             "range": "± 6703",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4521cae1fa1ed708ddb751673408722409a16ef0",
+          "message": "chore: adopt shared clippy lint set (#34)\n\nAdd the shared Embark-derived [lints.rust]/[lints.clippy] configuration to\nCargo.toml and resolve the resulting findings (idiomatic-Rust improvements:\ndoc_markdown, map_err_ignore, single_match_else, match_same_arms,\nunnested_or_patterns, needless_continue, map_unwrap_or). CI already runs clippy\nwith --all-targets.\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-27T22:42:04+08:00",
+          "tree_id": "826f9a6ab91ff293bb26c7082fd29df5a8c9cd22",
+          "url": "https://github.com/henry40408/lur/commit/4521cae1fa1ed708ddb751673408722409a16ef0"
+        },
+        "date": 1782571395850,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 255198,
+            "range": "± 3657",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5342,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 206972,
+            "range": "± 4355",
             "unit": "ns/iter"
           }
         ]
