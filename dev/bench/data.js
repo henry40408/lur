@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782575573272,
+  "lastUpdate": 1782578924876,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -503,6 +503,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207453,
             "range": "± 1026",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "111ae734b69919a8344dc722833e11e1b1dd13fe",
+          "message": "ci: cache Docker build layers via GitHub Actions cache backend (#38)\n\nThe Docker workflow rebuilt the image from scratch on every run: the\nephemeral runner had no layer cache and build-push-action set no\ncache-from/cache-to. Add type=gha cache (mode=max) so layers like the\napt install, cargo-zigbuild build, and zig download are reused across\nruns.\n\nNote: this does not persist the in-Dockerfile cargo/target cache mounts,\nwhich are local to a runner and would need a separate mechanism.\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-28T00:47:31+08:00",
+          "tree_id": "39b19caf9ed1f2ebc4943b47dbc1cd84fc689b97",
+          "url": "https://github.com/henry40408/lur/commit/111ae734b69919a8344dc722833e11e1b1dd13fe"
+        },
+        "date": 1782578924461,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 255820,
+            "range": "± 17001",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5276,
+            "range": "± 100",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207132,
+            "range": "± 4167",
             "unit": "ns/iter"
           }
         ]
