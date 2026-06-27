@@ -23,7 +23,7 @@ docker buildx inspect lur-builder >/dev/null 2>&1 || docker buildx create --name
 
 # Stamp `lur --version` with TAG (so a `TAG=v1.2.3` build reports v1.2.3); the
 # default "dev" tag yields the same "dev" placeholder build.rs falls back to.
-args=(buildx build --builder lur-builder --platform "$PLATFORMS" -t "$ref" --build-arg "LUR_VERSION=${TAG}")
+args=(buildx build --builder lur-builder --platform "$PLATFORMS" -t "$ref" --build-arg "GIT_VERSION=${TAG}")
 if [ "$PUSH" = "true" ]; then
   args+=(--push)            # multi-arch manifest can only be exported by pushing
 elif [ "$LOAD" = "true" ]; then

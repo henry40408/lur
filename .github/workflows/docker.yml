@@ -67,7 +67,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           # Stamp `lur --version` (see the version step above).
           build-args: |
-            LUR_VERSION=${{ steps.version.outputs.value }}
+            GIT_VERSION=${{ steps.version.outputs.value }}
           # Persist BuildKit layer cache across runs via the GitHub Actions cache
           # backend. This caches image layers (apt install, cargo-zigbuild build,
           # zig download) — not the in-Dockerfile cargo/target cache mounts, which
