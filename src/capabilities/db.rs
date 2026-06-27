@@ -18,7 +18,7 @@ use super::null;
 use crate::runtime::RunError;
 
 /// A dynamically-bound SQLite query.
-type Query<'q> = sqlx::query::Query<'q, sqlx::Sqlite, SqliteArguments<'q>>;
+type Query<'q> = sqlx::query::Query<'q, sqlx::Sqlite, SqliteArguments>;
 
 /// Install `lur.db`. `db_path` of `None` makes every call raise a clear error.
 pub fn install(lua: &Lua, lur: &Table, db_path: Option<PathBuf>) -> Result<(), RunError> {
@@ -35,7 +35,7 @@ pub fn install(lua: &Lua, lur: &Table, db_path: Option<PathBuf>) -> Result<(), R
                 let path = Arc::clone(&path);
                 async move {
                     let pool = ensure_pool(&cell, &path).await?;
-                    let q = bind_all(sqlx::query(&sql), &params)?;
+                    let q = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql)), &params)?;
                     let res = q
                         .execute(&pool)
                         .await
@@ -59,7 +59,7 @@ pub fn install(lua: &Lua, lur: &Table, db_path: Option<PathBuf>) -> Result<(), R
                 let path = Arc::clone(&path);
                 async move {
                     let pool = ensure_pool(&cell, &path).await?;
-                    let rows = bind_all(sqlx::query(&sql), &params)?
+                    let rows = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql)), &params)?
                         .fetch_all(&pool)
                         .await
                         .map_err(|e| Error::runtime(format!("lur.db.query: {e}")))?;
@@ -120,7 +120,7 @@ async fn run_tx(
                     let txn = guard
                         .as_mut()
                         .ok_or_else(|| Error::runtime("lur.db.tx: transaction already finished"))?;
-                    let res = bind_all(sqlx::query(&sql), &params)?
+                    let res = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql)), &params)?
                         .execute(&mut **txn)
                         .await
                         .map_err(|e| Error::runtime(format!("lur.db.tx exec: {e}")))?;
@@ -142,7 +142,7 @@ async fn run_tx(
                     let txn = guard
                         .as_mut()
                         .ok_or_else(|| Error::runtime("lur.db.tx: transaction already finished"))?;
-                    let rows = bind_all(sqlx::query(&sql), &params)?
+                    let rows = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql)), &params)?
                         .fetch_all(&mut **txn)
                         .await
                         .map_err(|e| Error::runtime(format!("lur.db.tx query: {e}")))?;
