@@ -1,8 +1,23 @@
+use std::time::Duration;
+
 use lur::runtime::RuntimeConfig;
 use lur::serve::{RawRequest, Server};
 
 fn serve(source: &str) -> Server {
     Server::load(source, RuntimeConfig::default()).expect("app loads")
+}
+
+/// A single-VM server with a per-event timeout, for the timeout tests.
+fn serve_with_timeout(source: &str, ms: u64) -> Server {
+    Server::load(
+        source,
+        RuntimeConfig {
+            per_event_timeout: Some(Duration::from_millis(ms)),
+            pool_size: 1,
+            ..Default::default()
+        },
+    )
+    .expect("app loads")
 }
 
 fn request(method: &str, path: &str, query: &str) -> RawRequest {
@@ -201,6 +216,51 @@ fn isolated_handler_still_reads_real_globals() {
         s.dispatch("GET", "/j", b"").unwrap().body,
         br#"{"ok":true}"#
     );
+}
+
+#[test]
+fn io_parked_handler_exceeding_timeout_returns_503() {
+    // Parked on async I/O (sleep) — the tokio wall-clock layer fires.
+    let s = serve_with_timeout(
+        "lur.serve.http('GET', '/slow', function(req)\n\
+         \tlur.async.sleep(5000)\n\
+         \treturn { body = 'never' }\n\
+         end)",
+        50,
+    );
+    let resp = s
+        .dispatch("GET", "/slow", b"")
+        .expect("dispatch returns, not error");
+    assert_eq!(resp.status, 503);
+}
+
+#[test]
+fn cpu_bound_handler_exceeding_timeout_returns_503() {
+    // A tight loop — the deadline interrupt fires on a back-edge.
+    let s = serve_with_timeout(
+        "lur.serve.http('GET', '/spin', function(req)\n\
+         \twhile true do end\n\
+         end)",
+        50,
+    );
+    let resp = s
+        .dispatch("GET", "/spin", b"")
+        .expect("dispatch returns, not error");
+    assert_eq!(resp.status, 503);
+}
+
+#[test]
+fn vm_recovers_after_a_timeout() {
+    // After a handler is aborted by the timeout, its VM returns to the pool and
+    // serves the next request normally.
+    let s = serve_with_timeout(
+        "lur.serve.http('GET', '/slow', function(req) lur.async.sleep(5000) return {} end)\n\
+         lur.serve.http('GET', '/ok', function(req) return { body = 'fine' } end)",
+        50,
+    );
+    assert_eq!(s.dispatch("GET", "/slow", b"").unwrap().status, 503);
+    let resp = s.dispatch("GET", "/ok", b"").expect("dispatch ok");
+    assert_eq!(resp.body, b"fine");
 }
 
 #[test]
