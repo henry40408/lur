@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782549327436,
+  "lastUpdate": 1782557308784,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -335,6 +335,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208145,
             "range": "± 2803",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0d32e0b09842bf40bd516d3cd8f6779f982c0006",
+          "message": "docs: add CLAUDE.md for Claude Code guidance (#33)\n\nAdd a concise CLAUDE.md pointing to the existing README/ARCHITECTURE docs,\nplus the commands and load-bearing sandbox/pool invariants that constrain\nedits.\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-27T18:47:08+08:00",
+          "tree_id": "b9f16aa936e2393e2cc4305aa025ab6537a4033a",
+          "url": "https://github.com/henry40408/lur/commit/0d32e0b09842bf40bd516d3cd8f6779f982c0006"
+        },
+        "date": 1782557307902,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 253618,
+            "range": "± 4291",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5198,
+            "range": "± 63",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 209492,
+            "range": "± 6703",
             "unit": "ns/iter"
           }
         ]
