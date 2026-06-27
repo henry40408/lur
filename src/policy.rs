@@ -103,9 +103,21 @@ pub enum PolicyError {
 }
 
 impl Policy {
-    /// The shipped strict policy: no filesystem access at all.
+    /// The shipped strict policy: no access at all (the secure-by-default
+    /// profile, §5).
     pub fn strict() -> Self {
         Self::default()
+    }
+
+    /// The permissive `loose` profile: full filesystem read/write, every
+    /// environment variable, any network host, and private-network egress (§5).
+    /// Equivalent to `-A` at the policy layer.
+    pub fn loose() -> std::io::Result<Self> {
+        let root = vec![PathBuf::from("/")];
+        Ok(Self::from_roots(&root, &root)?
+            .allow_all_env()
+            .with_net(vec!["*".to_string()])
+            .allow_private())
     }
 
     /// Build a policy from raw read/write roots, canonicalizing each to an
@@ -246,5 +258,26 @@ fn resolve_for_write(path: &Path) -> Result<PathBuf, PolicyError> {
                 "path has no resolvable parent",
             ),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loose_profile_is_permissive() {
+        let p = Policy::loose().expect("loose builds");
+        assert!(p.allows_env("ANY_NAME"));
+        assert!(p.allows_net("example.com", 443));
+        assert!(p.allows_private_net());
+    }
+
+    #[test]
+    fn strict_profile_denies_by_default() {
+        let p = Policy::strict();
+        assert!(!p.allows_env("ANY_NAME"));
+        assert!(!p.allows_net("example.com", 443));
+        assert!(!p.allows_private_net());
     }
 }

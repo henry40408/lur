@@ -26,6 +26,14 @@ struct CommonFlags {
     #[arg(short = 'A', long = "allow-all")]
     allow_all: bool,
 
+    /// Select the strict profile — deny by default (the shipped default).
+    #[arg(long, conflicts_with = "loose")]
+    strict: bool,
+
+    /// Select the loose profile — permissive (full access, like `-A`).
+    #[arg(long)]
+    loose: bool,
+
     /// Add a readable path root (repeatable).
     #[arg(long = "allow-fs-read", value_name = "PATH")]
     allow_fs_read: Vec<PathBuf>,
@@ -118,13 +126,10 @@ fn default_pool_size() -> usize {
 /// Resolve the capability policy from the shared flags. Roots are canonicalized
 /// (and must exist) by [`Policy::from_roots`]; `-A` grants the whole tree.
 fn build_policy(flags: &CommonFlags) -> Result<Policy, String> {
-    if flags.allow_all {
-        let root = vec![PathBuf::from("/")];
-        return Ok(Policy::from_roots(&root, &root)
-            .map_err(|e| e.to_string())?
-            .allow_all_env()
-            .with_net(vec!["*".to_string()])
-            .allow_private());
+    // `-A` and the `loose` profile both resolve to the permissive policy; the
+    // default (and explicit `--strict`) keep the deny-by-default base.
+    if flags.allow_all || flags.loose {
+        return Policy::loose().map_err(|e| e.to_string());
     }
     let mut read = flags.allow_fs_read.clone();
     let mut write = flags.allow_fs_write.clone();
