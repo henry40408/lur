@@ -359,7 +359,7 @@ fn missing_script_exits_with_a_clear_error() {
 }
 
 /// `--version` reports a build-stamped string, not the Cargo.toml version. The
-/// exact value is resolved at build time (injected `LUR_VERSION` → `git
+/// exact value is resolved at build time (injected `GIT_VERSION` → `git
 /// describe` → `dev`), so this pins the format and the override rather than a
 /// literal: `lur <non-empty>` that is never the `0.1.0` Cargo fallback.
 #[test]
