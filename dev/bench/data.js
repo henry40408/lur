@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782571396617,
+  "lastUpdate": 1782574278588,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -419,6 +419,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 206972,
             "range": "± 4355",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2067b6eb5abdc2c1659da3562e22d4e907412f18",
+          "message": "ci: drop job-level name fields, use job keys for display (#36)\n\nStandardize CI job naming across repos: rely on the job key for the\nActions display name instead of an explicit `name:`. Removes the\njob-level names (fmt + clippy, nextest, coverage, perf gate, cargo-deny)\nso the convention matches the majority of sibling projects. Step-level\nnames are unaffected. No required status checks reference these contexts.\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-27T23:30:17+08:00",
+          "tree_id": "54ddafb8d32312af19c1dc90b5ad260e43b2a1e4",
+          "url": "https://github.com/henry40408/lur/commit/2067b6eb5abdc2c1659da3562e22d4e907412f18"
+        },
+        "date": 1782574278206,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 255021,
+            "range": "± 4633",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5185,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 211199,
+            "range": "± 2017",
             "unit": "ns/iter"
           }
         ]
