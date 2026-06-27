@@ -99,6 +99,11 @@ struct ServeCli {
     #[arg(long, value_name = "MS")]
     timeout_ms: Option<u64>,
 
+    /// Max request-body size in bytes; a larger request gets a 413 (no limit if
+    /// omitted).
+    #[arg(long = "max-body", value_name = "BYTES")]
+    max_body: Option<usize>,
+
     #[command(flatten)]
     common: CommonFlags,
 }
@@ -146,6 +151,7 @@ fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig,
         args,
         policy,
         max_http_body: flags.max_http_body,
+        max_body: None,
         db_path: flags.db.clone(),
         pool_size: 1,
         per_event_timeout: None,
@@ -183,6 +189,7 @@ fn run_serve(cli: ServeCli) -> ExitCode {
     };
     config.pool_size = cli.pool_size;
     config.per_event_timeout = cli.timeout_ms.map(Duration::from_millis);
+    config.max_body = cli.max_body;
 
     let server = match Server::load(&source, config) {
         Ok(s) => s,

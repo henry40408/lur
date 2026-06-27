@@ -54,6 +54,10 @@ pub struct RuntimeConfig {
     pub policy: Arc<Policy>,
     /// Cap on a buffered `lur.http` response body, in bytes.
     pub max_http_body: usize,
+    /// Cap on the request body in server mode (`--max-body`); a larger request
+    /// is rejected with 413 at the host edge before the handler runs (spec §3).
+    /// `None` leaves the body unbounded (ignored in one-shot).
+    pub max_body: Option<usize>,
     /// SQLite database path for `lur.db` / `lur.kv` (`--db`). `None` makes those
     /// modules raise a clear error when used.
     pub db_path: Option<PathBuf>,
@@ -75,6 +79,7 @@ impl Default for RuntimeConfig {
             args: Vec::new(),
             policy: Arc::new(Policy::strict()),
             max_http_body: DEFAULT_MAX_HTTP_BODY_BYTES,
+            max_body: None,
             db_path: None,
             pool_size: 1,
             per_event_timeout: None,

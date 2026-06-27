@@ -167,6 +167,31 @@ fn handler_exceeding_per_event_timeout_returns_503_over_http() {
 }
 
 #[test]
+fn oversize_body_is_rejected_with_413_over_http() {
+    let (addr, _reaper, _dir) = spawn_server_args(
+        "lur.serve.http('POST', '/u', function(req) return { body = 'reached' } end)",
+        &["--max-body", "4"],
+    );
+
+    let body = "toolong"; // 7 bytes > 4
+    let request = format!(
+        "POST /u HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let response = round_trip(&addr, &request);
+
+    assert!(
+        response.starts_with("HTTP/1.1 413"),
+        "an oversize body should yield 413: {response:?}"
+    );
+    assert!(
+        !response.contains("reached"),
+        "the handler must not run for an oversize body: {response:?}"
+    );
+}
+
+#[test]
 fn pool_serves_concurrent_requests_in_parallel() {
     // Each request sleeps 200ms. With a 2-VM pool, two concurrent requests run
     // on separate VMs and finish together (~200ms), not serialized (~400ms).

@@ -37,6 +37,8 @@ pub struct Server {
     rt: tokio::runtime::Runtime,
     /// Per-request wall-clock budget; `None` leaves handlers unbounded.
     per_event_timeout: Option<Duration>,
+    /// Request-body cap; a larger body gets a 413 before the handler runs.
+    max_body: Option<usize>,
 }
 
 /// One pre-warmed VM in the pool: its sandboxed Lua state and the handler
@@ -274,6 +276,7 @@ impl Server {
             cron_jobs,
             rt,
             per_event_timeout: config.per_event_timeout,
+            max_body: config.max_body,
         })
     }
 
@@ -383,6 +386,12 @@ impl Server {
     /// The async core of [`Self::dispatch_raw`]; the network loop awaits this
     /// directly rather than blocking.
     async fn dispatch_async(&self, req: &RawRequest) -> Result<Response, RunError> {
+        // Reject an oversize body at the host edge, before routing or building
+        // the Lua `req` — the VM never allocates it (spec §3).
+        if matches!(self.max_body, Some(max) if req.body.len() > max) {
+            return Ok(oversize_response());
+        }
+
         let Some((id, params)) = self.router.resolve(&req.method, &req.path) else {
             return Ok(Response {
                 status: 404,
@@ -502,6 +511,14 @@ fn timeout_response() -> Response {
     Response {
         status: 503,
         body: b"Service Unavailable".to_vec(),
+    }
+}
+
+/// The 413 returned when a request body exceeds `max_body` (spec §3).
+fn oversize_response() -> Response {
+    Response {
+        status: 413,
+        body: b"Payload Too Large".to_vec(),
     }
 }
 
@@ -660,21 +677,89 @@ fn build_req(
     }
     table.set("headers", headers)?;
 
-    // Body as raw bytes, plus a `json()` shorthand over `lur.json.decode`.
-    table.set("body", lua.create_string(&req.body)?)?;
+    // Body as a one-shot stream. `req.read([n])` mirrors `lur.stdin.read`;
+    // `req.body` (a property, served via `__index`) and `req.json()` materialize
+    // the whole body but become unavailable once a chunked `req.read(n)` has
+    // consumed part of it (spec §3). Shared cursor/flag behind a mutex because the
+    // `send` feature requires the closures to be `Send`.
+    let state = Arc::new(Mutex::new(BodyStream {
+        body: req.body.clone(),
+        cursor: 0,
+        streamed: false,
+    }));
+
+    let read_state = Arc::clone(&state);
+    let read = lua.create_function(move |lua, n: Option<usize>| {
+        let mut st = read_state.lock().expect("body stream mutex poisoned");
+        match n {
+            // No arg: drain the remaining body (sugar, not a chunked consume).
+            None => {
+                let chunk = lua.create_string(&st.body[st.cursor..])?;
+                st.cursor = st.body.len();
+                Ok(Value::String(chunk))
+            }
+            // Chunked read: advance the cursor; nil once exhausted. Marks the
+            // body as streamed, disabling `req.body` / `req.json()`.
+            Some(n) => {
+                st.streamed = true;
+                if st.cursor >= st.body.len() && n > 0 {
+                    return Ok(Value::Nil);
+                }
+                let end = (st.cursor + n).min(st.body.len());
+                let chunk = lua.create_string(&st.body[st.cursor..end])?;
+                st.cursor = end;
+                Ok(Value::String(chunk))
+            }
+        }
+    })?;
+    table.set("read", read)?;
+
     let decode: mlua::Function = lua
         .globals()
         .get::<mlua::Table>("lur")?
         .get::<mlua::Table>("json")?
         .get("decode")?;
-    let body = req.body.clone();
+    let json_state = Arc::clone(&state);
     let json = lua.create_function(move |lua, ()| {
-        let raw = lua.create_string(&body)?;
+        let st = json_state.lock().expect("body stream mutex poisoned");
+        if st.streamed {
+            return Err(mlua::Error::runtime(
+                "req.json() is unavailable after req.read(n) consumed part of the body",
+            ));
+        }
+        let raw = lua.create_string(&st.body)?;
         decode.call::<Value>(raw)
     })?;
     table.set("json", json)?;
 
+    // `req.body` is a computed property: present only while the body has not been
+    // chunk-consumed. Served via `__index` so the streamed guard can fire.
+    let index_state = Arc::clone(&state);
+    let index = lua.create_function(move |lua, (_t, key): (mlua::Table, Value)| {
+        if matches!(&key, Value::String(s) if s.as_bytes() == b"body") {
+            let st = index_state.lock().expect("body stream mutex poisoned");
+            if st.streamed {
+                return Err(mlua::Error::runtime(
+                    "req.body is unavailable after req.read(n) consumed part of the body",
+                ));
+            }
+            return Ok(Value::String(lua.create_string(&st.body)?));
+        }
+        Ok(Value::Nil)
+    })?;
+    let meta = lua.create_table()?;
+    meta.set("__index", index)?;
+    table.set_metatable(Some(meta))?;
+
     Ok(table)
+}
+
+/// The one-shot request body behind `req.read` / `req.body` / `req.json`: a
+/// cursor into the bytes plus a flag set once a chunked `read(n)` runs.
+struct BodyStream {
+    body: Vec<u8>,
+    cursor: usize,
+    streamed: bool,
 }
 
 /// Parse a raw query string into ordered `(key, value)` byte pairs. Keys and
