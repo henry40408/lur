@@ -53,3 +53,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Persist BuildKit layer cache across runs via the GitHub Actions cache
+          # backend. This caches image layers (apt install, cargo-zigbuild build,
+          # zig download) — not the in-Dockerfile cargo/target cache mounts, which
+          # are local to an ephemeral runner and don't survive between runs.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
