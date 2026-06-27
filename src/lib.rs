@@ -6,3 +6,4 @@
 pub mod capabilities;
 pub mod policy;
 pub mod runtime;
+pub mod serve;
