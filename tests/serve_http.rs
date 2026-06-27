@@ -116,6 +116,27 @@ fn serve_threads_param_query_and_header_to_the_handler() {
 }
 
 #[test]
+fn handler_exceeding_per_event_timeout_returns_503_over_http() {
+    let (addr, _reaper, _dir) = spawn_server_args(
+        "lur.serve.http('GET', '/slow', function(req)\n\
+         \tlur.async.sleep(5000)\n\
+         \treturn { body = 'never' }\n\
+         end)",
+        &["--timeout-ms", "50"],
+    );
+
+    let response = round_trip(
+        &addr,
+        "GET /slow HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    );
+
+    assert!(
+        response.starts_with("HTTP/1.1 503"),
+        "a timed-out handler should yield 503: {response:?}"
+    );
+}
+
+#[test]
 fn pool_serves_concurrent_requests_in_parallel() {
     // Each request sleeps 200ms. With a 2-VM pool, two concurrent requests run
     // on separate VMs and finish together (~200ms), not serialized (~400ms).

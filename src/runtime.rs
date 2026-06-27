@@ -60,6 +60,9 @@ pub struct RuntimeConfig {
     /// Number of pre-warmed VMs in the server-mode pool (ignored in one-shot).
     /// Each is checked out exclusively per request; the count caps concurrency.
     pub pool_size: usize,
+    /// Per-request wall-clock limit in server mode (ignored in one-shot). `None`
+    /// leaves handlers unbounded; on timeout the request gets a 5xx.
+    pub per_event_timeout: Option<Duration>,
 }
 
 impl Default for RuntimeConfig {
@@ -71,6 +74,7 @@ impl Default for RuntimeConfig {
             max_http_body: DEFAULT_MAX_HTTP_BODY_BYTES,
             db_path: None,
             pool_size: 1,
+            per_event_timeout: None,
         }
     }
 }

@@ -94,6 +94,11 @@ struct ServeCli {
     #[arg(long, value_name = "N", default_value_t = default_pool_size())]
     pool_size: usize,
 
+    /// Per-request wall-clock limit in milliseconds; on timeout the request gets
+    /// a 503 (no limit if omitted).
+    #[arg(long, value_name = "MS")]
+    timeout_ms: Option<u64>,
+
     #[command(flatten)]
     common: CommonFlags,
 }
@@ -143,6 +148,7 @@ fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig,
         max_http_body: flags.max_http_body,
         db_path: flags.db.clone(),
         pool_size: 1,
+        per_event_timeout: None,
     })
 }
 
@@ -175,6 +181,7 @@ fn run_serve(cli: ServeCli) -> ExitCode {
         }
     };
     config.pool_size = cli.pool_size;
+    config.per_event_timeout = cli.timeout_ms.map(Duration::from_millis);
 
     let server = match Server::load(&source, config) {
         Ok(s) => s,

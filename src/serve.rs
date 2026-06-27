@@ -29,6 +29,8 @@ pub struct Server {
     pool: Pool,
     router: Router,
     rt: tokio::runtime::Runtime,
+    /// Per-request wall-clock budget; `None` leaves handlers unbounded.
+    per_event_timeout: Option<std::time::Duration>,
 }
 
 /// One pre-warmed VM in the pool: its sandboxed Lua state and the handler
@@ -197,7 +199,12 @@ impl Server {
             permits: Semaphore::new(vms.len()),
             available: Mutex::new(vms),
         };
-        Ok(Self { pool, router, rt })
+        Ok(Self {
+            pool,
+            router,
+            rt,
+            per_event_timeout: config.per_event_timeout,
+        })
     }
 
     /// Dispatch a bare `(method, path, body)` request — query and headers empty.
@@ -309,11 +316,43 @@ impl Server {
         handler
             .set_environment(fresh_env(&vm.lua).map_err(RunError::Script)?)
             .map_err(RunError::Script)?;
-        let values = handler
-            .call_async::<MultiValue>(req_table)
-            .await
-            .map_err(RunError::Script)?;
-        response_from(values)
+
+        // Two-layer per-event timeout (spec §5), mirroring one-shot: the deadline
+        // interrupt aborts CPU-bound handlers, while `tokio::time::timeout` drops
+        // a handler parked on async I/O. On either, the request becomes a 5xx
+        // instead of bringing the server down (§8).
+        let at = self
+            .per_event_timeout
+            .map(|d| std::time::Instant::now() + d);
+        *vm.deadline.lock().expect("deadline mutex poisoned") = at;
+
+        let call = handler.call_async::<MultiValue>(req_table);
+        let outcome = match self.per_event_timeout {
+            Some(d) => tokio::time::timeout(d, call).await.map_err(|_| ()),
+            None => Ok(call.await),
+        };
+
+        *vm.deadline.lock().expect("deadline mutex poisoned") = None;
+
+        match outcome {
+            Err(()) => Ok(timeout_response()),
+            Ok(Ok(values)) => response_from(values),
+            Ok(Err(e)) => {
+                if matches!(at, Some(at) if std::time::Instant::now() >= at) {
+                    Ok(timeout_response())
+                } else {
+                    Err(RunError::Script(e))
+                }
+            }
+        }
+    }
+}
+
+/// The 5xx returned when a handler exceeds its per-event budget (spec §3/§8).
+fn timeout_response() -> Response {
+    Response {
+        status: 503,
+        body: b"Service Unavailable".to_vec(),
     }
 }
 
