@@ -65,6 +65,10 @@ struct CommonFlags {
     #[arg(long = "db", value_name = "PATH")]
     db: Option<PathBuf>,
 
+    /// Cap on concurrently in-flight lur.async.* tasks per VM (unbounded if omitted).
+    #[arg(long = "max-concurrency", value_name = "N")]
+    max_concurrency: Option<usize>,
+
     /// Load a policy config file (default: `$XDG_CONFIG_HOME/lur/config`, else
     /// `~/.config/lur/config`).
     #[arg(long = "config", value_name = "FILE")]
@@ -232,6 +236,7 @@ fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig,
         per_event_timeout: None,
         state: Default::default(),
         shutdown_grace: Duration::from_millis(DEFAULT_SHUTDOWN_GRACE_MS),
+        max_concurrency: flags.max_concurrency,
     })
 }
 
