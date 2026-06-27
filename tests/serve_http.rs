@@ -38,20 +38,14 @@ impl Drop for Reaper {
     }
 }
 
-#[test]
-fn serve_answers_an_http_request() {
+/// Spawn `lur serve` on a fresh port with `app_src` as the app. Returns the
+/// bound address, the reaper, and the tempdir (kept alive for the app file).
+fn spawn_server(app_src: &str) -> (String, Reaper, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let app = dir.path().join("app.lua");
-    std::fs::write(
-        &app,
-        "lur.serve.http('GET', '/ping', function(req)\n\
-         \treturn { status = 200, body = 'pong' }\n\
-         end)",
-    )
-    .unwrap();
+    std::fs::write(&app, app_src).unwrap();
 
-    let port = free_port();
-    let addr = format!("127.0.0.1:{port}");
+    let addr = format!("127.0.0.1:{}", free_port());
     let bin = assert_cmd::cargo::cargo_bin("lur");
     let child = Command::new(bin)
         .arg("serve")
@@ -60,18 +54,57 @@ fn serve_answers_an_http_request() {
         .arg(&app)
         .spawn()
         .expect("spawn lur serve");
-    let _reaper = Reaper(child);
+    (addr, Reaper(child), dir)
+}
 
-    let mut stream = wait_until_up(&addr);
-    stream
-        .write_all(b"GET /ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .unwrap();
+/// Send a raw request and read the whole response (server closes on `Connection: close`).
+fn round_trip(addr: &str, request: &str) -> String {
+    let mut stream = wait_until_up(addr);
+    stream.write_all(request.as_bytes()).unwrap();
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
+    response
+}
+
+#[test]
+fn serve_answers_an_http_request() {
+    let (addr, _reaper, _dir) = spawn_server(
+        "lur.serve.http('GET', '/ping', function(req)\n\
+         \treturn { status = 200, body = 'pong' }\n\
+         end)",
+    );
+
+    let response = round_trip(
+        &addr,
+        "GET /ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    );
 
     assert!(
         response.starts_with("HTTP/1.1 200"),
         "status line: {response:?}"
     );
     assert!(response.contains("pong"), "body missing: {response:?}");
+}
+
+#[test]
+fn serve_threads_param_query_and_header_to_the_handler() {
+    let (addr, _reaper, _dir) = spawn_server(
+        "lur.serve.http('GET', '/users/:id', function(req)\n\
+         \treturn { body = req.params.id .. ' ' .. req.query.q .. ' ' .. req.headers['x-test'] }\n\
+         end)",
+    );
+
+    let response = round_trip(
+        &addr,
+        "GET /users/99?q=hi HTTP/1.1\r\nHost: localhost\r\nX-Test: yo\r\nConnection: close\r\n\r\n",
+    );
+
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "status line: {response:?}"
+    );
+    assert!(
+        response.ends_with("99 hi yo"),
+        "body should echo param/query/header: {response:?}"
+    );
 }
