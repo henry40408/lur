@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782545517494,
+  "lastUpdate": 1782546191914,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -209,6 +209,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 206162,
             "range": "± 2650",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "646ba7adbd39e9f9488646c1c3dbeb31276d7de2",
+          "message": "ci: code coverage via cargo-llvm-cov, uploaded to Codecov (#30)\n\nAdd a coverage job: cargo-llvm-cov runs the suite through nextest with\nLLVM source-based instrumentation and emits lcov.info, which is uploaded\nto Codecov. Verified locally — 141 tests pass under instrumentation\n(~83% line / ~87% region coverage).\n\nCoverage is a signal, not a hard gate: codecov.yml marks the project and\npatch statuses informational, and the upload uses fail_ci_if_error:false,\nso neither a drop nor an upload hiccup blocks a merge (consistent with\nthe perf benchmark). The existing fmt/clippy/nextest jobs stay hard\ngates.\n\nNote: set a CODECOV_TOKEN repo secret (from codecov.io) so uploads are\nreliable; the public-repo tokenless path is a fallback.\n\nCo-authored-by: Claude Opus 4.8 <noreply@anthropic.com>",
+          "timestamp": "2026-06-27T15:41:44+08:00",
+          "tree_id": "7d4e7e2b4320b87b8dd2506ff9be68b8ef9ea81e",
+          "url": "https://github.com/henry40408/lur/commit/646ba7adbd39e9f9488646c1c3dbeb31276d7de2"
+        },
+        "date": 1782546191261,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 256795,
+            "range": "± 4910",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5063,
+            "range": "± 45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 206889,
+            "range": "± 6574",
             "unit": "ns/iter"
           }
         ]
