@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use lur::runtime::RuntimeConfig;
 use lur::serve::Server;
 
-/// A single-VM server with a SQLite db (so cron handlers can use lur.kv as an
+/// A single-VM server with a `SQLite` db (so cron handlers can use lur.kv as an
 /// observable side effect).
 fn cron_server(db: PathBuf, src: &str) -> Server {
     Server::load(

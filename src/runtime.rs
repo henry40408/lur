@@ -61,7 +61,7 @@ pub struct RuntimeConfig {
     /// is rejected with 413 at the host edge before the handler runs (spec §3).
     /// `None` leaves the body unbounded (ignored in one-shot).
     pub max_body: Option<usize>,
-    /// SQLite database path for `lur.db` / `lur.kv` (`--db`). `None` makes those
+    /// `SQLite` database path for `lur.db` / `lur.kv` (`--db`). `None` makes those
     /// modules raise a clear error when used.
     pub db_path: Option<PathBuf>,
     /// Number of pre-warmed VMs in the server-mode pool (ignored in one-shot).
@@ -228,7 +228,7 @@ impl Runtime {
         // Outer Err = the tokio wall-clock layer fired (I/O-parked code).
         let outcome: Result<mlua::Result<T>, ()> = self.rt.block_on(async {
             match timeout {
-                Some(d) => tokio::time::timeout(d, fut).await.map_err(|_| ()),
+                Some(d) => tokio::time::timeout(d, fut).await.map_err(|_elapsed| ()),
                 None => Ok(fut.await),
             }
         });
@@ -261,10 +261,9 @@ fn is_memory_error(e: &mlua::Error) -> bool {
 /// Map a chunk's top-level return values to an exit code (spec §8).
 fn exit_code_of(values: MultiValue) -> i32 {
     match values.into_iter().next() {
-        None => 0,
         Some(Value::Integer(n)) => n as i32,
         Some(Value::Number(f)) => f as i32,
-        Some(Value::Nil) | Some(Value::Boolean(false)) => 1,
-        Some(_) => 0,
+        Some(Value::Nil | Value::Boolean(false)) => 1,
+        None | Some(_) => 0,
     }
 }

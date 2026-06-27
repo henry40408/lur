@@ -265,13 +265,12 @@ async fn build_response(
         let key = name.as_str().to_lowercase();
         let val = lua.create_string(value.as_bytes())?;
         headers.set(key.as_str(), &val)?; // last value wins
-        let arr = match headers_all.get::<Option<Table>>(key.as_str())? {
-            Some(t) => t,
-            None => {
-                let t = lua.create_table()?;
-                headers_all.set(key.as_str(), &t)?;
-                t
-            }
+        let arr = if let Some(t) = headers_all.get::<Option<Table>>(key.as_str())? {
+            t
+        } else {
+            let t = lua.create_table()?;
+            headers_all.set(key.as_str(), &t)?;
+            t
         };
         let next = arr.raw_len() + 1;
         arr.raw_set(next as i64, &val)?;

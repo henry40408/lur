@@ -14,7 +14,7 @@ fn split_num_unit(s: &str) -> Result<(u64, &str), String> {
     }
     let n: u64 = num
         .parse()
-        .map_err(|_| format!("invalid number in {s:?}"))?;
+        .map_err(|e| format!("invalid number in {s:?}: {e}"))?;
     Ok((n, unit.trim()))
 }
 

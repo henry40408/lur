@@ -1,4 +1,4 @@
-//! `lur.db` — long-term SQLite storage over sqlx (spec §6).
+//! `lur.db` — long-term `SQLite` storage over sqlx (spec §6).
 //!
 //! The pool is opened lazily on first use (WAL mode, file auto-created) so a
 //! script that never touches the DB pays nothing. Parameters use positional `?`
@@ -17,7 +17,7 @@ use sqlx::{Column, Row, TypeInfo, ValueRef};
 use super::null;
 use crate::runtime::RunError;
 
-/// A dynamically-bound SQLite query.
+/// A dynamically-bound `SQLite` query.
 type Query<'q> = sqlx::query::Query<'q, sqlx::Sqlite, SqliteArguments>;
 
 /// Install `lur.db`. `db_path` of `None` makes every call raise a clear error.
@@ -304,7 +304,7 @@ async fn ensure_pool(
     Ok(cell.get().expect("pool just set").clone())
 }
 
-/// Open the SQLite pool in WAL mode and ensure the internal `lur_kv` table.
+/// Open the `SQLite` pool in WAL mode and ensure the internal `lur_kv` table.
 async fn open_pool(path: &Path) -> sqlx::Result<SqlitePool> {
     let opts = SqliteConnectOptions::new()
         .filename(path)

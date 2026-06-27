@@ -513,7 +513,7 @@ async fn call_handler(
 
     let call = handler.call_async::<MultiValue>(args);
     let outcome = match timeout {
-        Some(d) => tokio::time::timeout(d, call).await.map_err(|_| ()),
+        Some(d) => tokio::time::timeout(d, call).await.map_err(|_elapsed| ()),
         None => Ok(call.await),
     };
 
@@ -735,13 +735,12 @@ fn build_req(
     for (key, value) in parse_query(&req.query) {
         let k = lua.create_string(&key)?;
         query.set(k.clone(), lua.create_string(&value)?)?;
-        let list: mlua::Table = match query_all.get::<Option<mlua::Table>>(k.clone())? {
-            Some(t) => t,
-            None => {
-                let t = lua.create_table()?;
-                query_all.set(k, t.clone())?;
-                t
-            }
+        let list: mlua::Table = if let Some(t) = query_all.get::<Option<mlua::Table>>(k.clone())? {
+            t
+        } else {
+            let t = lua.create_table()?;
+            query_all.set(k, t.clone())?;
+            t
         };
         list.push(lua.create_string(&value)?)?;
     }
@@ -863,16 +862,15 @@ fn percent_decode(input: &[u8], plus_as_space: bool) -> Vec<u8> {
     let mut i = 0;
     while i < input.len() {
         match input[i] {
-            b'%' if i + 2 < input.len() => match (hex(input[i + 1]), hex(input[i + 2])) {
-                (Some(h), Some(l)) => {
+            b'%' if i + 2 < input.len() => {
+                if let (Some(h), Some(l)) = (hex(input[i + 1]), hex(input[i + 2])) {
                     out.push(h * 16 + l);
                     i += 3;
-                }
-                _ => {
+                } else {
                     out.push(b'%');
                     i += 1;
                 }
-            },
+            }
             b'+' if plus_as_space => {
                 out.push(b' ');
                 i += 1;

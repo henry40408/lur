@@ -17,7 +17,7 @@ pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunErr
         .create_function(move |lua, name: mlua::String| {
             let bytes = name.as_bytes();
             let name = std::str::from_utf8(&bytes)
-                .map_err(|_| Error::runtime("lur.env: variable name is not UTF-8"))?;
+                .map_err(|e| Error::runtime(format!("lur.env: variable name is not UTF-8: {e}")))?;
             if policy.allows_env(name) {
                 match std::env::var(name) {
                     Ok(value) => Ok(Value::String(lua.create_string(&value)?)),
