@@ -61,7 +61,7 @@ struct CommonFlags {
     #[arg(long = "allow-private")]
     allow_private: bool,
 
-    /// SQLite database path for lur.db / lur.kv.
+    /// `SQLite` database path for lur.db / lur.kv.
     #[arg(long = "db", value_name = "PATH")]
     db: Option<PathBuf>,
 
@@ -138,9 +138,7 @@ struct ServeCli {
 
 /// Default VM-pool size: the number of CPUs available to the process.
 fn default_pool_size() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
+    std::thread::available_parallelism().map_or(1, |n| n.get())
 }
 
 /// Load the user config layer: `--no-config` drops it, `--config` forces a
