@@ -8,15 +8,20 @@
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use chrono::Utc;
+use cron::Schedule;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response as HyperResponse};
 use hyper_util::rt::TokioIo;
-use mlua::{Function, Lua, MultiValue, Value};
+use mlua::{Function, IntoLuaMulti, Lua, MultiValue, Value};
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, SemaphorePermit};
 
@@ -28,18 +33,20 @@ use crate::runtime::{Deadline, RunError, RuntimeConfig, build_lua};
 pub struct Server {
     pool: Pool,
     router: Router,
+    cron_jobs: Vec<CronJob>,
     rt: tokio::runtime::Runtime,
     /// Per-request wall-clock budget; `None` leaves handlers unbounded.
-    per_event_timeout: Option<std::time::Duration>,
+    per_event_timeout: Option<Duration>,
 }
 
 /// One pre-warmed VM in the pool: its sandboxed Lua state and the handler
-/// closures it collected at warm-up, indexed by the host-assigned handler id.
+/// closures it collected at warm-up, indexed by the host-assigned handler id
+/// (HTTP and cron handlers each in their own list).
 struct Vm {
     lua: Lua,
-    #[allow(dead_code)] // wired to the per-event timeout in a later slice.
     deadline: Deadline,
     handlers: Vec<Function>,
+    cron_handlers: Vec<Function>,
 }
 
 /// A fixed-size pool of VMs, each checked out exclusively per request. The
@@ -124,6 +131,50 @@ struct Router {
     routes: Vec<Route>,
 }
 
+/// A scheduled job: its parsed schedule plus the handler id (an index into every
+/// VM's cron-handler list).
+#[derive(Clone)]
+struct CronJob {
+    schedule: Schedule,
+    name: String,
+    overlap: bool,
+    timeout: Option<Duration>,
+    id: usize,
+}
+
+/// Cron metadata collected at warm-up (handler lives in each VM by id). Compared
+/// across VMs to keep handler ids aligned.
+#[derive(Clone, PartialEq, Eq)]
+struct CronMeta {
+    spec: String,
+    name: String,
+    overlap: bool,
+    timeout_ms: Option<u64>,
+}
+
+/// Parse each collected cron spec into a [`CronJob`], assigning registration-
+/// order ids. A bad spec (e.g. 5-field crontab) fails the load.
+fn build_cron_jobs(meta: &[CronMeta]) -> Result<Vec<CronJob>, RunError> {
+    meta.iter()
+        .enumerate()
+        .map(|(id, m)| {
+            let schedule = Schedule::from_str(&m.spec).map_err(|e| {
+                RunError::Script(mlua::Error::RuntimeError(format!(
+                    "lur.serve: invalid cron spec {:?}: {e}",
+                    m.spec
+                )))
+            })?;
+            Ok(CronJob {
+                schedule,
+                name: m.name.clone(),
+                overlap: m.overlap,
+                timeout: m.timeout_ms.map(Duration::from_millis),
+                id,
+            })
+        })
+        .collect()
+}
+
 /// A request as seen by the host before it crosses into Lua. Path is still
 /// percent-encoded; query is the raw string without the leading `?`.
 #[derive(Debug, Default, Clone)]
@@ -163,9 +214,10 @@ impl Server {
 
         // Warm up each VM inside the runtime so an app.lua that awaits at the top
         // level (e.g. fetching config) still works.
-        let (vms, routes) = rt.block_on(async {
+        let (vms, routes, crons) = rt.block_on(async {
             let mut vms = Vec::with_capacity(pool_size);
             let mut routes: Option<Vec<(String, String)>> = None;
+            let mut crons: Option<Vec<CronMeta>> = None;
             for _ in 0..pool_size {
                 let registry = Registry::default();
                 let (lua, deadline) = build_lua(&config, Some(&registry))?;
@@ -176,25 +228,42 @@ impl Server {
 
                 let regs = registry.take();
                 let handlers = regs.iter().map(|r| r.handler.clone()).collect();
-                let signature: Vec<(String, String)> =
+                let route_sig: Vec<(String, String)> =
                     regs.into_iter().map(|r| (r.method, r.path)).collect();
-                // Every VM must register the same routes in the same order, or
-                // the shared handler ids would not line up.
-                if routes.get_or_insert_with(|| signature.clone()) != &signature {
+
+                let cron_regs = registry.take_crons();
+                let cron_handlers = cron_regs.iter().map(|r| r.handler.clone()).collect();
+                let cron_meta: Vec<CronMeta> = cron_regs
+                    .into_iter()
+                    .map(|r| CronMeta {
+                        spec: r.spec,
+                        name: r.name,
+                        overlap: r.overlap,
+                        timeout_ms: r.timeout_ms,
+                    })
+                    .collect();
+
+                // Every VM must register the same routes and jobs in the same
+                // order, or the shared handler ids would not line up.
+                if routes.get_or_insert_with(|| route_sig.clone()) != &route_sig
+                    || crons.get_or_insert_with(|| cron_meta.clone()) != &cron_meta
+                {
                     return Err(RunError::Script(mlua::Error::RuntimeError(
-                        "lur.serve: app.lua registered different routes across VMs".into(),
+                        "lur.serve: app.lua registered differently across VMs".into(),
                     )));
                 }
                 vms.push(Vm {
                     lua,
                     deadline,
                     handlers,
+                    cron_handlers,
                 });
             }
-            Ok((vms, routes.unwrap_or_default()))
+            Ok((vms, routes.unwrap_or_default(), crons.unwrap_or_default()))
         })?;
 
         let router = Router::build(&routes)?;
+        let cron_jobs = build_cron_jobs(&crons)?;
         let pool = Pool {
             permits: Semaphore::new(vms.len()),
             available: Mutex::new(vms),
@@ -202,9 +271,21 @@ impl Server {
         Ok(Self {
             pool,
             router,
+            cron_jobs,
             rt,
             per_event_timeout: config.per_event_timeout,
         })
+    }
+
+    /// Run the named cron job's handler once, returning whether a job matched.
+    /// Lets embedders (and tests) trigger a job deterministically; errors are
+    /// logged like a scheduled fire, never propagated.
+    pub fn fire_cron(&self, name: &str) -> Result<bool, RunError> {
+        let Some(job) = self.cron_jobs.iter().find(|j| j.name == name) else {
+            return Ok(false);
+        };
+        self.rt.block_on(self.run_cron(job));
+        Ok(true)
     }
 
     /// Dispatch a bare `(method, path, body)` request — query and headers empty.
@@ -233,6 +314,10 @@ impl Server {
         driver.rt.block_on(async move {
             let listener = TcpListener::bind(addr).await?;
             eprintln!("lur: listening on http://{addr}");
+            // One scheduler task per cron job; they draw VMs from the same pool.
+            for job in &server.cron_jobs {
+                tokio::spawn(cron_loop(server.clone(), job.clone()));
+            }
             loop {
                 let (stream, _) = listener.accept().await?;
                 let io = TokioIo::new(stream);
@@ -311,40 +396,104 @@ impl Server {
         let checked = self.pool.checkout().await;
         let vm = checked.vm();
         let handler = &vm.handlers[id];
-
         let req_table = build_req(&vm.lua, req, &params).map_err(RunError::Script)?;
-        handler
-            .set_environment(fresh_env(&vm.lua).map_err(RunError::Script)?)
-            .map_err(RunError::Script)?;
 
-        // Two-layer per-event timeout (spec §5), mirroring one-shot: the deadline
-        // interrupt aborts CPU-bound handlers, while `tokio::time::timeout` drops
-        // a handler parked on async I/O. On either, the request becomes a 5xx
-        // instead of bringing the server down (§8).
-        let at = self
-            .per_event_timeout
-            .map(|d| std::time::Instant::now() + d);
-        *vm.deadline.lock().expect("deadline mutex poisoned") = at;
+        match call_handler(vm, handler, req_table, self.per_event_timeout).await {
+            Ok(values) => response_from(values),
+            Err(CallError::TimedOut) => Ok(timeout_response()),
+            Err(CallError::Lua(e)) => Err(RunError::Script(e)),
+        }
+    }
 
-        let call = handler.call_async::<MultiValue>(req_table);
-        let outcome = match self.per_event_timeout {
-            Some(d) => tokio::time::timeout(d, call).await.map_err(|_| ()),
-            None => Ok(call.await),
-        };
-
-        *vm.deadline.lock().expect("deadline mutex poisoned") = None;
-
-        match outcome {
-            Err(()) => Ok(timeout_response()),
-            Ok(Ok(values)) => response_from(values),
-            Ok(Err(e)) => {
-                if matches!(at, Some(at) if std::time::Instant::now() >= at) {
-                    Ok(timeout_response())
-                } else {
-                    Err(RunError::Script(e))
-                }
+    /// Run a cron job's handler once on a pooled VM. Errors and timeouts are
+    /// logged (tagged with the job name) and never propagated — a job must not
+    /// bring the server down (§8).
+    async fn run_cron(&self, job: &CronJob) {
+        let checked = self.pool.checkout().await;
+        let vm = checked.vm();
+        let handler = &vm.cron_handlers[job.id];
+        let timeout = job.timeout.or(self.per_event_timeout);
+        match call_handler(vm, handler, (), timeout).await {
+            Ok(_) => {}
+            Err(CallError::TimedOut) => {
+                eprintln!("error: cron[{}]: timed out", job.name);
+            }
+            Err(CallError::Lua(e)) => {
+                eprintln!("error: cron[{}]: {e}", job.name);
             }
         }
+    }
+}
+
+/// Why a handler call did not return a value.
+enum CallError {
+    /// Exceeded its time budget (interrupt or wall-clock layer).
+    TimedOut,
+    /// Raised a Lua error.
+    Lua(mlua::Error),
+}
+
+/// Run `handler` on `vm` with a fresh per-call environment under the two-layer
+/// timeout (spec §5): the deadline interrupt aborts CPU-bound code, while
+/// `tokio::time::timeout` drops a handler parked on async I/O.
+async fn call_handler(
+    vm: &Vm,
+    handler: &Function,
+    args: impl IntoLuaMulti,
+    timeout: Option<Duration>,
+) -> Result<MultiValue, CallError> {
+    handler
+        .set_environment(fresh_env(&vm.lua).map_err(CallError::Lua)?)
+        .map_err(CallError::Lua)?;
+
+    let at = timeout.map(|d| Instant::now() + d);
+    *vm.deadline.lock().expect("deadline mutex poisoned") = at;
+
+    let call = handler.call_async::<MultiValue>(args);
+    let outcome = match timeout {
+        Some(d) => tokio::time::timeout(d, call).await.map_err(|_| ()),
+        None => Ok(call.await),
+    };
+
+    *vm.deadline.lock().expect("deadline mutex poisoned") = None;
+
+    match outcome {
+        Err(()) => Err(CallError::TimedOut),
+        Ok(Ok(values)) => Ok(values),
+        Ok(Err(e)) => {
+            if matches!(at, Some(at) if Instant::now() >= at) {
+                Err(CallError::TimedOut)
+            } else {
+                Err(CallError::Lua(e))
+            }
+        }
+    }
+}
+
+/// The scheduler loop for one cron job: compute the next future fire, sleep to
+/// it, then run (single-flight by default — a tick is skipped, not queued, while
+/// the previous run is still in flight). Fire-forward: missed ticks are never
+/// replayed (spec §3).
+async fn cron_loop(server: Arc<Server>, job: CronJob) {
+    let in_flight = Arc::new(AtomicBool::new(false));
+    loop {
+        let Some(next) = job.schedule.upcoming(Utc).next() else {
+            return; // no further fires (e.g. a one-shot past spec)
+        };
+        let wait = (next - Utc::now()).to_std().unwrap_or(Duration::ZERO);
+        tokio::time::sleep(wait).await;
+
+        if !job.overlap && in_flight.swap(true, Ordering::SeqCst) {
+            continue; // previous run still in flight → skip this tick
+        }
+
+        let server = server.clone();
+        let job = job.clone();
+        let in_flight = in_flight.clone();
+        tokio::spawn(async move {
+            server.run_cron(&job).await;
+            in_flight.store(false, Ordering::SeqCst);
+        });
     }
 }
 
