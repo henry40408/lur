@@ -25,6 +25,10 @@ use crate::runtime::{RunError, Runtime, RuntimeConfig};
 pub struct Server {
     runtime: Runtime,
     router: Router,
+    /// Serializes handler execution on the single VM so a per-call environment
+    /// swap can't be observed by another in-flight request across an `await`.
+    /// (The VM pool restores cross-request concurrency in a later slice.)
+    serialize: tokio::sync::Mutex<()>,
 }
 
 /// Decoded path parameters: `(name, raw-byte value)` pairs.
@@ -86,7 +90,11 @@ impl Server {
         runtime.run(source)?;
 
         let router = Router::build(registry.take())?;
-        Ok(Self { runtime, router })
+        Ok(Self {
+            runtime,
+            router,
+            serialize: tokio::sync::Mutex::new(()),
+        })
     }
 
     /// Dispatch a bare `(method, path, body)` request — query and headers empty.
@@ -198,12 +206,30 @@ impl Server {
         let lua = self.runtime.lua();
         let req_table = build_req(lua, req, &params).map_err(RunError::Script)?;
 
+        // Hold the VM exclusively for the whole handler call: the per-call
+        // environment is swapped onto the shared handler closure, so another
+        // request resuming across an `await` must not run on the same VM.
+        let _guard = self.serialize.lock().await;
+        handler
+            .set_environment(fresh_env(lua).map_err(RunError::Script)?)
+            .map_err(RunError::Script)?;
         let values = handler
             .call_async::<MultiValue>(req_table)
             .await
             .map_err(RunError::Script)?;
         response_from(values)
     }
+}
+
+/// A throwaway per-call environment: writes land here (and are discarded after
+/// the call) while reads fall through `__index` to the readonly globals. This
+/// closes the global-bleed vector between requests sharing a VM (spec §3).
+fn fresh_env(lua: &mlua::Lua) -> mlua::Result<mlua::Table> {
+    let env = lua.create_table()?;
+    let meta = lua.create_table()?;
+    meta.set("__index", lua.globals())?;
+    env.set_metatable(Some(meta))?;
+    Ok(env)
 }
 
 impl Router {
