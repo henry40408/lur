@@ -93,3 +93,17 @@ jobs:
           alert-threshold: "150%"
           comment-on-alert: true
           summary-always: true
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable, 2026-03-27
+      - uses: taiki-e/install-action@8b3c737da4b541bf0fb5a3e0488ff20535badac9 # v2.82.1
+        with:
+          tool: cargo-deny
+      # Hard gate: advisories (RUSTSEC), bans, licenses, and sources all checked
+      # on every push and PR. Config lives in deny.toml.
+      - name: cargo deny
+        run: cargo deny check
