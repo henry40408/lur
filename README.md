@@ -30,6 +30,30 @@ cargo build --release
 # binary at ./target/release/lur
 ```
 
+### Docker
+
+Published as a multi-arch (`linux/amd64`, `linux/arm64`) image on GHCR. The binary
+is a static musl build on `distroless/static` (CA certificates included, runs as a
+non-root user, no shell):
+
+Tags: `:main` tracks the latest commit on `main`; releases publish `:X.Y.Z`, `:X.Y`,
+and `:latest`.
+
+```sh
+docker run --rm ghcr.io/henry40408/lur:latest --version
+
+# run a script (mount it; grant capabilities with the usual flags)
+docker run --rm -v "$PWD/app.lua:/app.lua:ro" \
+  ghcr.io/henry40408/lur:latest --allow-net example.com /app.lua
+```
+
+Build the image locally (cross-compiles both arches via `cargo-zigbuild`, no qemu):
+
+```sh
+LOAD=true PLATFORMS=linux/amd64 ./scripts/docker-build.sh   # single arch into local docker
+./scripts/docker-build.sh                                   # validate both arches
+```
+
 ## Quick start
 
 ### One-shot

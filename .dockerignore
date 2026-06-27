@@ -1,0 +1,4 @@
+# Keep the build context small: the multi-GB target dir and git history are
+# never needed inside the image build.
+target/
+.git/
