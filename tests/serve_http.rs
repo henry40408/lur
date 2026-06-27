@@ -31,11 +31,39 @@ fn wait_until_up(addr: &str) -> TcpStream {
 
 /// Kill the child on drop so a failed assertion doesn't leak the process.
 struct Reaper(Child);
+impl Reaper {
+    fn pid(&self) -> u32 {
+        self.0.id()
+    }
+
+    /// Poll for the child to exit within `budget`, returning its status.
+    fn wait_within(&mut self, budget: Duration) -> Option<std::process::ExitStatus> {
+        let deadline = Instant::now() + budget;
+        loop {
+            match self.0.try_wait() {
+                Ok(Some(status)) => return Some(status),
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                _ => return None,
+            }
+        }
+    }
+}
 impl Drop for Reaper {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+/// Send SIGTERM to a child process (no extra deps — shells out to `kill`).
+fn send_sigterm(pid: u32) {
+    Command::new("kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .status()
+        .expect("send SIGTERM");
 }
 
 /// Spawn `lur serve` on a fresh port with `app_src` as the app. Returns the
@@ -188,6 +216,44 @@ fn oversize_body_is_rejected_with_413_over_http() {
     assert!(
         !response.contains("reached"),
         "the handler must not run for an oversize body: {response:?}"
+    );
+}
+
+#[test]
+fn sigterm_drains_in_flight_request_then_exits_cleanly() {
+    // A handler that takes 400ms. We fire the request, SIGTERM the server while
+    // it is in flight, and require: (1) the in-flight request still completes,
+    // (2) the process then exits cleanly (0) rather than dying on the signal.
+    let (addr, mut reaper, _dir) = spawn_server(
+        "lur.serve.http('GET', '/slow', function()\n\
+         \tlur.async.sleep(400)\n\
+         \treturn { body = 'drained' }\n\
+         end)",
+    );
+    let mut stream = wait_until_up(&addr);
+    stream
+        .write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        .unwrap();
+
+    // Let the handler start, then ask the server to shut down.
+    std::thread::sleep(Duration::from_millis(120));
+    send_sigterm(reaper.pid());
+
+    // The in-flight request must still get its full response.
+    let mut resp = String::new();
+    stream.read_to_string(&mut resp).unwrap();
+    assert!(
+        resp.contains("drained"),
+        "in-flight request should drain to completion: {resp:?}"
+    );
+
+    // And the server should exit cleanly within the grace window.
+    let status = reaper
+        .wait_within(Duration::from_secs(5))
+        .expect("server should exit after draining");
+    assert!(
+        status.success(),
+        "graceful shutdown should exit 0, got {status:?}"
     );
 }
 

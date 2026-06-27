@@ -8,7 +8,8 @@ use clap::Parser;
 use lur::config::{Config, Profile, expand_tilde};
 use lur::policy::Policy;
 use lur::runtime::{
-    DEFAULT_MAX_HTTP_BODY_BYTES, DEFAULT_MEMORY_LIMIT_BYTES, RunError, Runtime, RuntimeConfig,
+    DEFAULT_MAX_HTTP_BODY_BYTES, DEFAULT_MEMORY_LIMIT_BYTES, DEFAULT_SHUTDOWN_GRACE_MS, RunError,
+    Runtime, RuntimeConfig,
 };
 use lur::serve::Server;
 
@@ -122,6 +123,10 @@ struct ServeCli {
     #[arg(long = "max-body", value_name = "BYTES")]
     max_body: Option<usize>,
 
+    /// Grace period in milliseconds for draining in-flight work on SIGTERM/SIGINT.
+    #[arg(long = "shutdown-grace-ms", value_name = "MS", default_value_t = DEFAULT_SHUTDOWN_GRACE_MS)]
+    shutdown_grace_ms: u64,
+
     #[command(flatten)]
     common: CommonFlags,
 }
@@ -225,6 +230,7 @@ fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig,
         pool_size: 1,
         per_event_timeout: None,
         state: Default::default(),
+        shutdown_grace: Duration::from_millis(DEFAULT_SHUTDOWN_GRACE_MS),
     })
 }
 
@@ -259,6 +265,7 @@ fn run_serve(cli: ServeCli) -> ExitCode {
     config.pool_size = cli.pool_size;
     config.per_event_timeout = cli.timeout_ms.map(Duration::from_millis);
     config.max_body = cli.max_body;
+    config.shutdown_grace = Duration::from_millis(cli.shutdown_grace_ms);
 
     let server = match Server::load(&source, config) {
         Ok(s) => s,

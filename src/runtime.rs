@@ -41,6 +41,9 @@ pub const DEFAULT_MEMORY_LIMIT_BYTES: usize = 256 * 1024 * 1024;
 /// Default cap on a buffered `lur.http` response body.
 pub const DEFAULT_MAX_HTTP_BODY_BYTES: usize = 16 * 1024 * 1024;
 
+/// Default grace period for draining in-flight work on graceful shutdown.
+pub const DEFAULT_SHUTDOWN_GRACE_MS: u64 = 10_000;
+
 /// Configuration for building a [`Runtime`].
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
@@ -70,6 +73,9 @@ pub struct RuntimeConfig {
     /// Host-side `lur.state` store, shared by every VM built from this config so
     /// cross-request state survives the pool (spec §6).
     pub state: Arc<crate::capabilities::state::StateStore>,
+    /// Grace period for draining in-flight requests/jobs on graceful shutdown
+    /// (server mode only); after it elapses, remaining work is aborted (§3/§5).
+    pub shutdown_grace: Duration,
 }
 
 impl Default for RuntimeConfig {
@@ -84,6 +90,7 @@ impl Default for RuntimeConfig {
             pool_size: 1,
             per_event_timeout: None,
             state: Arc::new(crate::capabilities::state::StateStore::default()),
+            shutdown_grace: Duration::from_millis(DEFAULT_SHUTDOWN_GRACE_MS),
         }
     }
 }
