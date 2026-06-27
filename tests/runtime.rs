@@ -48,6 +48,37 @@ fn dangerous_lua_stdlib_is_absent_under_strict() {
 }
 
 #[test]
+fn readonly_globals_reject_raw_writes() {
+    let rt = Runtime::new().expect("runtime builds");
+    // `sandbox(true)` freezes the global table; even `rawset` (which bypasses
+    // `__newindex`) must not inject a global — otherwise it would be a
+    // cross-request isolation bypass on a pooled VM (spec §3).
+    rt.run(
+        "assert(not pcall(function() rawset(_G, 'INJECTED', 1) end),\n\
+         \t'rawset must not bypass the readonly global table')\n\
+         assert(rawget(_G, 'INJECTED') == nil, 'no global was injected')",
+    )
+    .expect("rawset on the global table is rejected");
+}
+
+#[test]
+fn debug_escape_members_are_absent_but_traceback_kept() {
+    let rt = Runtime::new().expect("runtime builds");
+    // The debug library can reach upvalues / the registry — those members must
+    // be gone; only the harmless traceback formatter and bytecode-free string
+    // library remain (spec §9 sandbox blocking).
+    rt.run(
+        "assert(type(debug) == 'table', 'debug table present')\n\
+         for _, name in ipairs({ 'getupvalue', 'setupvalue', 'getregistry', 'getinfo' }) do\n\
+         \tassert(debug[name] == nil, 'debug.' .. name .. ' must be absent')\n\
+         end\n\
+         assert(type(debug.traceback) == 'function', 'debug.traceback kept')\n\
+         assert(string.dump == nil, 'string.dump must be absent')",
+    )
+    .expect("debug escape members absent, traceback kept");
+}
+
+#[test]
 fn lur_log_exposes_level_functions() {
     let rt = Runtime::new().expect("runtime builds");
     rt.run(
