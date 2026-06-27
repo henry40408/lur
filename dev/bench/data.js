@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782574278588,
+  "lastUpdate": 1782575573272,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -461,6 +461,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 211199,
             "range": "± 2017",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "224ea4c1f791cf9ce3478e3f84c551de466ba057",
+          "message": "build: add multi-arch musl Docker image and release workflow (#37)\n\nShip lur as a static-musl Docker image for linux/amd64 and linux/arm64.\n\n- Dockerfile cross-compiles with cargo-zigbuild: the builder is pinned to\n  the native build platform and zig targets each arch's musl triple, so no\n  qemu emulation is needed (arm64 builds at native speed). The runtime stage\n  is gcr.io/distroless/static (CA certs bundled, non-root, no shell).\n- scripts/docker-build.sh wraps buildx for local single-arch (--load) or\n  multi-arch (--push) builds.\n- .github/workflows/docker.yml builds and pushes to GHCR: :main tracks the\n  main branch, releases publish :X.Y.Z, :X.Y, and :latest. Actions are pinned\n  to commit SHAs.\n- README documents pulling and building the image.\n\nVerified locally: both arches build, run --version, complete a live HTTPS\nrequest through the distroless CA store, and run as non-root; images are\n~5.9MB. Single-invocation multi-arch build succeeds.\n\nCo-authored-by: Claude Opus 4.8 <noreply@anthropic.com>",
+          "timestamp": "2026-06-27T23:51:41+08:00",
+          "tree_id": "406a1eea5e5c8d52fb21dff86ae71d0c875b0c58",
+          "url": "https://github.com/henry40408/lur/commit/224ea4c1f791cf9ce3478e3f84c551de466ba057"
+        },
+        "date": 1782575572501,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 254106,
+            "range": "± 1922",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5345,
+            "range": "± 88",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207453,
+            "range": "± 1026",
             "unit": "ns/iter"
           }
         ]
