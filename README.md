@@ -199,8 +199,10 @@ Everything is exposed under the `lur` global. Functions raise a Lua error on fai
 
 Registration happens once at load time; the registered handlers then serve traffic.
 
-- **`lur.serve.http(method, path, handler)`** — `method` is `"GET"`…/`"ANY"`; routing is
-  exact-match in v1. The `handler(req)` returns `{ status?, body?, headers? }`
+- **`lur.serve.http(method, path, handler)`** — `method` is `"GET"`…/`"ANY"`. Paths may
+  contain `:name` segments (e.g. `/users/:id`) that bind into `req.params`; a more
+  specific route (more static segments, then a concrete method over `ANY`) wins
+  regardless of registration order. The `handler(req)` returns `{ status?, body? }`
   (`status` defaults to `200`, `body` to empty).
 - **`lur.serve.cron(spec, handler, opts?)`** — `spec` is a 6-field cron expression
   (`sec min hour dom mon dow`). `opts` may set `name`, `overlap` (default `false` =
@@ -214,8 +216,7 @@ For large uploads, `read(n)` streams the body in chunks; once you start streamin
 ```lua
 lur.serve.http("POST", "/echo", function(req)
   local data = req.json()
-  return { status = 200, headers = { ["content-type"] = "application/json" },
-           body = lur.json.encode(data) }
+  return { status = 200, body = lur.json.encode(data) }
 end)
 ```
 
@@ -232,6 +233,8 @@ cargo bench --bench runtime
 ```
 
 CI runs lint, tests, coverage (Codecov), and a benchmark report on every push and PR.
+
+For how the runtime is put together internally, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## License
 
