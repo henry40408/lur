@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782578924876,
+  "lastUpdate": 1782580976563,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -545,6 +545,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207132,
             "range": "± 4167",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7f653bd20ccfda8e7ab8fa837b74f7902ec62fb1",
+          "message": "feat: stamp lur --version with a layered version string (#40)\n\n`lur --version` reported the static Cargo.toml version (0.1.0) for every\nbuild. Resolve a meaningful, traceable version at compile time instead,\nlayered most-authoritative first:\n\n  1. the LUR_VERSION env var, if non-empty — the release workflow injects\n     the published tag, and the rolling :main image a <ref>-<short-sha>\n     marker;\n  2. else `git describe --tags --always --dirty` — local source builds get\n     <tag>-<n>-g<sha>[-dirty] (or a bare short sha);\n  3. else the literal \"dev\".\n\nA build.rs performs this resolution and emits it as a rustc-env that clap's\nversion attribute consumes via env!. The Docker build context excludes .git,\nso inside the image only steps 1 and 3 apply — which is why docker.yml\ncomputes the value (tag for a release, <ref>-<sha> otherwise) and passes it\nas a LUR_VERSION build-arg the Dockerfile exports into the cargo build.\nscripts/docker-build.sh forwards its TAG knob the same way.\n\nThis avoids depending on the Cargo.toml version field. The cli test pins the\noutput format and the override (lur <non-empty>, never 0.1.0) rather than a\nliteral, since the value is build-time-resolved. README documents the\nbehavior.\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-28T01:21:42+08:00",
+          "tree_id": "866d4e9d8c3474d615a08f426319734622d4ea7a",
+          "url": "https://github.com/henry40408/lur/commit/7f653bd20ccfda8e7ab8fa837b74f7902ec62fb1"
+        },
+        "date": 1782580975866,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 265221,
+            "range": "± 11816",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5292,
+            "range": "± 108",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 210879,
+            "range": "± 6316",
             "unit": "ns/iter"
           }
         ]
