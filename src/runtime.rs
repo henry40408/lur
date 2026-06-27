@@ -63,6 +63,9 @@ pub struct RuntimeConfig {
     /// Per-request wall-clock limit in server mode (ignored in one-shot). `None`
     /// leaves handlers unbounded; on timeout the request gets a 5xx.
     pub per_event_timeout: Option<Duration>,
+    /// Host-side `lur.state` store, shared by every VM built from this config so
+    /// cross-request state survives the pool (spec §6).
+    pub state: Arc<crate::capabilities::state::StateStore>,
 }
 
 impl Default for RuntimeConfig {
@@ -75,6 +78,7 @@ impl Default for RuntimeConfig {
             db_path: None,
             pool_size: 1,
             per_event_timeout: None,
+            state: Arc::new(crate::capabilities::state::StateStore::default()),
         }
     }
 }
