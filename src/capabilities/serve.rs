@@ -5,8 +5,7 @@
 //! owns. In one-shot mode the registry is absent and the calls raise a clear
 //! "only under `lur serve`" error.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use mlua::{Function, Lua, Table, Value};
 
@@ -22,17 +21,18 @@ pub struct Registration {
     pub handler: Function,
 }
 
-/// Host-side collector that `lur.serve.http` writes into. Single-threaded
-/// (`Rc`/`RefCell`) because a VM and its handlers never cross threads.
+/// Host-side collector that `lur.serve.http` writes into. `Arc`/`Mutex` because
+/// the `send` feature requires registration closures to be `Send` (a pooled VM
+/// can be checked out across worker threads).
 #[derive(Clone, Default)]
 pub struct Registry {
-    routes: Rc<RefCell<Vec<Registration>>>,
+    routes: Arc<Mutex<Vec<Registration>>>,
 }
 
 impl Registry {
     /// Drain the collected registrations (consumes them out of the registry).
     pub fn take(&self) -> Vec<Registration> {
-        std::mem::take(&mut self.routes.borrow_mut())
+        std::mem::take(&mut self.routes.lock().expect("registry mutex poisoned"))
     }
 }
 
@@ -46,11 +46,15 @@ pub fn install(lua: &Lua, lur: &Table, registry: Option<&Registry>) -> Result<()
             let registry = registry.clone();
             lua.create_function(
                 move |_, (method, path, handler): (String, String, Function)| {
-                    registry.routes.borrow_mut().push(Registration {
-                        method: method.to_uppercase(),
-                        path,
-                        handler,
-                    });
+                    registry
+                        .routes
+                        .lock()
+                        .expect("registry mutex poisoned")
+                        .push(Registration {
+                            method: method.to_uppercase(),
+                            path,
+                            handler,
+                        });
                     Ok(())
                 },
             )
