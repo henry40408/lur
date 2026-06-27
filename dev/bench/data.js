@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782546191914,
+  "lastUpdate": 1782549159184,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -251,6 +251,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 206889,
             "range": "± 6574",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e39c017a725b3d63f6fca700870eba46ff172121",
+          "message": "docs: add README, ARCHITECTURE, and MIT license (#31)\n\n* docs: add README with CLI reference and Lua API\n\nDocument the two run modes, the capability sandbox (strict/loose profiles,\nremoved Luau globals), the full CLI flag set with SIZE/DURATION grammar and\nconfig-file resolution, and the complete lur.* Lua API surface. Examples are\nverified against the built binary.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* docs: add MIT license\n\nAdd LICENSE.txt (MIT), declare the license in Cargo.toml, and point the\nREADME License section at it.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* docs: add ARCHITECTURE.md for developers\n\nAdd a developer-facing architecture guide covering the shared core (build_lua,\nsandbox ordering, the two-layer timeout), the capability/policy layer, the\none-shot and server execution paths (VM pool checkout, router with :param\nprecedence, request lifecycle, per-call isolation, cron, graceful shutdown),\nstate/storage, the async core, and config resolution. Link it from the README.\n\nAlso correct two README inaccuracies found while reading the code: routing\nsupports :param segments with static-beats-dynamic precedence (not exact-match),\nand handler responses honor status/body only (response headers are not yet\nwired). Both examples verified against the built binary.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.8 <noreply@anthropic.com>",
+          "timestamp": "2026-06-27T16:31:30+08:00",
+          "tree_id": "a09ba65415d586e7b322682bea4ca1d4b52035b9",
+          "url": "https://github.com/henry40408/lur/commit/e39c017a725b3d63f6fca700870eba46ff172121"
+        },
+        "date": 1782549158943,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 252805,
+            "range": "± 3952",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5222,
+            "range": "± 164",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 206202,
+            "range": "± 5756",
             "unit": "ns/iter"
           }
         ]
