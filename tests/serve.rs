@@ -148,6 +148,39 @@ fn req_json_decodes_the_body() {
 }
 
 #[test]
+fn global_writes_do_not_bleed_across_requests() {
+    // A handler that creates a NEW global. sandbox(true) does not stop this, and
+    // without per-call isolation the value persists to the next request.
+    let s = serve(
+        "lur.serve.http('GET', '/c', function(req)\n\
+         \tcounter = (counter or 0) + 1\n\
+         \treturn { body = tostring(counter) }\n\
+         end)",
+    );
+    assert_eq!(s.dispatch("GET", "/c", b"").unwrap().body, b"1");
+    assert_eq!(
+        s.dispatch("GET", "/c", b"").unwrap().body,
+        b"1",
+        "a global written by one request must not leak into the next"
+    );
+}
+
+#[test]
+fn isolated_handler_still_reads_real_globals() {
+    // The fresh per-call environment must fall through to the real globals, so
+    // capability modules like lur.json stay usable.
+    let s = serve(
+        "lur.serve.http('GET', '/j', function(req)\n\
+         \treturn { body = lur.json.encode({ ok = true }) }\n\
+         end)",
+    );
+    assert_eq!(
+        s.dispatch("GET", "/j", b"").unwrap().body,
+        br#"{"ok":true}"#
+    );
+}
+
+#[test]
 fn serve_http_is_a_registration_error_in_one_shot() {
     let rt = lur::runtime::Runtime::new().expect("runtime builds");
     assert!(
