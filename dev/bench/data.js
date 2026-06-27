@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782580976563,
+  "lastUpdate": 1782582168485,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -587,6 +587,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 210879,
             "range": "± 6316",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7cbf91946f81667664eb313d94011dbc5c5dbf93",
+          "message": "refactor: rename LUR_VERSION build env var to GIT_VERSION (#41)\n\nAdopt the sibling `noadd` project's convention so the version-stamp knob\nhas the same name across both repos. The build.rs env layer now also\ntreats the literal `dev` as unset (alongside empty), falling through to\n`git describe` — which lets the Dockerfile default `ARG GIT_VERSION=dev`\nwithout coincidentally stamping a real \"dev\" version.\n\nNo behavior change for releases or the rolling `:main` image: docker.yml\nstill injects the resolved value, and the Docker context excludes .git so\nan un-injected build resolves to \"dev\" as before.\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-28T01:41:41+08:00",
+          "tree_id": "937e88a0fa1b9bcf2415642127bb5e93882af56c",
+          "url": "https://github.com/henry40408/lur/commit/7cbf91946f81667664eb313d94011dbc5c5dbf93"
+        },
+        "date": 1782582168225,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 253280,
+            "range": "± 18090",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5275,
+            "range": "± 211",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 206940,
+            "range": "± 1993",
             "unit": "ns/iter"
           }
         ]
