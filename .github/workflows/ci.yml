@@ -15,7 +15,6 @@ env:
 
 jobs:
   lint:
-    name: fmt + clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -29,7 +28,6 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
   test:
-    name: nextest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -42,7 +40,6 @@ jobs:
         run: cargo nextest run
 
   coverage:
-    name: coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -64,7 +61,6 @@ jobs:
           fail_ci_if_error: false
 
   perf:
-    name: perf gate
     runs-on: ubuntu-latest
     permissions:
       contents: write # record the moving baseline to gh-pages on push to main
@@ -95,7 +91,6 @@ jobs:
           summary-always: true
 
   deny:
-    name: cargo-deny
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
