@@ -150,19 +150,42 @@ fn req_json_decodes_the_body() {
 #[test]
 fn global_writes_do_not_bleed_across_requests() {
     // A handler that creates a NEW global. sandbox(true) does not stop this, and
-    // without per-call isolation the value persists to the next request.
-    let s = serve(
+    // without per-call isolation the value persists to the next request. Pinned
+    // to a single-VM pool so both requests provably hit the same VM.
+    let s = Server::load(
         "lur.serve.http('GET', '/c', function(req)\n\
          \tcounter = (counter or 0) + 1\n\
          \treturn { body = tostring(counter) }\n\
          end)",
-    );
+        RuntimeConfig {
+            pool_size: 1,
+            ..Default::default()
+        },
+    )
+    .expect("app loads");
     assert_eq!(s.dispatch("GET", "/c", b"").unwrap().body, b"1");
     assert_eq!(
         s.dispatch("GET", "/c", b"").unwrap().body,
         b"1",
         "a global written by one request must not leak into the next"
     );
+}
+
+#[test]
+fn multi_vm_pool_resolves_routes_on_every_vm() {
+    // Build a 3-VM pool: every VM collects the same registrations, so the
+    // host-assigned handler ids must line up and routing works on each.
+    let s = Server::load(
+        "lur.serve.http('GET', '/users/:id', function(req) return { body = req.params.id } end)",
+        RuntimeConfig {
+            pool_size: 3,
+            ..Default::default()
+        },
+    )
+    .expect("app loads");
+    for _ in 0..6 {
+        assert_eq!(s.dispatch("GET", "/users/7", b"").unwrap().body, b"7");
+    }
 }
 
 #[test]

@@ -1,12 +1,14 @@
-//! Server mode (spec §3): load `app.lua` to collect route registrations, then
-//! dispatch incoming requests to the matching Lua handler.
+//! Server mode (spec §3): load `app.lua` into a pool of pre-warmed VMs, then
+//! dispatch each request to the matching Lua handler on an exclusively-borrowed
+//! VM.
 //!
-//! This module owns the host-side route table and the request/response bridge.
-//! The network layer (hyper) is a thin adapter on top of [`Server::dispatch`].
+//! The host owns the route table (`(method, path) → handler id`); each pooled VM
+//! holds its own handler closures, keyed by that id. The network layer (hyper)
+//! is a thin adapter on top of [`Server::dispatch`].
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
@@ -14,21 +16,85 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response as HyperResponse};
 use hyper_util::rt::TokioIo;
-use mlua::{Function, MultiValue, Value};
+use mlua::{Function, Lua, MultiValue, Value};
 use tokio::net::TcpListener;
-use tokio::task::LocalSet;
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::capabilities::serve::Registry;
-use crate::runtime::{RunError, Runtime, RuntimeConfig};
+use crate::runtime::{Deadline, RunError, RuntimeConfig, build_lua};
 
-/// A loaded server application: a warmed-up VM plus its host-side route table.
+/// A loaded server application: a VM pool plus the host-side route table and the
+/// multi-threaded runtime that drives request handling.
 pub struct Server {
-    runtime: Runtime,
+    pool: Pool,
     router: Router,
-    /// Serializes handler execution on the single VM so a per-call environment
-    /// swap can't be observed by another in-flight request across an `await`.
-    /// (The VM pool restores cross-request concurrency in a later slice.)
-    serialize: tokio::sync::Mutex<()>,
+    rt: tokio::runtime::Runtime,
+}
+
+/// One pre-warmed VM in the pool: its sandboxed Lua state and the handler
+/// closures it collected at warm-up, indexed by the host-assigned handler id.
+struct Vm {
+    lua: Lua,
+    #[allow(dead_code)] // wired to the per-event timeout in a later slice.
+    deadline: Deadline,
+    handlers: Vec<Function>,
+}
+
+/// A fixed-size pool of VMs, each checked out exclusively per request. The
+/// semaphore caps in-flight handlers at the pool size; a waiter parks until a
+/// VM is returned.
+struct Pool {
+    available: Mutex<Vec<Vm>>,
+    permits: Semaphore,
+}
+
+/// An exclusively-borrowed VM; returns itself to the pool on drop (before the
+/// permit is released, so a waiter always finds a VM waiting).
+struct CheckedOut<'a> {
+    pool: &'a Pool,
+    vm: Option<Vm>,
+    _permit: SemaphorePermit<'a>,
+}
+
+impl Pool {
+    async fn checkout(&self) -> CheckedOut<'_> {
+        let permit = self
+            .permits
+            .acquire()
+            .await
+            .expect("pool semaphore never closed");
+        let vm = self
+            .available
+            .lock()
+            .expect("pool mutex poisoned")
+            .pop()
+            .expect("a permit guarantees an available VM");
+        CheckedOut {
+            pool: self,
+            vm: Some(vm),
+            _permit: permit,
+        }
+    }
+}
+
+impl CheckedOut<'_> {
+    fn vm(&self) -> &Vm {
+        self.vm.as_ref().expect("VM present until drop")
+    }
+}
+
+impl Drop for CheckedOut<'_> {
+    fn drop(&mut self) {
+        if let Some(vm) = self.vm.take() {
+            self.pool
+                .available
+                .lock()
+                .expect("pool mutex poisoned")
+                .push(vm);
+        }
+        // `_permit` releases after this body, so the VM is back in the pool
+        // before any waiter is woken.
+    }
 }
 
 /// Decoded path parameters: `(name, raw-byte value)` pairs.
@@ -42,15 +108,16 @@ enum Seg {
     Param(String),
 }
 
-/// A compiled route: method, parsed pattern, and the handler closure.
+/// A compiled route: method, parsed pattern, and the handler id (an index into
+/// every VM's handler list — the same registration order across all VMs).
 struct Route {
     method: String,
     pattern: Vec<Seg>,
-    handler: Function,
+    id: usize,
 }
 
-/// The host-side route table: resolves `(method, path)` to a handler, applying
-/// static-beats-dynamic precedence independent of registration order.
+/// The host-side route table: resolves `(method, path)` to a handler id,
+/// applying static-beats-dynamic precedence independent of registration order.
 struct Router {
     routes: Vec<Route>,
 }
@@ -81,20 +148,56 @@ pub struct Response {
 }
 
 impl Server {
-    /// Load `app.lua`: build a server-mode VM, run the script once to collect
-    /// its `lur.serve.http` registrations, and compile them into the router
-    /// (which rejects a duplicate `(method, path)` at load time).
+    /// Load `app.lua`: build a multi-threaded runtime and a pool of `pool_size`
+    /// pre-warmed VMs. Each VM runs the script once to collect its own handler
+    /// closures (same registration order across VMs); the route table is built
+    /// from that order and rejects a duplicate `(method, path)` at load time.
     pub fn load(source: &str, config: RuntimeConfig) -> Result<Self, RunError> {
-        let registry = Registry::default();
-        let runtime = Runtime::with_serve(config, registry.clone())?;
-        runtime.run(source)?;
+        let pool_size = config.pool_size.max(1);
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(RunError::AsyncRuntime)?;
 
-        let router = Router::build(registry.take())?;
-        Ok(Self {
-            runtime,
-            router,
-            serialize: tokio::sync::Mutex::new(()),
-        })
+        // Warm up each VM inside the runtime so an app.lua that awaits at the top
+        // level (e.g. fetching config) still works.
+        let (vms, routes) = rt.block_on(async {
+            let mut vms = Vec::with_capacity(pool_size);
+            let mut routes: Option<Vec<(String, String)>> = None;
+            for _ in 0..pool_size {
+                let registry = Registry::default();
+                let (lua, deadline) = build_lua(&config, Some(&registry))?;
+                lua.load(source)
+                    .exec_async()
+                    .await
+                    .map_err(RunError::Script)?;
+
+                let regs = registry.take();
+                let handlers = regs.iter().map(|r| r.handler.clone()).collect();
+                let signature: Vec<(String, String)> =
+                    regs.into_iter().map(|r| (r.method, r.path)).collect();
+                // Every VM must register the same routes in the same order, or
+                // the shared handler ids would not line up.
+                if routes.get_or_insert_with(|| signature.clone()) != &signature {
+                    return Err(RunError::Script(mlua::Error::RuntimeError(
+                        "lur.serve: app.lua registered different routes across VMs".into(),
+                    )));
+                }
+                vms.push(Vm {
+                    lua,
+                    deadline,
+                    handlers,
+                });
+            }
+            Ok((vms, routes.unwrap_or_default()))
+        })?;
+
+        let router = Router::build(&routes)?;
+        let pool = Pool {
+            permits: Semaphore::new(vms.len()),
+            available: Mutex::new(vms),
+        };
+        Ok(Self { pool, router, rt })
     }
 
     /// Dispatch a bare `(method, path, body)` request — query and headers empty.
@@ -111,40 +214,32 @@ impl Server {
     /// Dispatch a fully-described request, driving the async handler on the
     /// runtime's executor (synchronous wrapper).
     pub fn dispatch_raw(&self, req: &RawRequest) -> Result<Response, RunError> {
-        self.runtime.block_on(self.dispatch_async(req))
+        self.rt.block_on(self.dispatch_async(req))
     }
 
-    /// Bind `addr` and serve requests forever. Single VM, single thread: each
-    /// connection is driven on a `LocalSet` so the `!Send` VM never crosses
-    /// threads. (The VM pool for concurrency lands in a later slice.)
+    /// Bind `addr` and serve requests forever on the multi-threaded runtime.
+    /// Each connection is a spawned task; handlers run on whichever VM the pool
+    /// hands out, across worker threads.
     pub fn run(self, addr: SocketAddr) -> std::io::Result<()> {
-        let server = Rc::new(self);
+        let server = Arc::new(self);
         let driver = server.clone();
-        driver.runtime.block_on(async move {
+        driver.rt.block_on(async move {
             let listener = TcpListener::bind(addr).await?;
             eprintln!("lur: listening on http://{addr}");
-            let local = LocalSet::new();
-            let outcome: std::io::Result<()> = local
-                .run_until(async move {
-                    loop {
-                        let (stream, _) = listener.accept().await?;
-                        let io = TokioIo::new(stream);
+            loop {
+                let (stream, _) = listener.accept().await?;
+                let io = TokioIo::new(stream);
+                let server = server.clone();
+                tokio::spawn(async move {
+                    let service = service_fn(move |req| {
                         let server = server.clone();
-                        tokio::task::spawn_local(async move {
-                            let service = service_fn(move |req| {
-                                let server = server.clone();
-                                async move { server.handle(req).await }
-                            });
-                            if let Err(e) =
-                                http1::Builder::new().serve_connection(io, service).await
-                            {
-                                eprintln!("lur: connection error: {e}");
-                            }
-                        });
+                        async move { server.handle(req).await }
+                    });
+                    if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
+                        eprintln!("lur: connection error: {e}");
                     }
-                })
-                .await;
-            outcome
+                });
+            }
         })
     }
 
@@ -196,22 +291,23 @@ impl Server {
     /// The async core of [`Self::dispatch_raw`]; the network loop awaits this
     /// directly rather than blocking.
     async fn dispatch_async(&self, req: &RawRequest) -> Result<Response, RunError> {
-        let Some((handler, params)) = self.router.resolve(&req.method, &req.path) else {
+        let Some((id, params)) = self.router.resolve(&req.method, &req.path) else {
             return Ok(Response {
                 status: 404,
                 body: b"Not Found".to_vec(),
             });
         };
 
-        let lua = self.runtime.lua();
-        let req_table = build_req(lua, req, &params).map_err(RunError::Script)?;
+        // Borrow a VM exclusively for the whole call. Exclusive ownership is what
+        // makes the per-call environment swap safe (no other request runs on this
+        // VM until it is returned) — it replaces the single-VM serialize lock.
+        let checked = self.pool.checkout().await;
+        let vm = checked.vm();
+        let handler = &vm.handlers[id];
 
-        // Hold the VM exclusively for the whole handler call: the per-call
-        // environment is swapped onto the shared handler closure, so another
-        // request resuming across an `await` must not run on the same VM.
-        let _guard = self.serialize.lock().await;
+        let req_table = build_req(&vm.lua, req, &params).map_err(RunError::Script)?;
         handler
-            .set_environment(fresh_env(lua).map_err(RunError::Script)?)
+            .set_environment(fresh_env(&vm.lua).map_err(RunError::Script)?)
             .map_err(RunError::Script)?;
         let values = handler
             .call_async::<MultiValue>(req_table)
@@ -233,36 +329,34 @@ fn fresh_env(lua: &mlua::Lua) -> mlua::Result<mlua::Table> {
 }
 
 impl Router {
-    /// Compile collected registrations, rejecting a duplicate `(method,
-    /// pattern)` — two routes that would match the same requests.
-    fn build(
-        registrations: Vec<crate::capabilities::serve::Registration>,
-    ) -> Result<Self, RunError> {
+    /// Compile `(method, path)` registrations into routes, assigning each its
+    /// registration-order id and rejecting a duplicate `(method, pattern)` —
+    /// two routes that would match the same requests.
+    fn build(registrations: &[(String, String)]) -> Result<Self, RunError> {
         let mut routes: Vec<Route> = Vec::new();
-        for reg in registrations {
-            let pattern = parse_pattern(&reg.path);
+        for (id, (method, path)) in registrations.iter().enumerate() {
+            let pattern = parse_pattern(path);
             let clash = routes
                 .iter()
-                .any(|r| r.method == reg.method && same_signature(&r.pattern, &pattern));
+                .any(|r| &r.method == method && same_signature(&r.pattern, &pattern));
             if clash {
                 return Err(RunError::Script(mlua::Error::RuntimeError(format!(
-                    "lur.serve: duplicate route {} {}",
-                    reg.method, reg.path
+                    "lur.serve: duplicate route {method} {path}"
                 ))));
             }
             routes.push(Route {
-                method: reg.method,
+                method: method.clone(),
                 pattern,
-                handler: reg.handler,
+                id,
             });
         }
         Ok(Self { routes })
     }
 
-    /// Resolve `(method, path)` to a handler and its decoded path parameters.
+    /// Resolve `(method, path)` to a handler id and its decoded path parameters.
     /// Among matches, the most specific (most static segments, then a concrete
     /// method over `ANY`) wins, independent of registration order.
-    fn resolve(&self, method: &str, path: &str) -> Option<(&Function, Params)> {
+    fn resolve(&self, method: &str, path: &str) -> Option<(usize, Params)> {
         let method = method.to_uppercase();
         let req_segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
@@ -280,7 +374,7 @@ impl Router {
                 best_params = params;
             }
         }
-        best.map(|r| (&r.handler, best_params))
+        best.map(|r| (r.id, best_params))
     }
 }
 

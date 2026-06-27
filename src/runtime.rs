@@ -57,6 +57,9 @@ pub struct RuntimeConfig {
     /// SQLite database path for `lur.db` / `lur.kv` (`--db`). `None` makes those
     /// modules raise a clear error when used.
     pub db_path: Option<PathBuf>,
+    /// Number of pre-warmed VMs in the server-mode pool (ignored in one-shot).
+    /// Each is checked out exclusively per request; the count caps concurrency.
+    pub pool_size: usize,
 }
 
 impl Default for RuntimeConfig {
@@ -67,8 +70,54 @@ impl Default for RuntimeConfig {
             policy: Arc::new(Policy::strict()),
             max_http_body: DEFAULT_MAX_HTTP_BODY_BYTES,
             db_path: None,
+            pool_size: 1,
         }
     }
+}
+
+/// Shared deadline cell: when set, the interrupt hook keeps raising past this
+/// instant so no `pcall`-loop can outlive it.
+pub(crate) type Deadline = Arc<Mutex<Option<Instant>>>;
+
+/// Build and configure a sandboxed Luau VM: strip `require`, install the `lur.*`
+/// capabilities (with the optional serve registry), freeze globals, install the
+/// deadline interrupt, and apply the memory cap. Shared by [`Runtime`] (one-shot)
+/// and the server-mode VM pool.
+pub(crate) fn build_lua(
+    config: &RuntimeConfig,
+    serve: Option<&Registry>,
+) -> Result<(Lua, Deadline), RunError> {
+    let lua = Lua::new();
+    // `require` survives `sandbox(true)` and loads on-disk .luau files,
+    // bypassing the capability layer — strip it before freezing globals.
+    lua.globals()
+        .set("require", mlua::Value::Nil)
+        .map_err(RunError::Init)?;
+
+    crate::capabilities::install(&lua, config, serve)?;
+
+    lua.sandbox(true).map_err(RunError::Init)?;
+
+    let deadline: Deadline = Arc::new(Mutex::new(None));
+    let hook_deadline = Arc::clone(&deadline);
+    lua.set_interrupt(
+        move |_lua| match *hook_deadline.lock().expect("deadline mutex poisoned") {
+            Some(at) if Instant::now() >= at => {
+                // Keep raising on every interrupt past the deadline: the
+                // outermost driving loop cannot wrap itself in pcall, so it
+                // cannot swallow this.
+                Err(mlua::Error::RuntimeError("lur: deadline exceeded".into()))
+            }
+            _ => Ok(VmState::Continue),
+        },
+    );
+
+    // Apply the memory cap last, after construction/sandbox/injection have
+    // done their own allocations.
+    lua.set_memory_limit(config.memory_limit)
+        .map_err(RunError::Init)?;
+
+    Ok((lua, deadline))
 }
 
 /// A single sandboxed Luau VM that can execute scripts.
@@ -99,67 +148,15 @@ impl Runtime {
 
     /// Build a new sandboxed runtime from an explicit [`RuntimeConfig`].
     pub fn with_config(config: RuntimeConfig) -> Result<Self, RunError> {
-        Self::build(config, None)
-    }
-
-    /// Build a runtime for server mode, wiring `lur.serve.*` to collect route
-    /// registrations into `registry` during `app.lua` warm-up.
-    pub(crate) fn with_serve(config: RuntimeConfig, registry: Registry) -> Result<Self, RunError> {
-        Self::build(config, Some(registry))
-    }
-
-    fn build(config: RuntimeConfig, serve: Option<Registry>) -> Result<Self, RunError> {
-        let lua = Lua::new();
-        // `require` survives `sandbox(true)` and loads on-disk .luau files,
-        // bypassing the capability layer — strip it before freezing globals.
-        lua.globals()
-            .set("require", mlua::Value::Nil)
-            .map_err(RunError::Init)?;
-
-        crate::capabilities::install(&lua, &config, serve.as_ref())?;
-
-        lua.sandbox(true).map_err(RunError::Init)?;
-
-        let deadline: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
-        let hook_deadline = Arc::clone(&deadline);
-        lua.set_interrupt(move |_lua| {
-            match *hook_deadline.lock().expect("deadline mutex poisoned") {
-                Some(at) if Instant::now() >= at => {
-                    // Keep raising on every interrupt past the deadline: the
-                    // outermost driving loop cannot wrap itself in pcall, so it
-                    // cannot swallow this.
-                    Err(mlua::Error::RuntimeError("lur: deadline exceeded".into()))
-                }
-                _ => Ok(VmState::Continue),
-            }
-        });
-
-        // Apply the memory cap last, after construction/sandbox/injection have
-        // done their own allocations.
-        lua.set_memory_limit(config.memory_limit)
-            .map_err(RunError::Init)?;
-
+        let (lua, deadline) = build_lua(&config, None)?;
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(RunError::AsyncRuntime)?;
-
         Ok(Self { lua, deadline, rt })
     }
 
     // ---------------------------------------------------------------------
-
-    /// The underlying VM, for server-mode dispatch that builds `req` tables and
-    /// calls stored handler closures directly.
-    pub(crate) fn lua(&self) -> &Lua {
-        &self.lua
-    }
-
-    /// Drive `fut` to completion on the runtime's async executor. Used by
-    /// server mode's synchronous entry points (the network loop awaits instead).
-    pub(crate) fn block_on<F: Future>(&self, fut: F) -> F::Output {
-        self.rt.block_on(fut)
-    }
 
     /// Run `source` to completion with no time limit.
     pub fn run(&self, source: &str) -> Result<(), RunError> {

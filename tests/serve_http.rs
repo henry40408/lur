@@ -41,6 +41,11 @@ impl Drop for Reaper {
 /// Spawn `lur serve` on a fresh port with `app_src` as the app. Returns the
 /// bound address, the reaper, and the tempdir (kept alive for the app file).
 fn spawn_server(app_src: &str) -> (String, Reaper, tempfile::TempDir) {
+    spawn_server_args(app_src, &[])
+}
+
+/// As [`spawn_server`], with extra CLI arguments (e.g. `--pool-size`).
+fn spawn_server_args(app_src: &str, extra: &[&str]) -> (String, Reaper, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let app = dir.path().join("app.lua");
     std::fs::write(&app, app_src).unwrap();
@@ -51,6 +56,7 @@ fn spawn_server(app_src: &str) -> (String, Reaper, tempfile::TempDir) {
         .arg("serve")
         .arg("--bind")
         .arg(&addr)
+        .args(extra)
         .arg(&app)
         .spawn()
         .expect("spawn lur serve");
@@ -106,5 +112,39 @@ fn serve_threads_param_query_and_header_to_the_handler() {
     assert!(
         response.ends_with("99 hi yo"),
         "body should echo param/query/header: {response:?}"
+    );
+}
+
+#[test]
+fn pool_serves_concurrent_requests_in_parallel() {
+    // Each request sleeps 200ms. With a 2-VM pool, two concurrent requests run
+    // on separate VMs and finish together (~200ms), not serialized (~400ms).
+    let (addr, _reaper, _dir) = spawn_server_args(
+        "lur.serve.http('GET', '/slow', function(req)\n\
+         \tlur.async.sleep(200)\n\
+         \treturn { body = 'done' }\n\
+         end)",
+        &["--pool-size", "2"],
+    );
+    // Make sure the server is up before timing.
+    drop(wait_until_up(&addr));
+
+    let request = "GET /slow HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    let start = Instant::now();
+    let threads: Vec<_> = (0..2)
+        .map(|_| {
+            let addr = addr.clone();
+            std::thread::spawn(move || round_trip(&addr, request))
+        })
+        .collect();
+    for t in threads {
+        let resp = t.join().unwrap();
+        assert!(resp.contains("done"), "handler response: {resp:?}");
+    }
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(350),
+        "two 200ms requests on a 2-VM pool should overlap, took {elapsed:?}"
     );
 }

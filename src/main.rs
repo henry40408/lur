@@ -89,8 +89,20 @@ struct ServeCli {
     #[arg(long, value_name = "ADDR", default_value = "127.0.0.1:8080")]
     bind: SocketAddr,
 
+    /// Number of pre-warmed VMs in the pool — the cap on concurrent requests.
+    /// Defaults to the CPU count.
+    #[arg(long, value_name = "N", default_value_t = default_pool_size())]
+    pool_size: usize,
+
     #[command(flatten)]
     common: CommonFlags,
+}
+
+/// Default VM-pool size: the number of CPUs available to the process.
+fn default_pool_size() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
 }
 
 /// Resolve the capability policy from the shared flags. Roots are canonicalized
@@ -130,6 +142,7 @@ fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig,
         policy,
         max_http_body: flags.max_http_body,
         db_path: flags.db.clone(),
+        pool_size: 1,
     })
 }
 
@@ -154,13 +167,14 @@ fn run_serve(cli: ServeCli) -> ExitCode {
         }
     };
 
-    let config = match build_config(&cli.common, Vec::new()) {
+    let mut config = match build_config(&cli.common, Vec::new()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("lur: {e}");
             return ExitCode::from(2);
         }
     };
+    config.pool_size = cli.pool_size;
 
     let server = match Server::load(&source, config) {
         Ok(s) => s,
