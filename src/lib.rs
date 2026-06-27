@@ -4,6 +4,7 @@
 //! and server). The binary in `main.rs` is a thin CLI on top of it.
 
 pub mod capabilities;
+pub mod config;
 pub mod policy;
 pub mod runtime;
 pub mod serve;
