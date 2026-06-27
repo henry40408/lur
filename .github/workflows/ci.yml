@@ -54,7 +54,7 @@ jobs:
       - name: Run benchmarks
         # Criterion emits the libtest "bencher" format that tool:cargo parses.
         run: cargo bench --bench runtime -- --output-format bencher | tee output.txt
-      - name: Store result and gate on regression
+      - name: Store result and report regressions
         uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
         with:
           name: lur criterion
@@ -63,9 +63,11 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # Record the moving baseline only on push to main; PRs compare to it.
           auto-push: ${{ github.event_name == 'push' }}
-          fail-on-alert: true
-          # Wall-clock on shared runners is noisy, so gate on a clear regression
-          # (>1.5x); tighten once the gh-pages history shows the noise floor.
+          # Informational only: wall-clock on shared runners is too noisy for a
+          # hard gate (a no-op change measured 1.85x vs the baseline once), so
+          # the comparison is surfaced as a PR comment + summary but never blocks
+          # the merge. lint and test remain hard gates.
+          fail-on-alert: false
           alert-threshold: "150%"
           comment-on-alert: true
           summary-always: true
