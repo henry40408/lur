@@ -5,7 +5,7 @@
 //! auto-decompression); UTF-8 is assumed only at the `json` opt and `res.json()`.
 
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Once, OnceLock};
 use std::time::Duration;
 
 use mlua::{Error, Lua, Table, Value};
@@ -88,9 +88,18 @@ fn ensure_client(cell: &OnceLock<Client>, policy: &Arc<Policy>) -> mlua::Result<
     Ok(cell.get().expect("client just set").clone())
 }
 
+/// Install ring as the process-wide rustls `CryptoProvider`. reqwest is built
+/// with `rustls-no-provider`, so a provider must be installed before the first
+/// TLS handshake. `Once` makes this idempotent across pooled VMs; `install_default`
+/// errors only if a provider is already set, which is exactly the state we want.
+static INSTALL_TLS_PROVIDER: Once = Once::new();
+
 /// Build a reqwest client whose redirect policy re-checks each hop and whose
 /// DNS resolver drops private IPs (SSRF deny). TLS verification is always on.
 fn build_client(policy: &Arc<Policy>) -> reqwest::Result<Client> {
+    INSTALL_TLS_PROVIDER.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
     let redirect_policy = {
         let policy = Arc::clone(policy);
         redirect::Policy::custom(move |attempt| {
