@@ -357,3 +357,20 @@ fn missing_script_exits_with_a_clear_error() {
         .code(2)
         .stderr(predicate::str::contains("does-not-exist.lua"));
 }
+
+/// `--version` reports a build-stamped string, not the Cargo.toml version. The
+/// exact value is resolved at build time (injected `LUR_VERSION` → `git
+/// describe` → `dev`), so this pins the format and the override rather than a
+/// literal: `lur <non-empty>` that is never the `0.1.0` Cargo fallback.
+#[test]
+fn version_flag_reports_a_build_stamped_version() {
+    let out = lur().arg("--version").output().expect("runs");
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).expect("utf8");
+    let version = stdout
+        .strip_prefix("lur ")
+        .expect("starts with 'lur '")
+        .trim();
+    assert!(!version.is_empty(), "version stamp is non-empty");
+    assert_ne!(version, "0.1.0", "does not fall back to the Cargo version");
+}

@@ -46,6 +46,18 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
+      # Resolve the `lur --version` stamp: the published tag for a release,
+      # otherwise a `<ref>-<short-sha>` marker (e.g. `main-1a2b3c4`). The Docker
+      # context excludes .git, so build.rs can't run `git describe` in-image —
+      # the value is computed here and injected as a build-arg.
+      - id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "value=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
@@ -53,6 +65,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Stamp `lur --version` (see the version step above).
+          build-args: |
+            LUR_VERSION=${{ steps.version.outputs.value }}
           # Persist BuildKit layer cache across runs via the GitHub Actions cache
           # backend. This caches image layers (apt install, cargo-zigbuild build,
           # zig download) — not the in-Dockerfile cargo/target cache mounts, which

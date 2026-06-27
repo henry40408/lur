@@ -37,7 +37,10 @@ is a static musl build on `distroless/static` (CA certificates included, runs as
 non-root user, no shell):
 
 Tags: `:main` tracks the latest commit on `main`; releases publish `:X.Y.Z`, `:X.Y`,
-and `:latest`.
+and `:latest`. `lur --version` reports the published tag for a release, a
+`<ref>-<short-sha>` marker (e.g. `main-1a2b3c4`) for the `:main` image, the `git
+describe` output for a local source build, and `dev` only when none of those are
+available.
 
 ```sh
 docker run --rm ghcr.io/henry40408/lur:latest --version

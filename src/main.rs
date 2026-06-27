@@ -81,7 +81,7 @@ struct CommonFlags {
 
 /// `lur` — run a sandboxed Lua (Luau) script.
 #[derive(Parser)]
-#[command(name = "lur", version, about)]
+#[command(name = "lur", version = env!("LUR_VERSION"), about)]
 struct Cli {
     /// Path to the script to run.
     script: PathBuf,
