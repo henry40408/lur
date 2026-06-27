@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -9,8 +10,27 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// A stable empty XDG config dir, so the binary's default-location config
+/// discovery never bleeds the developer's real `~/.config/lur/config` into a
+/// test. Tests that exercise discovery override `XDG_CONFIG_HOME` themselves.
+fn empty_xdg() -> &'static Path {
+    static DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
+    DIR.get_or_init(|| tempfile::tempdir().unwrap()).path()
+}
+
 fn lur() -> Command {
-    Command::cargo_bin("lur").expect("binary builds")
+    let mut c = Command::cargo_bin("lur").expect("binary builds");
+    c.env("XDG_CONFIG_HOME", empty_xdg());
+    c
+}
+
+/// Write a config file into a fresh temp dir; returns the dir (keep it alive)
+/// and the file path.
+fn write_config(contents: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config");
+    std::fs::write(&path, contents).unwrap();
+    (dir, path)
 }
 
 #[test]
@@ -188,6 +208,114 @@ fn strict_and_loose_are_mutually_exclusive() {
         .arg(fixture("ok.lua"))
         .assert()
         .code(2);
+}
+
+#[test]
+fn config_env_grant_is_honored() {
+    let (_d, cfg) = write_config("[allow]\nenv = [\"LUR_TEST_VAR\"]\n");
+    lur()
+        .arg("--config")
+        .arg(&cfg)
+        .arg(fixture("env_read.lua"))
+        .arg("LUR_TEST_VAR")
+        .env("LUR_TEST_VAR", "secret-value")
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("secret-value"));
+}
+
+#[test]
+fn config_default_profile_loose_is_permissive() {
+    let (_d, cfg) = write_config("default_profile = \"loose\"\n");
+    lur()
+        .arg("--config")
+        .arg(&cfg)
+        .arg(fixture("env_read.lua"))
+        .arg("LUR_TEST_VAR")
+        .env("LUR_TEST_VAR", "v")
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("v"));
+}
+
+#[test]
+fn strict_flag_overrides_config_loose() {
+    // Scalar settings are last-wins: an explicit --strict beats config loose.
+    let (_d, cfg) = write_config("default_profile = \"loose\"\n");
+    lur()
+        .arg("--config")
+        .arg(&cfg)
+        .arg("--strict")
+        .arg(fixture("env_read.lua"))
+        .arg("LUR_TEST_VAR")
+        .env("LUR_TEST_VAR", "v")
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("nil"));
+}
+
+#[test]
+fn config_and_flag_env_grants_are_unioned() {
+    // A flag-granted var works alongside config…
+    let (_d, cfg) = write_config("[allow]\nenv = [\"FROM_CONFIG\"]\n");
+    lur()
+        .arg("--config")
+        .arg(&cfg)
+        .arg("--allow-env")
+        .arg("FROM_FLAG")
+        .arg(fixture("env_read.lua"))
+        .arg("FROM_FLAG")
+        .env("FROM_FLAG", "flagval")
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("flagval"));
+
+    // …and the config-granted var still resolves with the flag present.
+    let (_d2, cfg2) = write_config("[allow]\nenv = [\"FROM_CONFIG\"]\n");
+    lur()
+        .arg("--config")
+        .arg(&cfg2)
+        .arg("--allow-env")
+        .arg("FROM_FLAG")
+        .arg(fixture("env_read.lua"))
+        .arg("FROM_CONFIG")
+        .env("FROM_CONFIG", "cfgval")
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("cfgval"));
+}
+
+#[test]
+fn default_location_config_is_discovered_and_no_config_ignores_it() {
+    let xdg = tempfile::tempdir().unwrap();
+    let lur_dir = xdg.path().join("lur");
+    std::fs::create_dir_all(&lur_dir).unwrap();
+    std::fs::write(
+        lur_dir.join("config"),
+        "[allow]\nenv = [\"LUR_TEST_VAR\"]\n",
+    )
+    .unwrap();
+
+    // Discovered at the default location → env granted.
+    lur()
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .arg(fixture("env_read.lua"))
+        .arg("LUR_TEST_VAR")
+        .env("LUR_TEST_VAR", "v")
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("v"));
+
+    // --no-config drops the config layer → nil.
+    lur()
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .arg("--no-config")
+        .arg(fixture("env_read.lua"))
+        .arg("LUR_TEST_VAR")
+        .env("LUR_TEST_VAR", "v")
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("nil"));
 }
 
 #[test]

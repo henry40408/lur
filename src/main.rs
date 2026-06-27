@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
+use lur::config::{Config, Profile, expand_tilde};
 use lur::policy::Policy;
 use lur::runtime::{
     DEFAULT_MAX_HTTP_BODY_BYTES, DEFAULT_MEMORY_LIMIT_BYTES, RunError, Runtime, RuntimeConfig,
@@ -61,6 +62,15 @@ struct CommonFlags {
     /// SQLite database path for lur.db / lur.kv.
     #[arg(long = "db", value_name = "PATH")]
     db: Option<PathBuf>,
+
+    /// Load a policy config file (default: `$XDG_CONFIG_HOME/lur/config`, else
+    /// `~/.config/lur/config`).
+    #[arg(long = "config", value_name = "FILE")]
+    config: Option<PathBuf>,
+
+    /// Ignore the user config entirely → pure shipped strict, zero grants.
+    #[arg(long = "no-config", conflicts_with = "config")]
+    no_config: bool,
 }
 
 /// `lur` — run a sandboxed Lua (Luau) script.
@@ -123,24 +133,77 @@ fn default_pool_size() -> usize {
         .unwrap_or(1)
 }
 
-/// Resolve the capability policy from the shared flags. Roots are canonicalized
-/// (and must exist) by [`Policy::from_roots`]; `-A` grants the whole tree.
-fn build_policy(flags: &CommonFlags) -> Result<Policy, String> {
-    // `-A` and the `loose` profile both resolve to the permissive policy; the
-    // default (and explicit `--strict`) keep the deny-by-default base.
-    if flags.allow_all || flags.loose {
+/// Load the user config layer: `--no-config` drops it, `--config` forces a
+/// specific file (which must exist), otherwise the default location is loaded
+/// if present (absent → empty, no error).
+fn load_config(flags: &CommonFlags) -> Result<Config, String> {
+    if flags.no_config {
+        return Ok(Config::empty());
+    }
+    if let Some(path) = &flags.config {
+        return Config::load(path).map_err(|e| e.to_string());
+    }
+    match default_config_path() {
+        Some(path) if path.exists() => Config::load(&path).map_err(|e| e.to_string()),
+        _ => Ok(Config::empty()),
+    }
+}
+
+/// The default config path: `$XDG_CONFIG_HOME/lur/config`, falling back to
+/// `~/.config/lur/config`.
+fn default_config_path() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|x| !x.is_empty()) {
+        return Some(PathBuf::from(xdg).join("lur").join("config"));
+    }
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config").join("lur").join("config"))
+}
+
+/// Resolve the capability policy from the config layer and the per-run flags.
+/// The profile is last-wins (flags beat config); allowlists are additive
+/// (config standing grants ∪ flag per-run grants). `-A`/`--loose` force the
+/// permissive profile (§5/§12).
+fn build_policy(flags: &CommonFlags, config: &Config) -> Result<Policy, String> {
+    let profile = if flags.allow_all || flags.loose {
+        Profile::Loose
+    } else if flags.strict {
+        Profile::Strict
+    } else {
+        config.default_profile.unwrap_or(Profile::Strict)
+    };
+
+    if profile == Profile::Loose {
         return Policy::loose().map_err(|e| e.to_string());
     }
-    let mut read = flags.allow_fs_read.clone();
-    let mut write = flags.allow_fs_write.clone();
+
+    // Strict: union config grants (config fs paths may use `~`) with flag grants.
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = home.as_deref();
+    let mut read: Vec<PathBuf> = config
+        .fs_read
+        .iter()
+        .map(|p| expand_tilde(p, home))
+        .collect();
+    read.extend(flags.allow_fs_read.iter().cloned());
+    let mut write: Vec<PathBuf> = config
+        .fs_write
+        .iter()
+        .map(|p| expand_tilde(p, home))
+        .collect();
+    write.extend(flags.allow_fs_write.iter().cloned());
     for p in &flags.allow_fs {
         read.push(p.clone());
         write.push(p.clone());
     }
+
+    let mut env = config.env.clone();
+    env.extend(flags.allow_env.iter().cloned());
+    let mut net = config.net.clone();
+    net.extend(flags.allow_net.iter().cloned());
+
     let mut policy = Policy::from_roots(&read, &write)
-        .map_err(|e| format!("invalid --allow-fs path: {e}"))?
-        .with_env(flags.allow_env.clone())
-        .with_net(flags.allow_net.clone());
+        .map_err(|e| format!("invalid fs allowlist path: {e}"))?
+        .with_env(env)
+        .with_net(net);
     if flags.allow_private {
         policy = policy.allow_private();
     }
@@ -150,7 +213,8 @@ fn build_policy(flags: &CommonFlags) -> Result<Policy, String> {
 /// Build a [`RuntimeConfig`] from the shared flags (policy resolved, args set
 /// by the caller).
 fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig, String> {
-    let policy = Arc::new(build_policy(flags)?);
+    let config = load_config(flags)?;
+    let policy = Arc::new(build_policy(flags, &config)?);
     Ok(RuntimeConfig {
         memory_limit: flags.max_memory,
         args,
