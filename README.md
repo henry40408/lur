@@ -235,4 +235,4 @@ CI runs lint, tests, coverage (Codecov), and a benchmark report on every push an
 
 ## License
 
-No license has been declared for this project yet.
+Licensed under the [MIT License](LICENSE.txt).
