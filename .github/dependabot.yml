@@ -1,0 +1,26 @@
+# Dependabot keeps Cargo crates and the pinned GitHub Actions up to date.
+# A 7-day cooldown mirrors the project's supply-chain policy (CLAUDE.md): a new
+# release is not proposed until it has been published for at least 7 days, so a
+# malicious or broken release has time to be caught and yanked first.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
