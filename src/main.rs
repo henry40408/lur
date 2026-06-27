@@ -149,6 +149,7 @@ fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig,
         db_path: flags.db.clone(),
         pool_size: 1,
         per_event_timeout: None,
+        state: Default::default(),
     })
 }
 

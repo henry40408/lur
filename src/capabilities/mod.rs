@@ -15,6 +15,7 @@ pub mod json;
 pub mod log;
 pub mod null;
 pub mod serve;
+pub mod state;
 
 use mlua::Lua;
 
@@ -43,6 +44,7 @@ pub fn install(
     async_ops::install(lua, &lur)?;
     args::install(lua, &lur, &config.args)?;
     serve::install(lua, &lur, serve_registry)?;
+    state::install(lua, &lur, config.state.clone())?;
 
     lua.globals().set("lur", lur).map_err(RunError::Init)?;
     Ok(())
