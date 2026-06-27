@@ -29,8 +29,11 @@ RUN set -eux; \
 WORKDIR /app
 COPY . .
 
-# Map Docker's TARGETARCH onto the Rust musl triple and build.
+# Map Docker's TARGETARCH onto the Rust musl triple and build. LUR_VERSION (the
+# release tag, empty for non-release builds) is read by build.rs to stamp
+# `lur --version`; an empty value falls back to "dev".
 ARG TARGETARCH
+ARG LUR_VERSION=
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target,sharing=locked \
     set -eux; \
@@ -39,6 +42,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       arm64) target=aarch64-unknown-linux-musl ;; \
       *) echo "unsupported target arch $TARGETARCH" >&2; exit 1 ;; \
     esac; \
+    export LUR_VERSION="${LUR_VERSION}"; \
     rustup target add "$target"; \
     cargo zigbuild --release --target "$target"; \
     install -Dm755 "target/${target}/release/lur" /out/lur

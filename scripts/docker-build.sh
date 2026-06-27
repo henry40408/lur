@@ -21,7 +21,9 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # A dedicated builder instance keeps the multi-arch cache off the default one.
 docker buildx inspect lur-builder >/dev/null 2>&1 || docker buildx create --name lur-builder >/dev/null
 
-args=(buildx build --builder lur-builder --platform "$PLATFORMS" -t "$ref")
+# Stamp `lur --version` with TAG (so a `TAG=v1.2.3` build reports v1.2.3); the
+# default "dev" tag yields the same "dev" placeholder build.rs falls back to.
+args=(buildx build --builder lur-builder --platform "$PLATFORMS" -t "$ref" --build-arg "LUR_VERSION=${TAG}")
 if [ "$PUSH" = "true" ]; then
   args+=(--push)            # multi-arch manifest can only be exported by pushing
 elif [ "$LOAD" = "true" ]; then
