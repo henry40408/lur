@@ -319,6 +319,28 @@ fn default_location_config_is_discovered_and_no_config_ignores_it() {
 }
 
 #[test]
+fn max_concurrency_caps_inflight_async_tasks() {
+    // Six overlapping async tasks, capped to 2 in flight at a time.
+    lur()
+        .arg("--max-concurrency")
+        .arg("2")
+        .arg(fixture("async_peak.lua"))
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("2"));
+}
+
+#[test]
+fn async_tasks_are_uncapped_by_default() {
+    // No cap → all six run concurrently (peak == task count).
+    lur()
+        .arg(fixture("async_peak.lua"))
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("6"));
+}
+
+#[test]
 fn lur_log_reaches_stderr() {
     lur()
         .arg(fixture("log.lua"))

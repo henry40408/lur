@@ -76,6 +76,9 @@ pub struct RuntimeConfig {
     /// Grace period for draining in-flight requests/jobs on graceful shutdown
     /// (server mode only); after it elapses, remaining work is aborted (§3/§5).
     pub shutdown_grace: Duration,
+    /// Cap on concurrently in-flight `lur.async.*` tasks per VM (`--max-concurrency`).
+    /// `None` leaves the fan-out unbounded (spec §7/§9).
+    pub max_concurrency: Option<usize>,
 }
 
 impl Default for RuntimeConfig {
@@ -91,6 +94,7 @@ impl Default for RuntimeConfig {
             per_event_timeout: None,
             state: Arc::new(crate::capabilities::state::StateStore::default()),
             shutdown_grace: Duration::from_millis(DEFAULT_SHUTDOWN_GRACE_MS),
+            max_concurrency: None,
         }
     }
 }

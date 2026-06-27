@@ -41,7 +41,7 @@ pub fn install(
     http::install(lua, &lur, config.policy.clone(), config.max_http_body)?;
     env::install(lua, &lur, config.policy.clone())?;
     db::install(lua, &lur, config.db_path.clone())?;
-    async_ops::install(lua, &lur)?;
+    async_ops::install(lua, &lur, config.max_concurrency)?;
     args::install(lua, &lur, &config.args)?;
     serve::install(lua, &lur, serve_registry)?;
     state::install(lua, &lur, config.state.clone())?;
