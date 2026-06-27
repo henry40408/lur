@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782544789425,
+  "lastUpdate": 1782545517494,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -167,6 +167,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 391747,
             "range": "± 5596",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fc8d6d41ecbe38c09a5cb07cd0b57e850ddf2018",
+          "message": "chore(deps): bump sqlx from 0.8.6 to 0.9.0 in the cargo group (#28)\n\n* chore(deps): bump sqlx from 0.8.6 to 0.9.0 in the cargo group\n\nBumps the cargo group with 1 update: [sqlx](https://github.com/launchbadge/sqlx).\n\n\nUpdates `sqlx` from 0.8.6 to 0.9.0\n- [Changelog](https://github.com/transact-rs/sqlx/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/launchbadge/sqlx/compare/v0.8.6...v0.9.0)\n\n---\nupdated-dependencies:\n- dependency-name: sqlx\n  dependency-version: 0.9.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\n\n* fix(db): migrate lur.db to the sqlx 0.9 API\n\nsqlx 0.9 has two breaking changes that touch src/capabilities/db.rs:\n\n- SqliteArguments no longer carries a lifetime parameter — drop it from\n  the Query type alias.\n- query()/query_as() now require a SqlSafeStr to discourage SQL\n  injection; a runtime-built String no longer coerces. lur.db runs\n  script-authored SQL by design (user input is bound separately via `?`\n  placeholders, never concatenated), so wrap the dynamic statements in\n  sqlx::AssertSqlSafe — the explicit, audited opt-in. The static `lur_kv`\n  literals already satisfy the bound unchanged.\n\n141 tests pass (incl. lur.db / lur.kv / lur.db.tx); clippy -D warnings\nand fmt clean.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n---------\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nCo-authored-by: Heng-Yi Wu <2316687+henry40408@users.noreply.github.com>\nCo-authored-by: Claude Opus 4.8 <noreply@anthropic.com>",
+          "timestamp": "2026-06-27T15:30:28+08:00",
+          "tree_id": "d28a8c1fa950b1438f886433243b5d052a248ed1",
+          "url": "https://github.com/henry40408/lur/commit/fc8d6d41ecbe38c09a5cb07cd0b57e850ddf2018"
+        },
+        "date": 1782545517219,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 227118,
+            "range": "± 4879",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5147,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 206162,
+            "range": "± 2650",
             "unit": "ns/iter"
           }
         ]
