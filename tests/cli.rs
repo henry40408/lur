@@ -152,6 +152,45 @@ fn env_returns_nil_when_not_allowlisted() {
 }
 
 #[test]
+fn loose_profile_grants_env_without_allowlist() {
+    // --loose selects the permissive profile: env is readable with no --allow-env.
+    lur()
+        .arg("--loose")
+        .arg(fixture("env_read.lua"))
+        .arg("LUR_TEST_VAR")
+        .env("LUR_TEST_VAR", "secret-value")
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("secret-value"));
+}
+
+#[test]
+fn loose_profile_grants_fs_read_without_allowlist() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("f.txt");
+    std::fs::write(&f, b"granted").unwrap();
+
+    lur()
+        .arg("--loose")
+        .arg(fixture("read_arg.lua"))
+        .arg(&f)
+        .assert()
+        .code(0)
+        .stdout(predicate::eq("granted"));
+}
+
+#[test]
+fn strict_and_loose_are_mutually_exclusive() {
+    // Passing both is a usage error (clap exits 2).
+    lur()
+        .arg("--strict")
+        .arg("--loose")
+        .arg(fixture("ok.lua"))
+        .assert()
+        .code(2);
+}
+
+#[test]
 fn lur_log_reaches_stderr() {
     lur()
         .arg(fixture("log.lua"))
