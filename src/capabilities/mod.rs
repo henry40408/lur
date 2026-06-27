@@ -14,13 +14,21 @@ pub mod io;
 pub mod json;
 pub mod log;
 pub mod null;
+pub mod serve;
 
 use mlua::Lua;
 
 use crate::runtime::{RunError, RuntimeConfig};
 
 /// Build the flat `lur` table and install it as the only global capability.
-pub fn install(lua: &Lua, config: &RuntimeConfig) -> Result<(), RunError> {
+///
+/// `serve_registry` is `Some` only under `lur serve`; it makes `lur.serve.http`
+/// collect routes instead of raising the one-shot registration error.
+pub fn install(
+    lua: &Lua,
+    config: &RuntimeConfig,
+    serve_registry: Option<&serve::Registry>,
+) -> Result<(), RunError> {
     let lur = lua.create_table().map_err(RunError::Init)?;
 
     null::install(lua, &lur)?;
@@ -34,6 +42,7 @@ pub fn install(lua: &Lua, config: &RuntimeConfig) -> Result<(), RunError> {
     db::install(lua, &lur, config.db_path.clone())?;
     async_ops::install(lua, &lur)?;
     args::install(lua, &lur, &config.args)?;
+    serve::install(lua, &lur, serve_registry)?;
 
     lua.globals().set("lur", lur).map_err(RunError::Init)?;
     Ok(())

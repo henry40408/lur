@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use mlua::{Lua, MultiValue, Value, VmState};
 use thiserror::Error;
 
+use crate::capabilities::serve::Registry;
 use crate::policy::Policy;
 
 /// Errors that can arise while building or running a script.
@@ -98,6 +99,16 @@ impl Runtime {
 
     /// Build a new sandboxed runtime from an explicit [`RuntimeConfig`].
     pub fn with_config(config: RuntimeConfig) -> Result<Self, RunError> {
+        Self::build(config, None)
+    }
+
+    /// Build a runtime for server mode, wiring `lur.serve.*` to collect route
+    /// registrations into `registry` during `app.lua` warm-up.
+    pub(crate) fn with_serve(config: RuntimeConfig, registry: Registry) -> Result<Self, RunError> {
+        Self::build(config, Some(registry))
+    }
+
+    fn build(config: RuntimeConfig, serve: Option<Registry>) -> Result<Self, RunError> {
         let lua = Lua::new();
         // `require` survives `sandbox(true)` and loads on-disk .luau files,
         // bypassing the capability layer — strip it before freezing globals.
@@ -105,7 +116,7 @@ impl Runtime {
             .set("require", mlua::Value::Nil)
             .map_err(RunError::Init)?;
 
-        crate::capabilities::install(&lua, &config)?;
+        crate::capabilities::install(&lua, &config, serve.as_ref())?;
 
         lua.sandbox(true).map_err(RunError::Init)?;
 
@@ -137,6 +148,18 @@ impl Runtime {
     }
 
     // ---------------------------------------------------------------------
+
+    /// The underlying VM, for server-mode dispatch that builds `req` tables and
+    /// calls stored handler closures directly.
+    pub(crate) fn lua(&self) -> &Lua {
+        &self.lua
+    }
+
+    /// Drive `fut` to completion on the runtime's async executor. Used by
+    /// server mode's synchronous entry points (the network loop awaits instead).
+    pub(crate) fn block_on<F: Future>(&self, fut: F) -> F::Output {
+        self.rt.block_on(fut)
+    }
 
     /// Run `source` to completion with no time limit.
     pub fn run(&self, source: &str) -> Result<(), RunError> {
