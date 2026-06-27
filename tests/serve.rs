@@ -20,6 +20,18 @@ fn serve_with_timeout(source: &str, ms: u64) -> Server {
     .expect("app loads")
 }
 
+/// A server with a request-body cap, for the 413 tests.
+fn serve_with_max_body(source: &str, max_body: usize) -> Server {
+    Server::load(
+        source,
+        RuntimeConfig {
+            max_body: Some(max_body),
+            ..Default::default()
+        },
+    )
+    .expect("app loads")
+}
+
 fn request(method: &str, path: &str, query: &str) -> RawRequest {
     RawRequest {
         method: method.to_owned(),
@@ -160,6 +172,102 @@ fn req_json_decodes_the_body() {
     let mut req = request("POST", "/j", "");
     req.body = br#"{"name":"alice"}"#.to_vec();
     assert_eq!(s.dispatch_raw(&req).unwrap().body, b"alice");
+}
+
+#[test]
+fn req_read_without_arg_returns_whole_body() {
+    let s = serve(
+        "lur.serve.http('POST', '/r', function(req)\n\
+         \treturn { body = req.read() }\n\
+         end)",
+    );
+    let mut req = request("POST", "/r", "");
+    req.body = b"hello world".to_vec();
+    assert_eq!(s.dispatch_raw(&req).unwrap().body, b"hello world");
+}
+
+#[test]
+fn req_read_chunked_advances_and_eofs_to_nil() {
+    let s = serve(
+        "lur.serve.http('POST', '/r', function(req)\n\
+         \tlocal a = req.read(3)\n\
+         \tlocal b = req.read(3)\n\
+         \tlocal rest = req.read()\n\
+         \tlocal eof = req.read(1)\n\
+         \treturn { body = a .. '|' .. b .. '|' .. rest .. '|' .. tostring(eof) }\n\
+         end)",
+    );
+    let mut req = request("POST", "/r", "");
+    req.body = b"abcdefghij".to_vec();
+    assert_eq!(s.dispatch_raw(&req).unwrap().body, b"abc|def|ghij|nil");
+}
+
+#[test]
+fn req_body_unavailable_after_chunked_read() {
+    let s = serve(
+        "lur.serve.http('POST', '/r', function(req)\n\
+         \treq.read(2)\n\
+         \tlocal ok = pcall(function() return req.body end)\n\
+         \treturn { body = tostring(ok) }\n\
+         end)",
+    );
+    let mut req = request("POST", "/r", "");
+    req.body = b"abcdef".to_vec();
+    assert_eq!(s.dispatch_raw(&req).unwrap().body, b"false");
+}
+
+#[test]
+fn req_json_unavailable_after_chunked_read() {
+    let s = serve(
+        "lur.serve.http('POST', '/r', function(req)\n\
+         \treq.read(2)\n\
+         \tlocal ok = pcall(function() return req.json() end)\n\
+         \treturn { body = tostring(ok) }\n\
+         end)",
+    );
+    let mut req = request("POST", "/r", "");
+    req.body = br#"{"a":1}"#.to_vec();
+    assert_eq!(s.dispatch_raw(&req).unwrap().body, b"false");
+}
+
+#[test]
+fn req_body_still_available_after_whole_read() {
+    // read() with no arg is sugar, not a chunked consume — req.body stays usable.
+    let s = serve(
+        "lur.serve.http('POST', '/r', function(req)\n\
+         \tlocal whole = req.read()\n\
+         \treturn { body = whole .. '|' .. req.body }\n\
+         end)",
+    );
+    let mut req = request("POST", "/r", "");
+    req.body = b"xy".to_vec();
+    assert_eq!(s.dispatch_raw(&req).unwrap().body, b"xy|xy");
+}
+
+#[test]
+fn oversize_body_is_rejected_with_413() {
+    let s = serve_with_max_body(
+        "lur.serve.http('POST', '/u', function(req) return { body = 'reached' } end)",
+        4,
+    );
+    let mut req = request("POST", "/u", "");
+    req.body = b"toolong".to_vec();
+    let resp = s.dispatch_raw(&req).unwrap();
+    assert_eq!(resp.status, 413);
+    assert_ne!(resp.body, b"reached");
+}
+
+#[test]
+fn body_within_max_is_served() {
+    let s = serve_with_max_body(
+        "lur.serve.http('POST', '/u', function(req) return { body = req.body } end)",
+        16,
+    );
+    let mut req = request("POST", "/u", "");
+    req.body = b"fits".to_vec();
+    let resp = s.dispatch_raw(&req).unwrap();
+    assert_eq!(resp.status, 200);
+    assert_eq!(resp.body, b"fits");
 }
 
 #[test]
