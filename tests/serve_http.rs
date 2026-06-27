@@ -116,6 +116,36 @@ fn serve_threads_param_query_and_header_to_the_handler() {
 }
 
 #[test]
+fn cron_fires_on_schedule_over_http() {
+    // A 1-second cron increments a lur.kv counter; an HTTP route reads it. After
+    // a few seconds the counter must have advanced, proving the scheduler fires.
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = db_dir.path().join("cron.db");
+    let (addr, _reaper, _dir) = spawn_server_args(
+        "lur.serve.cron('* * * * * *', function()\n\
+         \tlocal n = (tonumber(lur.kv.get('c')) or 0) + 1\n\
+         \tlur.kv.set('c', tostring(n))\n\
+         end)\n\
+         lur.serve.http('GET', '/c', function() return { body = lur.kv.get('c') or '0' } end)",
+        &["--db", db.to_str().unwrap()],
+    );
+    drop(wait_until_up(&addr));
+
+    std::thread::sleep(Duration::from_millis(3500));
+    let response = round_trip(
+        &addr,
+        "GET /c HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    );
+
+    let body = response.rsplit("\r\n\r\n").next().unwrap_or("").trim();
+    let count: i32 = body.parse().unwrap_or(0);
+    assert!(
+        count >= 2,
+        "a 1s cron should have fired at least twice in ~3.5s, got {count} ({response:?})"
+    );
+}
+
+#[test]
 fn handler_exceeding_per_event_timeout_returns_503_over_http() {
     let (addr, _reaper, _dir) = spawn_server_args(
         "lur.serve.http('GET', '/slow', function(req)\n\
