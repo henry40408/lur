@@ -12,16 +12,17 @@ use lur::runtime::{
     Runtime, RuntimeConfig,
 };
 use lur::serve::Server;
+use lur::units::{parse_duration, parse_size};
 
 /// Capability and limit flags shared by one-shot and server mode.
 #[derive(clap::Args)]
 struct CommonFlags {
-    /// Memory cap in bytes (0 means unlimited).
-    #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MEMORY_LIMIT_BYTES)]
-    max_memory: usize,
+    /// Memory cap (e.g. `128m`, `512k`; 0 means unlimited).
+    #[arg(long = "memory", value_name = "SIZE", default_value_t = DEFAULT_MEMORY_LIMIT_BYTES, value_parser = parse_size)]
+    memory: usize,
 
-    /// Cap on a buffered lur.http response body, in bytes.
-    #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_HTTP_BODY_BYTES)]
+    /// Cap on a buffered lur.http response body (e.g. `16m`).
+    #[arg(long, value_name = "SIZE", default_value_t = DEFAULT_MAX_HTTP_BODY_BYTES, value_parser = parse_size)]
     max_http_body: usize,
 
     /// Grant full filesystem access for this run.
@@ -81,9 +82,9 @@ struct Cli {
     /// Path to the script to run.
     script: PathBuf,
 
-    /// Wall-clock time limit in milliseconds (no limit if omitted).
-    #[arg(long, value_name = "MS")]
-    timeout_ms: Option<u64>,
+    /// Wall-clock time limit (e.g. `5s`, `500ms`, `2m`; no limit if omitted).
+    #[arg(long, value_name = "DUR", value_parser = parse_duration)]
+    timeout: Option<Duration>,
 
     #[command(flatten)]
     common: CommonFlags,
@@ -113,19 +114,19 @@ struct ServeCli {
     #[arg(long, value_name = "N", default_value_t = default_pool_size())]
     pool_size: usize,
 
-    /// Per-request wall-clock limit in milliseconds; on timeout the request gets
-    /// a 503 (no limit if omitted).
-    #[arg(long, value_name = "MS")]
-    timeout_ms: Option<u64>,
+    /// Per-request wall-clock limit (e.g. `5s`, `500ms`); on timeout the request
+    /// gets a 503 (no limit if omitted).
+    #[arg(long, value_name = "DUR", value_parser = parse_duration)]
+    timeout: Option<Duration>,
 
-    /// Max request-body size in bytes; a larger request gets a 413 (no limit if
-    /// omitted).
-    #[arg(long = "max-body", value_name = "BYTES")]
+    /// Max request-body size (e.g. `2m`); a larger request gets a 413 (no limit
+    /// if omitted).
+    #[arg(long = "max-body", value_name = "SIZE", value_parser = parse_size)]
     max_body: Option<usize>,
 
-    /// Grace period in milliseconds for draining in-flight work on SIGTERM/SIGINT.
-    #[arg(long = "shutdown-grace-ms", value_name = "MS", default_value_t = DEFAULT_SHUTDOWN_GRACE_MS)]
-    shutdown_grace_ms: u64,
+    /// Grace period for draining in-flight work on SIGTERM/SIGINT (e.g. `10s`).
+    #[arg(long = "shutdown-grace", value_name = "DUR", default_value = "10s", value_parser = parse_duration)]
+    shutdown_grace: Duration,
 
     #[command(flatten)]
     common: CommonFlags,
@@ -221,7 +222,7 @@ fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig,
     let config = load_config(flags)?;
     let policy = Arc::new(build_policy(flags, &config)?);
     Ok(RuntimeConfig {
-        memory_limit: flags.max_memory,
+        memory_limit: flags.memory,
         args,
         policy,
         max_http_body: flags.max_http_body,
@@ -263,9 +264,9 @@ fn run_serve(cli: ServeCli) -> ExitCode {
         }
     };
     config.pool_size = cli.pool_size;
-    config.per_event_timeout = cli.timeout_ms.map(Duration::from_millis);
+    config.per_event_timeout = cli.timeout;
     config.max_body = cli.max_body;
-    config.shutdown_grace = Duration::from_millis(cli.shutdown_grace_ms);
+    config.shutdown_grace = cli.shutdown_grace;
 
     let server = match Server::load(&source, config) {
         Ok(s) => s,
@@ -309,7 +310,7 @@ fn run_one_shot(cli: Cli) -> ExitCode {
         }
     };
 
-    let timeout = cli.timeout_ms.map(Duration::from_millis);
+    let timeout = cli.timeout;
     match rt.run_to_exit_code(&source, timeout) {
         Ok(code) => ExitCode::from(code as u8),
         Err(RunError::Timeout) => {

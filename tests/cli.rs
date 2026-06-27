@@ -56,8 +56,8 @@ fn script_error_exits_one_with_traceback() {
 fn timeout_exits_124() {
     lur()
         .arg(fixture("loop.lua"))
-        .arg("--timeout-ms")
-        .arg("50")
+        .arg("--timeout")
+        .arg("50ms")
         .assert()
         .code(124);
 }
@@ -66,8 +66,8 @@ fn timeout_exits_124() {
 fn out_of_memory_exits_137() {
     lur()
         .arg(fixture("alloc.lua"))
-        .arg("--max-memory")
-        .arg("2097152") // 2 MiB
+        .arg("--memory")
+        .arg("2m") // 2 MiB
         .assert()
         .code(137);
 }

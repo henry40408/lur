@@ -180,7 +180,7 @@ fn handler_exceeding_per_event_timeout_returns_503_over_http() {
          \tlur.async.sleep(5000)\n\
          \treturn { body = 'never' }\n\
          end)",
-        &["--timeout-ms", "50"],
+        &["--timeout", "50ms"],
     );
 
     let response = round_trip(
