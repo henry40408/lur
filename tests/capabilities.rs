@@ -55,6 +55,17 @@ fn json_round_trips_through_decode_encode() {
 }
 
 #[test]
+fn crypto_hex_round_trips_and_rejects_bad_input() {
+    run("local raw = string.char(0xde, 0xad, 0xbe, 0xef)\n\
+         assert(lur.crypto.hex.encode(raw) == 'deadbeef', 'encode is lowercase hex')\n\
+         assert(lur.crypto.hex.decode('DEADBEEF') == raw, 'decode accepts uppercase')\n\
+         assert(pcall(function() return lur.crypto.hex.decode('abc') end) == false,\n\
+         \t'odd length must be rejected')\n\
+         assert(pcall(function() return lur.crypto.hex.decode('zz') end) == false,\n\
+         \t'non-hex must be rejected')");
+}
+
+#[test]
 fn json_encode_rejects_non_utf8_string() {
     // \255 is invalid UTF-8 — must error at the JSON boundary (§4).
     run(

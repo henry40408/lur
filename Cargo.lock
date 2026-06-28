@@ -1191,6 +1191,7 @@ dependencies = [
  "criterion",
  "cron",
  "futures-util",
+ "hex",
  "http-body-util",
  "hyper",
  "hyper-util",
