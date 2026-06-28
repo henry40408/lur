@@ -193,6 +193,13 @@ Everything is exposed under the `lur` global. Functions raise a Lua error on fai
 - **`lur.json`** — `encode(value) → string`, `decode(text) → value`. JSON `null`
   decodes to `lur.null`; strings must be valid UTF-8 (base64-encode binary first).
 - **`lur.base64`** — `encode(bytes) → string`, `decode(text) → bytes`.
+- **`lur.crypto`** — pure-compute crypto (no policy needed). Hashing
+  `sha256`/`sha512`/`sha1`/`md5(data) → bytes`; HMAC `hmac_sha256`/`hmac_sha512`/
+  `hmac_sha1(key, msg) → bytes`; `hex.encode(bytes) → string` / `hex.decode(text)
+  → bytes`; `random_bytes(n) → bytes` from the OS CSPRNG; and `constant_eq(a, b)
+  → bool` for timing-safe comparison. Digests are raw bytes — bridge to hex or
+  `lur.base64` as the destination format needs. `sha1`/`md5` are for legacy
+  interop only.
 - **`lur.log`** — `info(msg)`, `warn(msg)`, `error(msg)`, written to stderr (stdout is
   reserved as the data channel). No implicit newline.
 - **`lur.stdin`** — `read()` drains all bytes, `read(n)` reads up to `n` (`nil` at EOF),

@@ -113,6 +113,17 @@ fn crypto_random_bytes_length_and_bounds() {
 }
 
 #[test]
+fn crypto_verifies_a_webhook_signature_end_to_end() {
+    run(
+        "local secret, body = 'Jefe', 'what do ya want for nothing?'\n\
+         local mac = lur.crypto.hmac_sha256(secret, body)\n\
+         local got = lur.crypto.hex.encode(mac)\n\
+         local want = '5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843'\n\
+         assert(lur.crypto.constant_eq(got, want), 'signature must verify')",
+    );
+}
+
+#[test]
 fn json_encode_rejects_non_utf8_string() {
     // \255 is invalid UTF-8 — must error at the JSON boundary (§4).
     run(
