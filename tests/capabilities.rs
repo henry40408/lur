@@ -103,6 +103,16 @@ fn crypto_constant_eq_compares_bytes() {
 }
 
 #[test]
+fn crypto_random_bytes_length_and_bounds() {
+    run("local a = lur.crypto.random_bytes(16)\n\
+         assert(#a == 16, 'returns n bytes')\n\
+         local b = lur.crypto.random_bytes(16)\n\
+         assert(a ~= b, 'two draws differ')\n\
+         assert(pcall(function() return lur.crypto.random_bytes(0) end) == false, 'n=0 rejected')\n\
+         assert(pcall(function() return lur.crypto.random_bytes(-1) end) == false, 'negative rejected')");
+}
+
+#[test]
 fn json_encode_rejects_non_utf8_string() {
     // \255 is invalid UTF-8 — must error at the JSON boundary (§4).
     run(

@@ -13,6 +13,10 @@ use subtle::ConstantTimeEq;
 
 use crate::runtime::RunError;
 
+/// Upper bound on a single `random_bytes` draw (1 MiB) — a guard against a
+/// script accidentally requesting an enormous allocation.
+const MAX_RANDOM_BYTES: i64 = 1 << 20;
+
 /// Install the flat `lur.crypto` table.
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let crypto = lua.create_table().map_err(RunError::Init)?;
@@ -21,6 +25,7 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     install_hashes(lua, &crypto)?;
     install_hmac(lua, &crypto)?;
     install_constant_eq(lua, &crypto)?;
+    install_random(lua, &crypto)?;
 
     lur.set("crypto", crypto).map_err(RunError::Init)?;
     Ok(())
@@ -105,6 +110,32 @@ fn install_constant_eq(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
         .map_err(RunError::Init)?;
     crypto
         .set("constant_eq", constant_eq)
+        .map_err(RunError::Init)?;
+    Ok(())
+}
+
+/// `lur.crypto.random_bytes` — `n` bytes from the OS CSPRNG.
+fn install_random(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
+    let random_bytes = lua
+        .create_function(|lua, n: i64| {
+            if n <= 0 {
+                return Err(Error::runtime(
+                    "lur.crypto.random_bytes: n must be a positive integer",
+                ));
+            }
+            if n > MAX_RANDOM_BYTES {
+                return Err(Error::runtime(format!(
+                    "lur.crypto.random_bytes: n must be <= {MAX_RANDOM_BYTES}"
+                )));
+            }
+            let mut buf = vec![0u8; n as usize];
+            getrandom::getrandom(&mut buf)
+                .map_err(|e| Error::runtime(format!("lur.crypto.random_bytes: {e}")))?;
+            lua.create_string(&buf)
+        })
+        .map_err(RunError::Init)?;
+    crypto
+        .set("random_bytes", random_bytes)
         .map_err(RunError::Init)?;
     Ok(())
 }
