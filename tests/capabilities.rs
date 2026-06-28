@@ -66,6 +66,22 @@ fn crypto_hex_round_trips_and_rejects_bad_input() {
 }
 
 #[test]
+fn crypto_hashes_match_known_vectors() {
+    run("local hex = lur.crypto.hex.encode\n\
+         assert(hex(lur.crypto.sha256('abc')) ==\n\
+         \t'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad', 'sha256')\n\
+         assert(hex(lur.crypto.sha256('')) ==\n\
+         \t'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'sha256 empty')\n\
+         assert(hex(lur.crypto.sha512('abc')) ==\n\
+         \t'ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a' ..\n\
+         \t'2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f', 'sha512')\n\
+         assert(hex(lur.crypto.sha1('abc')) ==\n\
+         \t'a9993e364706816aba3e25717850c26c9cd0d89d', 'sha1')\n\
+         assert(hex(lur.crypto.md5('abc')) ==\n\
+         \t'900150983cd24fb0d6963f7d28e17f72', 'md5')");
+}
+
+#[test]
 fn json_encode_rejects_non_utf8_string() {
     // \255 is invalid UTF-8 — must error at the JSON boundary (§4).
     run(
