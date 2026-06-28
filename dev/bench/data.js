@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782634796915,
+  "lastUpdate": 1782638079793,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -713,6 +713,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 390377,
             "range": "± 1334",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "690fb54e056c45819ded410625c039cae0fee320",
+          "message": "docs: unify README format (#43)\n\n* docs: add status badges to README\n\nBring lur's README in line with the sibling projects (comics, noadd,\nliftlog, rdrs) by adding the standard badge row: CI, Codecov, Release,\nLicense, Rust toolchain, Docker, Casual Maintenance, and Vibe Coded.\n\nThe Rust toolchain badge reads the channel from rust-toolchain.toml,\nwhich is added here pinned to `stable` to match lur's existing\nfloating-stable setup (CI uses dtolnay stable; the Docker base is\nrust:1-bookworm). This keeps the toolchain declarative without changing\nthe resolved version.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* docs: unify README header block and section naming\n\nAdd a one-line blockquote tagline under the title and normalize the\n\"Quick start\" heading to \"Quick Start\", matching the shared README\nformat adopted across the sibling projects.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* chore: pin rust-toolchain to 1.96.0\n\nPin the toolchain channel to a specific version instead of `stable`, so\nthe Rust toolchain badge and builds match the sibling projects (comics,\nnoadd, liftlog, rdrs all pin 1.96.0).\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.8 <noreply@anthropic.com>",
+          "timestamp": "2026-06-28T17:11:11+08:00",
+          "tree_id": "cb337af2296f8c3652f529b5dd28f2d91c6ebd9a",
+          "url": "https://github.com/henry40408/lur/commit/690fb54e056c45819ded410625c039cae0fee320"
+        },
+        "date": 1782638079517,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 249092,
+            "range": "± 2324",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5207,
+            "range": "± 47",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207266,
+            "range": "± 1567",
             "unit": "ns/iter"
           }
         ]
