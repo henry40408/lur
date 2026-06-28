@@ -55,6 +55,75 @@ fn json_round_trips_through_decode_encode() {
 }
 
 #[test]
+fn crypto_hex_round_trips_and_rejects_bad_input() {
+    run("local raw = string.char(0xde, 0xad, 0xbe, 0xef)\n\
+         assert(lur.crypto.hex.encode(raw) == 'deadbeef', 'encode is lowercase hex')\n\
+         assert(lur.crypto.hex.decode('DEADBEEF') == raw, 'decode accepts uppercase')\n\
+         assert(pcall(function() return lur.crypto.hex.decode('abc') end) == false,\n\
+         \t'odd length must be rejected')\n\
+         assert(pcall(function() return lur.crypto.hex.decode('zz') end) == false,\n\
+         \t'non-hex must be rejected')");
+}
+
+#[test]
+fn crypto_hashes_match_known_vectors() {
+    run("local hex = lur.crypto.hex.encode\n\
+         assert(hex(lur.crypto.sha256('abc')) ==\n\
+         \t'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad', 'sha256')\n\
+         assert(hex(lur.crypto.sha256('')) ==\n\
+         \t'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'sha256 empty')\n\
+         assert(hex(lur.crypto.sha512('abc')) ==\n\
+         \t'ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a' ..\n\
+         \t'2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f', 'sha512')\n\
+         assert(hex(lur.crypto.sha1('abc')) ==\n\
+         \t'a9993e364706816aba3e25717850c26c9cd0d89d', 'sha1')\n\
+         assert(hex(lur.crypto.md5('abc')) ==\n\
+         \t'900150983cd24fb0d6963f7d28e17f72', 'md5')");
+}
+
+#[test]
+fn crypto_hmac_matches_rfc_vectors() {
+    run("local hex = lur.crypto.hex.encode\n\
+         local key, msg = 'Jefe', 'what do ya want for nothing?'\n\
+         assert(hex(lur.crypto.hmac_sha256(key, msg)) ==\n\
+         \t'5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843', 'hmac_sha256')\n\
+         assert(hex(lur.crypto.hmac_sha1(key, msg)) ==\n\
+         \t'effcdf6ae5eb2fa2d27416d5f184df9c259a7c79', 'hmac_sha1')\n\
+         assert(#lur.crypto.hmac_sha512(key, msg) == 64, 'hmac_sha512 is 64 bytes')");
+}
+
+#[test]
+fn crypto_constant_eq_compares_bytes() {
+    run(
+        "assert(lur.crypto.constant_eq('abc', 'abc') == true, 'equal')\n\
+         assert(lur.crypto.constant_eq('abc', 'abd') == false, 'differ same length')\n\
+         assert(lur.crypto.constant_eq('ab', 'abc') == false, 'differ length')\n\
+         assert(lur.crypto.constant_eq('', '') == true, 'empty equal')",
+    );
+}
+
+#[test]
+fn crypto_random_bytes_length_and_bounds() {
+    run("local a = lur.crypto.random_bytes(16)\n\
+         assert(#a == 16, 'returns n bytes')\n\
+         local b = lur.crypto.random_bytes(16)\n\
+         assert(a ~= b, 'two draws differ')\n\
+         assert(pcall(function() return lur.crypto.random_bytes(0) end) == false, 'n=0 rejected')\n\
+         assert(pcall(function() return lur.crypto.random_bytes(-1) end) == false, 'negative rejected')");
+}
+
+#[test]
+fn crypto_verifies_a_webhook_signature_end_to_end() {
+    run(
+        "local secret, body = 'Jefe', 'what do ya want for nothing?'\n\
+         local mac = lur.crypto.hmac_sha256(secret, body)\n\
+         local got = lur.crypto.hex.encode(mac)\n\
+         local want = '5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843'\n\
+         assert(lur.crypto.constant_eq(got, want), 'signature must verify')",
+    );
+}
+
+#[test]
 fn json_encode_rejects_non_utf8_string() {
     // \255 is invalid UTF-8 — must error at the JSON boundary (§4).
     run(
