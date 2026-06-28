@@ -93,6 +93,16 @@ fn crypto_hmac_matches_rfc_vectors() {
 }
 
 #[test]
+fn crypto_constant_eq_compares_bytes() {
+    run(
+        "assert(lur.crypto.constant_eq('abc', 'abc') == true, 'equal')\n\
+         assert(lur.crypto.constant_eq('abc', 'abd') == false, 'differ same length')\n\
+         assert(lur.crypto.constant_eq('ab', 'abc') == false, 'differ length')\n\
+         assert(lur.crypto.constant_eq('', '') == true, 'empty equal')",
+    );
+}
+
+#[test]
 fn json_encode_rejects_non_utf8_string() {
     // \255 is invalid UTF-8 — must error at the JSON boundary (§4).
     run(

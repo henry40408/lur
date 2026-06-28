@@ -9,6 +9,7 @@ use md5::Md5;
 use mlua::{Error, Lua, Table};
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha512};
+use subtle::ConstantTimeEq;
 
 use crate::runtime::RunError;
 
@@ -19,6 +20,7 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     install_hex(lua, &crypto)?;
     install_hashes(lua, &crypto)?;
     install_hmac(lua, &crypto)?;
+    install_constant_eq(lua, &crypto)?;
 
     lur.set("crypto", crypto).map_err(RunError::Init)?;
     Ok(())
@@ -85,6 +87,25 @@ fn install_hmac(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
         .map_err(RunError::Init)?;
     crypto.set("hmac_sha1", hmac_sha1).map_err(RunError::Init)?;
 
+    Ok(())
+}
+
+/// `lur.crypto.constant_eq` — timing-safe byte comparison.
+fn install_constant_eq(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
+    let constant_eq = lua
+        .create_function(|_, (a, b): (mlua::String, mlua::String)| {
+            let a = a.as_bytes();
+            let b = b.as_bytes();
+            // Length is not secret; bail before the constant-time content compare.
+            if a.len() != b.len() {
+                return Ok(false);
+            }
+            Ok(bool::from(a.ct_eq(&b)))
+        })
+        .map_err(RunError::Init)?;
+    crypto
+        .set("constant_eq", constant_eq)
+        .map_err(RunError::Init)?;
     Ok(())
 }
 
