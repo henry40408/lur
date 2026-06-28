@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782659282014,
+  "lastUpdate": 1782662272485,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -797,6 +797,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 206560,
             "range": "± 2375",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a6d587b4961e09f339c5a428447c5f19d0666510",
+          "message": "feat(serve): let handlers set response headers (#45)\n\n* docs: add serve response headers design spec\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs: add serve response headers implementation plan\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-28T23:56:40+08:00",
+          "tree_id": "27b838f523f96b6c18f3d38e0e28a0f987bd5e93",
+          "url": "https://github.com/henry40408/lur/commit/a6d587b4961e09f339c5a428447c5f19d0666510"
+        },
+        "date": 1782662271727,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 228536,
+            "range": "± 2119",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5275,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 392056,
+            "range": "± 12333",
             "unit": "ns/iter"
           }
         ]
