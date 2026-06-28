@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782638079793,
+  "lastUpdate": 1782659282014,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -755,6 +755,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207266,
             "range": "± 1567",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "79acbfdbed7b70a4695927bf8dab04133d447012",
+          "message": "feat: add lur.crypto capability (hashing, HMAC, hex, random, constant_eq) (#44)\n\n* docs: add lur.crypto design spec\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs: add lur.crypto implementation plan\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* feat(crypto): add lur.crypto module with hex encode/decode\n\n* feat(crypto): add sha256/sha512/sha1/md5 hashing\n\n* feat(crypto): add hmac_sha256/hmac_sha512/hmac_sha1\n\nAdds three HMAC functions to lur.crypto using hmac 0.12.1 (digest 0.10\ncompatible with existing sha2/sha1). Uses explicit per-algorithm closures\n(Hmac::<Sha256/Sha512/Sha1>::new_from_slice) rather than a generic helper\nbecause the D: Digest + BlockSizeUser bound requires additional CoreProxy\nconstraints that are fiddly to express generically. Tests assert RFC 4231\nJefe vectors for hmac_sha256/hmac_sha1 and byte-length for hmac_sha512.\n\n* feat(crypto): add constant_eq timing-safe comparison\n\n* feat(crypto): add random_bytes from the OS CSPRNG\n\n* docs(crypto): document lur.crypto and add end-to-end webhook test\n\n---------\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-28T23:06:37+08:00",
+          "tree_id": "5ea846fe678fd64573f2f044f7b04170fae5266b",
+          "url": "https://github.com/henry40408/lur/commit/79acbfdbed7b70a4695927bf8dab04133d447012"
+        },
+        "date": 1782659281673,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 231277,
+            "range": "± 2665",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5347,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 206560,
+            "range": "± 2375",
             "unit": "ns/iter"
           }
         ]
