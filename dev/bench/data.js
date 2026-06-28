@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782634484227,
+  "lastUpdate": 1782634796915,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -671,6 +671,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 206915,
             "range": "± 4471",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "edb54a779fe55a2182b88b6b43616ca5f4618c2e",
+          "message": "chore(deps): bump codecov/codecov-action in the actions group (#39)\n\nBumps the actions group with 1 update: [codecov/codecov-action](https://github.com/codecov/codecov-action).\n\n\nUpdates `codecov/codecov-action` from 5.5.5 to 7.0.0\n- [Release notes](https://github.com/codecov/codecov-action/releases)\n- [Changelog](https://github.com/codecov/codecov-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/codecov/codecov-action/compare/0fb7174895f61a3b6b78fc075e0cd60383518dac...fb8b3582c8e4def4969c97caa2f19720cb33a72f)\n\n---\nupdated-dependencies:\n- dependency-name: codecov/codecov-action\n  dependency-version: 7.0.0\n  dependency-type: direct:production\n  update-type: version-update:semver-major\n  dependency-group: actions\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-06-28T16:18:48+08:00",
+          "tree_id": "333d9da53611d67d8860dcc3bb876b6008f522d8",
+          "url": "https://github.com/henry40408/lur/commit/edb54a779fe55a2182b88b6b43616ca5f4618c2e"
+        },
+        "date": 1782634796109,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 221860,
+            "range": "± 6947",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5047,
+            "range": "± 42",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 390377,
+            "range": "± 1334",
             "unit": "ns/iter"
           }
         ]
