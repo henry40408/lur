@@ -82,6 +82,17 @@ fn crypto_hashes_match_known_vectors() {
 }
 
 #[test]
+fn crypto_hmac_matches_rfc_vectors() {
+    run("local hex = lur.crypto.hex.encode\n\
+         local key, msg = 'Jefe', 'what do ya want for nothing?'\n\
+         assert(hex(lur.crypto.hmac_sha256(key, msg)) ==\n\
+         \t'5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843', 'hmac_sha256')\n\
+         assert(hex(lur.crypto.hmac_sha1(key, msg)) ==\n\
+         \t'effcdf6ae5eb2fa2d27416d5f184df9c259a7c79', 'hmac_sha1')\n\
+         assert(#lur.crypto.hmac_sha512(key, msg) == 64, 'hmac_sha512 is 64 bytes')");
+}
+
+#[test]
 fn json_encode_rejects_non_utf8_string() {
     // \255 is invalid UTF-8 — must error at the JSON boundary (§4).
     run(

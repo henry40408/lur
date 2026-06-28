@@ -4,6 +4,7 @@
 //! raw bytes in, raw digest bytes out. `lur.crypto.hex` bridges a raw digest to
 //! the lowercase hex string most signatures are compared against.
 
+use hmac::{Hmac, Mac};
 use md5::Md5;
 use mlua::{Error, Lua, Table};
 use sha1::Sha1;
@@ -17,6 +18,7 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 
     install_hex(lua, &crypto)?;
     install_hashes(lua, &crypto)?;
+    install_hmac(lua, &crypto)?;
 
     lur.set("crypto", crypto).map_err(RunError::Init)?;
     Ok(())
@@ -44,6 +46,45 @@ fn install_hashes(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
     crypto
         .set("md5", hash_fn::<Md5>(lua)?)
         .map_err(RunError::Init)?;
+    Ok(())
+}
+
+/// `lur.crypto.hmac_sha256` / `hmac_sha512` / `hmac_sha1`.
+fn install_hmac(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
+    let hmac_sha256 = lua
+        .create_function(|lua, (key, msg): (mlua::String, mlua::String)| {
+            let mut mac = Hmac::<Sha256>::new_from_slice(&key.as_bytes())
+                .map_err(|e| Error::runtime(format!("lur.crypto.hmac_sha256: {e}")))?;
+            mac.update(&msg.as_bytes());
+            lua.create_string(mac.finalize().into_bytes().as_slice())
+        })
+        .map_err(RunError::Init)?;
+    crypto
+        .set("hmac_sha256", hmac_sha256)
+        .map_err(RunError::Init)?;
+
+    let hmac_sha512 = lua
+        .create_function(|lua, (key, msg): (mlua::String, mlua::String)| {
+            let mut mac = Hmac::<Sha512>::new_from_slice(&key.as_bytes())
+                .map_err(|e| Error::runtime(format!("lur.crypto.hmac_sha512: {e}")))?;
+            mac.update(&msg.as_bytes());
+            lua.create_string(mac.finalize().into_bytes().as_slice())
+        })
+        .map_err(RunError::Init)?;
+    crypto
+        .set("hmac_sha512", hmac_sha512)
+        .map_err(RunError::Init)?;
+
+    let hmac_sha1 = lua
+        .create_function(|lua, (key, msg): (mlua::String, mlua::String)| {
+            let mut mac = Hmac::<Sha1>::new_from_slice(&key.as_bytes())
+                .map_err(|e| Error::runtime(format!("lur.crypto.hmac_sha1: {e}")))?;
+            mac.update(&msg.as_bytes());
+            lua.create_string(mac.finalize().into_bytes().as_slice())
+        })
+        .map_err(RunError::Init)?;
+    crypto.set("hmac_sha1", hmac_sha1).map_err(RunError::Init)?;
+
     Ok(())
 }
 
