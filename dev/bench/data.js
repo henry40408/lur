@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782582168485,
+  "lastUpdate": 1782634484227,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -629,6 +629,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 206940,
             "range": "± 1993",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "93e56dad3add704a3d3ea647ee0eb68ca74e505b",
+          "message": "ci: drop blank lines between docker workflow steps (#42)\n\nEach step already begins with its own `- uses:`/`- id:` marker, so the blank\nlines between steps add nothing; keep only the top-level block separators.\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-28T16:13:29+08:00",
+          "tree_id": "3bc052081a861f327abab8f2607fa1268664388b",
+          "url": "https://github.com/henry40408/lur/commit/93e56dad3add704a3d3ea647ee0eb68ca74e505b"
+        },
+        "date": 1782634483774,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 255099,
+            "range": "± 4239",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5204,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 206915,
+            "range": "± 4471",
             "unit": "ns/iter"
           }
         ]
