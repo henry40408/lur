@@ -1,5 +1,7 @@
 # lur
 
+> A small, sandboxed Lua runtime written in Rust.
+
 [![CI](https://github.com/henry40408/lur/actions/workflows/ci.yml/badge.svg)](https://github.com/henry40408/lur/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/henry40408/lur/graph/badge.svg)](https://codecov.io/gh/henry40408/lur)
 [![Release](https://img.shields.io/github/v/release/henry40408/lur)](https://github.com/henry40408/lur/releases/latest)
@@ -9,8 +11,8 @@
 [![Casual Maintenance Intended](https://casuallymaintained.tech/badge.svg)](https://casuallymaintained.tech/)
 [![Vibe Coded](https://img.shields.io/badge/vibe_coded-Claude-d97757?logo=anthropic&logoColor=white)](https://claude.com/claude-code)
 
-A small, sandboxed Lua runtime written in Rust. Write your automation and services
-in [Luau](https://luau.org/); `lur` runs them safely behind a capability sandbox.
+Write your automation and services in [Luau](https://luau.org/); `lur` runs them
+safely behind a capability sandbox.
 
 `lur` has two modes from one binary:
 
@@ -66,7 +68,7 @@ LOAD=true PLATFORMS=linux/amd64 ./scripts/docker-build.sh   # single arch into l
 ./scripts/docker-build.sh                                   # validate both arches
 ```
 
-## Quick start
+## Quick Start
 
 ### One-shot
 
