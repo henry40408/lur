@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782746300881,
+  "lastUpdate": 1782748832315,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -923,6 +923,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 242638,
             "range": "± 4954",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0ead9bfde77a993cb3a5bd5bb3a0d7ad236df2ae",
+          "message": "feat: add lur.time capability (clocks + timestamp parsing) (#48)\n\n* docs: add lur.time design spec\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs: add lur.time implementation plan\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* feat: add lur.time clocks (now_ms, monotonic_ms)\n\n* feat: add lur.time parsers (parse_rfc3339, parse_http_date)\n\n* docs: document lur.time\n\n* refactor: tidy lur.time final-review nits\n\nMove httpdate to its correct alphabetical slot in Cargo.toml, order install_clocks before install_parsers, and note RFC 3339 requires an explicit offset.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-29T23:59:21+08:00",
+          "tree_id": "6f5aa93ce02c8163ddaa5f804fbb09b53826851b",
+          "url": "https://github.com/henry40408/lur/commit/0ead9bfde77a993cb3a5bd5bb3a0d7ad236df2ae"
+        },
+        "date": 1782748832041,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 269529,
+            "range": "± 3189",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5359,
+            "range": "± 171",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207965,
+            "range": "± 2640",
             "unit": "ns/iter"
           }
         ]
