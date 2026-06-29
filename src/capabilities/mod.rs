@@ -6,6 +6,7 @@
 pub mod args;
 pub mod async_ops;
 pub mod base64;
+pub mod cookie;
 pub mod crypto;
 pub mod db;
 pub mod env;
@@ -38,6 +39,7 @@ pub fn install(
     json::install(lua, &lur)?;
     base64::install(lua, &lur)?;
     crypto::install(lua, &lur)?;
+    cookie::install(lua, &lur)?;
     io::install(lua, &lur)?;
     fs::install(lua, &lur, config.policy.clone())?;
     http::install(lua, &lur, config.policy.clone(), config.max_http_body)?;

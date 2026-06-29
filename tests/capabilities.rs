@@ -132,3 +132,31 @@ fn json_encode_rejects_non_utf8_string() {
          assert(ok == false, 'non-UTF-8 must be rejected')",
     );
 }
+
+#[test]
+fn cookie_parse_basic_and_multiple() {
+    run("local c = lur.cookie.parse('sid=abc; theme=dark')\n\
+         assert(c.sid == 'abc', 'sid')\n\
+         assert(c.theme == 'dark', 'theme')");
+}
+
+#[test]
+fn cookie_parse_trims_whitespace_including_tabs() {
+    run(
+        "local c = lur.cookie.parse('  a=1 ;' .. string.char(9) .. 'b=2' .. string.char(9))\n\
+         assert(c.a == '1', 'a trimmed')\n\
+         assert(c.b == '2', 'b trimmed')",
+    );
+}
+
+#[test]
+fn cookie_parse_is_lenient_and_keeps_inner_equals() {
+    run(
+        "assert(next(lur.cookie.parse('')) == nil, 'empty -> empty table')\n\
+         local c = lur.cookie.parse('garbage; x=1')\n\
+         assert(c.x == '1' and c.garbage == nil, 'segment without = is skipped')\n\
+         assert(lur.cookie.parse('=novalue; y=2').y == '2', 'empty name skipped')\n\
+         assert(lur.cookie.parse('k=1; k=2').k == '2', 'later duplicate wins')\n\
+         assert(lur.cookie.parse('t=a=b').t == 'a=b', 'value keeps inner =')",
+    );
+}
