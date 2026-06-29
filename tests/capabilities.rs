@@ -265,3 +265,18 @@ fn time_parse_http_date_to_epoch_millis() {
            'malformed http-date raises')",
     );
 }
+
+#[test]
+fn crypto_arg_type_error_is_lur_voiced() {
+    // In mlua+Luau, pcall errors from Rust are WrappedFailure userdata (not plain strings).
+    // tostring() calls the __tostring metamethod to get the human-readable message.
+    run(
+        "local ok, err = pcall(function() return lur.crypto.sha256({}) end)\n\
+         assert(ok == false, 'table arg rejected')\n\
+         assert(tostring(err):find('lur.crypto.sha256: argument #1 must be string, got table', 1, true),\n\
+           'lur-voiced message: ' .. tostring(err))\n\
+         local ok2, err2 = pcall(function() return lur.crypto.hmac_sha256('k', {}) end)\n\
+         assert(ok2 == false and tostring(err2):find('lur.crypto.hmac_sha256: argument #2 must be string, got table', 1, true),\n\
+           'second-arg message: ' .. tostring(err2))",
+    );
+}

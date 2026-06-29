@@ -7,7 +7,6 @@ use mlua::{Error, FromLua, Lua, Value};
 /// Convert `value` (the `n`-th argument to `fname`) to `T`. Coercion is
 /// identical to mlua's default (e.g. a number is still accepted where a string
 /// is wanted); only the failure message is customized.
-#[allow(dead_code)] // consumed by capability migration tasks
 pub(crate) fn arg<T: FromLua>(
     lua: &Lua,
     value: Value,
