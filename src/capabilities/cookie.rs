@@ -172,7 +172,7 @@ fn install_serialize(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
                                 if f.is_finite()
                                     && f.fract() == 0.0
                                     && f >= i64::MIN as f64
-                                    && f <= i64::MAX as f64 =>
+                                    && f < (1u64 << 63) as f64 =>
                             {
                                 f as i64
                             }

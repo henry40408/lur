@@ -209,5 +209,22 @@ fn cookie_serialize_rejects_invalid_inputs() {
          assert(pcall(function() return s('a', 'b' .. string.char(10) .. 'c') end) == false,\n\
            'value with LF')\n\
          assert(pcall(function() return s('a', 'b', {max_age=1.5}) end) == false,\n\
-           'non-integer max_age')");
+           'non-integer max_age')\n\
+         assert(pcall(function() return s('a', 'b' .. string.char(13) .. 'c') end) == false,\n\
+           'value with CR')\n\
+         assert(pcall(function() return s('a', 'b', {domain='x' .. string.char(13) .. 'y'}) end) == false,\n\
+           'domain with CR')\n\
+         assert(pcall(function() return s('a', 'b', {path='x' .. string.char(10) .. 'y'}) end) == false,\n\
+           'path with LF')\n\
+         assert(pcall(function() return s('a', 'b', {expires='x' .. string.char(13) .. string.char(10) .. 'y'}) end) == false,\n\
+           'expires with CRLF')\n\
+         assert(pcall(function() return s('a', 'b', {max_age=9223372036854775808}) end) == false,\n\
+           'max_age = 2^63 out of range')");
+}
+
+#[test]
+fn cookie_serialize_allows_high_bytes() {
+    run("local s = lur.cookie.serialize\n\
+         local result = s('a', string.char(0xe2))\n\
+         assert(result == 'a=' .. string.char(0xe2), 'high byte should pass through')");
 }
