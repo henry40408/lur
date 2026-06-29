@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782748832315,
+  "lastUpdate": 1782752732795,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -965,6 +965,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207965,
             "range": "± 2640",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "42e142cb96b19d05e20fdeff29a4b0e82607b6f1",
+          "message": "feat(diagnostics): point errors at the user's script, render rustc-style (#49)\n\n* docs: add diagnostics design spec\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs: correct diagnostics spec exit-code description\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs: add diagnostics plan 1 (chunk naming + rendering)\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* feat(diagnostics): name script chunks from the CLI path\n\n* feat(diagnostics): rustc-style error renderer in one-shot mode\n\n* fix(diagnostics): reject line 0 in parse_location to avoid underflow\n\n* feat(diagnostics): render server handler/cron errors; document diagnostics\n\n* test(diagnostics): cover syntax-error path and column caret\n\nCloses the spec testing gap flagged in final review (item 8): the syntax-error render path and the column-present caret alignment were untested.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-30T01:03:40+08:00",
+          "tree_id": "2ee02b4e63336b59b21bb802f06c319d6bbdbe6f",
+          "url": "https://github.com/henry40408/lur/commit/42e142cb96b19d05e20fdeff29a4b0e82607b6f1"
+        },
+        "date": 1782752732488,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 276725,
+            "range": "± 2656",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5333,
+            "range": "± 229",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 209736,
+            "range": "± 5129",
             "unit": "ns/iter"
           }
         ]
