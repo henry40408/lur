@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782743903709,
+  "lastUpdate": 1782746300881,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -881,6 +881,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208178,
             "range": "± 926",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ed2d8a4367e3d824fca2c281818ee16dd7d1e891",
+          "message": "feat(serve): expose parsed cookies as req.cookies (#47)\n\n* docs: add req.cookies design spec\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs: add req.cookies implementation plan\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* refactor: extract cookie_pairs as the shared cookie parser\n\n* feat(serve): expose parsed cookies as req.cookies\n\n* docs: include cookies in build_req rustdoc\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-29T23:17:06+08:00",
+          "tree_id": "d3e6b383166a82f8d5e1b316790f77441cd42a9b",
+          "url": "https://github.com/henry40408/lur/commit/ed2d8a4367e3d824fca2c281818ee16dd7d1e891"
+        },
+        "date": 1782746300116,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 269534,
+            "range": "± 2465",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5271,
+            "range": "± 541",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 242638,
+            "range": "± 4954",
             "unit": "ns/iter"
           }
         ]
