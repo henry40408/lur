@@ -140,4 +140,29 @@ mod tests {
         let out = render(SRC, "app.lua", "runtime error: app.lua:0: mystery");
         assert_eq!(out, "lur: app.lua:0: mystery");
     }
+
+    #[test]
+    fn renders_syntax_error_snippet() {
+        // Syntax errors carry no traceback; the "syntax error: " prefix is stripped.
+        let out = render(
+            SRC,
+            "app.lua",
+            "syntax error: app.lua:1: Expected identifier",
+        );
+        assert!(out.contains("error: Expected identifier"), "{out}");
+        assert!(out.contains("--> app.lua:1"), "{out}");
+        assert!(out.contains("1 | local x = nil"), "{out}");
+    }
+
+    #[test]
+    fn caret_points_at_the_column_when_present() {
+        // With a column, the position line shows it and the caret is indented to
+        // it (col 7 -> 6 leading spaces before '^').
+        let out = render(SRC, "app.lua", "syntax error: app.lua:2:7: bad token");
+        assert!(out.contains("--> app.lua:2:7"), "{out}");
+        assert!(
+            out.contains("      ^"),
+            "caret indented to the column: {out}"
+        );
+    }
 }
