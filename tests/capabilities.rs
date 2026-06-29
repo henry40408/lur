@@ -244,3 +244,24 @@ fn time_monotonic_ms_advances_and_is_nonnegative() {
          local b = lur.time.monotonic_ms()\n\
          assert(b > a, 'monotonic_ms advances after a 5ms sleep')");
 }
+
+#[test]
+fn time_parse_rfc3339_to_epoch_millis() {
+    run(
+        "assert(lur.time.parse_rfc3339('1970-01-01T00:00:00Z') == 0, 'epoch')\n\
+         assert(lur.time.parse_rfc3339('1970-01-01T00:00:00.500Z') == 500, 'subsecond ms')\n\
+         assert(lur.time.parse_rfc3339('1970-01-01T01:00:00+01:00') == 0, 'offset normalizes to UTC')\n\
+         assert(pcall(function() return lur.time.parse_rfc3339('not a date') end) == false,\n\
+           'malformed rfc3339 raises')",
+    );
+}
+
+#[test]
+fn time_parse_http_date_to_epoch_millis() {
+    run(
+        "assert(lur.time.parse_http_date('Thu, 01 Jan 1970 00:00:00 GMT') == 0, 'epoch')\n\
+         assert(lur.time.parse_http_date('Fri, 01 Jan 2021 00:00:00 GMT') == 1609459200000, 'known date')\n\
+         assert(pcall(function() return lur.time.parse_http_date('not a date') end) == false,\n\
+           'malformed http-date raises')",
+    );
+}

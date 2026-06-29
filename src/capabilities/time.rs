@@ -20,8 +20,43 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let time = lua.create_table().map_err(RunError::Init)?;
 
     install_clocks(lua, &time)?;
+    install_parsers(lua, &time)?;
 
     lur.set("time", time).map_err(RunError::Init)?;
+    Ok(())
+}
+
+/// `lur.time.parse_rfc3339` / `lur.time.parse_http_date`.
+fn install_parsers(lua: &Lua, time: &Table) -> Result<(), RunError> {
+    let parse_rfc3339 = lua
+        .create_function(|_, s: mlua::String| {
+            let s = s
+                .to_str()
+                .map_err(|e| Error::runtime(format!("lur.time.parse_rfc3339: {e}")))?;
+            let dt = chrono::DateTime::parse_from_rfc3339(&s)
+                .map_err(|e| Error::runtime(format!("lur.time.parse_rfc3339: {e}")))?;
+            Ok(dt.timestamp_millis())
+        })
+        .map_err(RunError::Init)?;
+    time.set("parse_rfc3339", parse_rfc3339)
+        .map_err(RunError::Init)?;
+
+    let parse_http_date = lua
+        .create_function(|_, s: mlua::String| {
+            let s = s
+                .to_str()
+                .map_err(|e| Error::runtime(format!("lur.time.parse_http_date: {e}")))?;
+            let t = httpdate::parse_http_date(&s)
+                .map_err(|e| Error::runtime(format!("lur.time.parse_http_date: {e}")))?;
+            let dur = t.duration_since(UNIX_EPOCH).map_err(|_e| {
+                Error::runtime("lur.time.parse_http_date: date is before the unix epoch")
+            })?;
+            Ok(dur.as_millis() as i64)
+        })
+        .map_err(RunError::Init)?;
+    time.set("parse_http_date", parse_http_date)
+        .map_err(RunError::Init)?;
+
     Ok(())
 }
 
