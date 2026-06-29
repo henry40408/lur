@@ -219,6 +219,7 @@ impl Server {
 
         // Warm up each VM inside the runtime so an app.lua that awaits at the top
         // level (e.g. fetching config) still works.
+        let chunk_name = format!("@{}", config.chunk_name.as_deref().unwrap_or("script"));
         let (vms, routes, crons) = rt.block_on(async {
             let mut vms = Vec::with_capacity(pool_size);
             let mut routes: Option<Vec<(String, String)>> = None;
@@ -227,6 +228,7 @@ impl Server {
                 let registry = Registry::default();
                 let (lua, deadline) = build_lua(&config, Some(&registry))?;
                 lua.load(source)
+                    .set_name(&chunk_name)
                     .exec_async()
                     .await
                     .map_err(RunError::Script)?;
