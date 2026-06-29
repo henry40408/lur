@@ -38,9 +38,11 @@ it lands last and may be split into its own implementation plan.
 4. **Per-capability argument messages** — lur-voiced arg-type errors (last).
 
 **Explicitly out of scope:**
-- **Exit codes** stay as they are: any error exits `1` (a top-level
-  `return <number>` still sets a custom code, per spec §8). No per-kind codes —
-  there is no cross-tool standard and it burdens users.
+- **Exit codes** stay exactly as they are today and are not redesigned: the
+  existing `main.rs` mapping is unchanged (usage/read error `2`, timeout `124`,
+  OOM `137`, other script errors `1`; a top-level `return <number>` still sets a
+  custom code per spec §8). We deliberately do **not** introduce a new per-kind
+  scheme — there is no cross-tool standard and it burdens users.
 - **Machine-readable (JSON / SARIF) diagnostics** — a separate axis, deferred to
   a follow-up. Runtimes generally don't emit structured error reports (that role
   belongs to compilers/linters); we revisit only if a concrete consumer (CI
