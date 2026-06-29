@@ -18,6 +18,7 @@ pub mod log;
 pub mod null;
 pub mod serve;
 pub mod state;
+pub mod time;
 
 use mlua::Lua;
 
@@ -40,6 +41,7 @@ pub fn install(
     base64::install(lua, &lur)?;
     crypto::install(lua, &lur)?;
     cookie::install(lua, &lur)?;
+    time::install(lua, &lur)?;
     io::install(lua, &lur)?;
     fs::install(lua, &lur, config.policy.clone())?;
     http::install(lua, &lur, config.policy.clone(), config.max_http_body)?;

@@ -1205,6 +1205,7 @@ dependencies = [
  "hex",
  "hmac",
  "http-body-util",
+ "httpdate",
  "hyper",
  "hyper-util",
  "md-5",

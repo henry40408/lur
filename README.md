@@ -210,6 +210,15 @@ Everything is exposed under the `lur` global. Functions raise a Lua error on fai
   Values are raw bytes (base64 them for arbitrary data); an invalid name, a
   value with `;`/CR/LF, or `same_site="None"` without `secure=true` raises.
   Produce `expires` with `os.date("!%a, %d %b %Y %H:%M:%S GMT", t)`.
+- **`lur.time`** — pure-compute clocks and timestamp parsing (no policy needed),
+  filling the gaps `os.*` cannot. `now_ms() → ms` is the current Unix time in
+  milliseconds; `monotonic_ms() → ms` is a monotonic reading whose *difference*
+  measures elapsed time immune to clock adjustments. `parse_rfc3339(text) → ms`
+  and `parse_http_date(text) → ms` turn an RFC 3339 timestamp (a UTC offset such
+  as a trailing `Z` is required) or an HTTP-date header into epoch milliseconds
+  (malformed input raises). All values
+  are integer milliseconds; divide by `1000` to feed `os.date` (which still
+  handles formatting).
 - **`lur.log`** — `info(msg)`, `warn(msg)`, `error(msg)`, written to stderr (stdout is
   reserved as the data channel). No implicit newline.
 - **`lur.stdin`** — `read()` drains all bytes, `read(n)` reads up to `n` (`nil` at EOF),
