@@ -228,3 +228,19 @@ fn cookie_serialize_allows_high_bytes() {
          local result = s('a', string.char(0xe2))\n\
          assert(result == 'a=' .. string.char(0xe2), 'high byte should pass through')");
 }
+
+#[test]
+fn time_now_ms_is_recent_epoch_millis() {
+    run("local t = lur.time.now_ms()\n\
+         assert(t > 1700000000000, 'now_ms is recent epoch millis')\n\
+         assert(lur.time.now_ms() >= t, 'now_ms is non-decreasing')");
+}
+
+#[test]
+fn time_monotonic_ms_advances_and_is_nonnegative() {
+    run("local a = lur.time.monotonic_ms()\n\
+         assert(a >= 0, 'monotonic_ms is non-negative')\n\
+         lur.async.sleep(5)\n\
+         local b = lur.time.monotonic_ms()\n\
+         assert(b > a, 'monotonic_ms advances after a 5ms sleep')");
+}
