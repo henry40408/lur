@@ -16,6 +16,7 @@ This is plan 2 of 2 for the diagnostics spec (`docs/superpowers/specs/2026-06-30
 - **Message format (exact):** `lur.<cap>.<fn>: argument #<n> must be <expected>, got <actual>` where `<n>` is 1-based, `<expected>` is the human type word given at the call site (`"string"`, `"number"`, `"function"`), and `<actual>` is `Value::type_name()` of the supplied value (`"table"`, `"boolean"`, `"nil"`, …).
 - **Scope = scalar-argument capability functions only.** Migrate the functions in the table below (`crypto`, `base64`, `cookie`, `time`, `json`, `io`, `fs`, `env`, `log`, `state`). Do **NOT** touch `http`, `serve`, `db`, `async` — they take tables/closures and already validate manually; forcing them through the helper adds risk without benefit. Arguments that are intentionally "any value" (e.g. `lur.json.encode(value)`, `lur.state.set`'s value) keep their existing `Value` binding and are NOT checked.
 - No new dependencies.
+- **Lua test idiom (mlua 0.11 + luau):** a Rust-callback error caught by `pcall` is an `"error"` userdata, NOT a string — `err:find(...)` raises "attempt to index error". Always read the message via `tostring(err)` first (invokes `__tostring`), e.g. `tostring(err):find('…', 1, true)`. All test helpers below already do this.
 - CI gates: `cargo fmt --all`, `cargo clippy --all-targets -- -D warnings`, `cargo nextest run`. Run `cargo fmt --all` before each commit.
 - Commits GPG-signed (`git commit -S`). Stage files explicitly — never `git add -A`/`.`.
 
@@ -332,7 +333,7 @@ Append to `tests/capabilities.rs`:
 ```rust
 #[test]
 fn scalar_capabilities_arg_errors_are_lur_voiced() {
-    run("local function msg(f) local ok, e = pcall(f); assert(ok == false); return e end\n\
+    run("local function msg(f) local ok, e = pcall(f); assert(ok == false); return tostring(e) end\n\
          assert(msg(function() return lur.base64.encode({}) end)\n\
            :find('lur.base64.encode: argument #1 must be string, got table', 1, true), 'base64')\n\
          assert(msg(function() return lur.cookie.parse({}) end)\n\
@@ -417,7 +418,7 @@ Append to `tests/capabilities.rs`:
 ```rust
 #[test]
 fn io_fs_env_log_state_arg_errors_are_lur_voiced() {
-    run("local function msg(f) local ok, e = pcall(f); assert(ok == false); return e end\n\
+    run("local function msg(f) local ok, e = pcall(f); assert(ok == false); return tostring(e) end\n\
          assert(msg(function() return lur.stdout.write({}) end)\n\
            :find('lur.stdout.write: argument #1 must be string, got table', 1, true), 'stdout')\n\
          assert(msg(function() return lur.log.info({}) end)\n\
