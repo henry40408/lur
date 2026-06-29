@@ -712,7 +712,7 @@ fn more_specific(a: &Route, b: &Route) -> bool {
 }
 
 /// Build the Lua `req` table handed to a handler: `method`, `path`, `params`,
-/// `query` / `query_all`, `headers`, `body`, and a `json()` shorthand.
+/// `query` / `query_all`, `headers`, `cookies`, `body`, and a `json()` shorthand.
 fn build_req(
     lua: &mlua::Lua,
     req: &RawRequest,
