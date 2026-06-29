@@ -754,6 +754,20 @@ fn build_req(
     }
     table.set("headers", headers)?;
 
+    // Cookies: parse every `Cookie` header into one table (later value wins),
+    // sharing the lenient parser with `lur.cookie.parse`. Always a table — an
+    // absent or empty header yields an empty `req.cookies`, never `nil`. Cookie
+    // names are case-sensitive, so (unlike header names) they are not altered.
+    let cookies = lua.create_table()?;
+    for (name, value) in &req.headers {
+        if name.eq_ignore_ascii_case("cookie") {
+            for (cname, cvalue) in crate::capabilities::cookie::cookie_pairs(value.as_bytes()) {
+                cookies.set(lua.create_string(cname)?, lua.create_string(cvalue)?)?;
+            }
+        }
+    }
+    table.set("cookies", cookies)?;
+
     // Body as a one-shot stream. `req.read([n])` mirrors `lur.stdin.read`;
     // `req.body` (a property, served via `__index`) and `req.json()` materialize
     // the whole body but become unavailable once a chunked `req.read(n)` has
