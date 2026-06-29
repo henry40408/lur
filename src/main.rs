@@ -328,7 +328,11 @@ fn run_one_shot(cli: Cli) -> ExitCode {
             ExitCode::from(137)
         }
         Err(RunError::Script(e)) => {
-            eprintln!("{e}");
+            let chunk = cli.script.display().to_string();
+            eprintln!(
+                "{}",
+                lur::diagnostics::render(&source, &chunk, &e.to_string())
+            );
             ExitCode::FAILURE
         }
         Err(RunError::Init(e)) => {

@@ -1,5 +1,21 @@
 use lur::runtime::{Runtime, RuntimeConfig};
 
+/// End to end: the rendered one-shot output carries a snippet and the file line.
+#[test]
+fn rendered_runtime_error_has_snippet() {
+    let cfg = RuntimeConfig {
+        chunk_name: Some("app.lua".to_owned()),
+        ..Default::default()
+    };
+    let rt = Runtime::with_config(cfg).expect("runtime builds");
+    let err = rt
+        .run("local x = nil\nprint(x.y)\n")
+        .expect_err("script raises");
+    let out = lur::diagnostics::render("local x = nil\nprint(x.y)\n", "app.lua", &err.to_string());
+    assert!(out.contains("--> app.lua:2"), "{out}");
+    assert!(out.contains("2 | print(x.y)"), "{out}");
+}
+
 /// A runtime error reports the configured chunk name, not lur's Rust source.
 #[test]
 fn named_runtime_reports_script_path_not_internals() {
