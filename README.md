@@ -200,6 +200,16 @@ Everything is exposed under the `lur` global. Functions raise a Lua error on fai
   → bool` for timing-safe comparison. Digests are raw bytes — bridge to hex or
   `lur.base64` as the destination format needs. `sha1`/`md5` are for legacy
   interop only.
+- **`lur.cookie`** — pure-compute cookie helpers (no policy needed).
+  `parse(header) → { name = value, … }` reads a `Cookie` request header
+  (lenient: malformed segments are skipped; on a duplicate name the later value
+  wins; values are verbatim — no decoding). `serialize(name, value, opts?) →
+  string` builds one `Set-Cookie` value (no `Set-Cookie:` prefix); `opts` may
+  set `domain`/`path`/`expires` (string), `max_age` (integer seconds),
+  `secure`/`http_only` (boolean), and `same_site` (`"Strict"`/`"Lax"`/`"None"`).
+  Values are raw bytes (base64 them for arbitrary data); an invalid name, a
+  value with `;`/CR/LF, or `same_site="None"` without `secure=true` raises.
+  Produce `expires` with `os.date("!%a, %d %b %Y %H:%M:%S GMT", t)`.
 - **`lur.log`** — `info(msg)`, `warn(msg)`, `error(msg)`, written to stderr (stdout is
   reserved as the data channel). No implicit newline.
 - **`lur.stdin`** — `read()` drains all bytes, `read(n)` reads up to `n` (`nil` at EOF),

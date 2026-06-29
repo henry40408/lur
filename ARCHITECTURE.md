@@ -78,7 +78,7 @@ One-shot applies both in `Runtime::guarded`; server mode applies both in
 hands it to each submodule's `install` in a fixed order:
 
 ```
-null · log · json · base64 · crypto · io · fs · http · env · db · async · args · serve · state
+null · log · json · base64 · crypto · cookie · io · fs · http · env · db · async · args · serve · state
 ```
 
 Each submodule sets its own slice (`lur.fs`, `lur.http`, …). Policy-gated modules
