@@ -37,6 +37,7 @@ CLI on top. The public modules are `capabilities`, `config`, `policy`, `runtime`
 | `src/policy.rs` | `Policy` — the capability allow/deny model (`strict()` / `loose()`) and its checks. |
 | `src/config.rs` | TOML config file parsing and the profile/allowlist model. |
 | `src/units.rs` | `parse_size` (×1024) and `parse_duration` for CLI value parsers. |
+| `src/diagnostics.rs` | `render` — rustc-style error renderer: snippet + filtered traceback; plain fallback when no location parses. |
 | `src/capabilities/` | One submodule per `lur.*` table; `mod.rs::install` orchestrates them. |
 
 ## The shared core: `build_lua`
@@ -155,6 +156,13 @@ load time. Matched params are percent-decoded to raw bytes and exposed as `req.p
 4. Map the result: a returned table → `response_from` (reads `status`, default 200, and
    `body`, default empty); timeout → **503**; a Lua error → logged and **500**. A handler
    error never brings the server down (spec §8).
+
+Every `lua.load` is named from the CLI path (`cli.script`/`cli.app`; a nameless
+runtime uses `script`), so error positions read `app.lua:2:` rather than the
+Rust call site. `src/diagnostics.rs` renders an mlua error against the source
+(rustc-style snippet + filtered traceback), with a plain `lur: <message>`
+fallback when no location parses. Handler and cron errors use the same renderer,
+so server-side errors look identical to one-shot errors in the terminal.
 
 The request body is a one-shot cursor (`BodyStream`): `req.read(n)` streams it in chunks,
 and once streaming starts `req.body`/`req.json()` refuse to serve a now-partial body.

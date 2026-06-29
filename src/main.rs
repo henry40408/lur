@@ -235,6 +235,7 @@ fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig,
         state: Default::default(),
         shutdown_grace: Duration::from_millis(DEFAULT_SHUTDOWN_GRACE_MS),
         max_concurrency: flags.max_concurrency,
+        chunk_name: None,
     })
 }
 
@@ -270,6 +271,7 @@ fn run_serve(cli: ServeCli) -> ExitCode {
     config.per_event_timeout = cli.timeout;
     config.max_body = cli.max_body;
     config.shutdown_grace = cli.shutdown_grace;
+    config.chunk_name = Some(cli.app.display().to_string());
 
     let server = match Server::load(&source, config) {
         Ok(s) => s,
@@ -298,13 +300,14 @@ fn run_one_shot(cli: Cli) -> ExitCode {
         }
     };
 
-    let config = match build_config(&cli.common, cli.script_args) {
+    let mut config = match build_config(&cli.common, cli.script_args) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("lur: {e}");
             return ExitCode::from(2);
         }
     };
+    config.chunk_name = Some(cli.script.display().to_string());
     let rt = match Runtime::with_config(config) {
         Ok(rt) => rt,
         Err(e) => {
@@ -325,7 +328,11 @@ fn run_one_shot(cli: Cli) -> ExitCode {
             ExitCode::from(137)
         }
         Err(RunError::Script(e)) => {
-            eprintln!("{e}");
+            let chunk = cli.script.display().to_string();
+            eprintln!(
+                "{}",
+                lur::diagnostics::render(&source, &chunk, &e.to_string())
+            );
             ExitCode::FAILURE
         }
         Err(RunError::Init(e)) => {

@@ -79,6 +79,10 @@ pub struct RuntimeConfig {
     /// Cap on concurrently in-flight `lur.async.*` tasks per VM (`--max-concurrency`).
     /// `None` leaves the fan-out unbounded (spec §7/§9).
     pub max_concurrency: Option<usize>,
+    /// Chunk name reported in error positions (`app.lua:2:`). Set from the CLI
+    /// script/app path. `None` falls back to the generic name `script` — never
+    /// the Rust call site. Uses Lua's file convention internally.
+    pub chunk_name: Option<String>,
 }
 
 impl Default for RuntimeConfig {
@@ -95,6 +99,7 @@ impl Default for RuntimeConfig {
             state: Arc::new(crate::capabilities::state::StateStore::default()),
             shutdown_grace: Duration::from_millis(DEFAULT_SHUTDOWN_GRACE_MS),
             max_concurrency: None,
+            chunk_name: None,
         }
     }
 }
@@ -161,6 +166,8 @@ pub struct Runtime {
     /// Current-thread runtime that drives async host calls (`lur.http`,
     /// `lur.async.sleep`, …) and the wall-clock timeout layer.
     rt: tokio::runtime::Runtime,
+    /// Lua chunk name (already `@`-prefixed) applied to every loaded chunk.
+    chunk_name: String,
 }
 
 impl Runtime {
@@ -185,20 +192,38 @@ impl Runtime {
             .enable_all()
             .build()
             .map_err(RunError::AsyncRuntime)?;
-        Ok(Self { lua, deadline, rt })
+        let chunk_name = format!("@{}", config.chunk_name.as_deref().unwrap_or("script"));
+        Ok(Self {
+            lua,
+            deadline,
+            rt,
+            chunk_name,
+        })
     }
 
     // ---------------------------------------------------------------------
 
     /// Run `source` to completion with no time limit.
     pub fn run(&self, source: &str) -> Result<(), RunError> {
-        self.guarded(None, self.lua.load(source).exec_async())
+        self.guarded(
+            None,
+            self.lua
+                .load(source)
+                .set_name(&self.chunk_name)
+                .exec_async(),
+        )
     }
 
     /// Run `source` to completion, interrupting it if it runs longer than
     /// `timeout` of wall-clock time.
     pub fn run_with_timeout(&self, source: &str, timeout: Duration) -> Result<(), RunError> {
-        self.guarded(Some(timeout), self.lua.load(source).exec_async())
+        self.guarded(
+            Some(timeout),
+            self.lua
+                .load(source)
+                .set_name(&self.chunk_name)
+                .exec_async(),
+        )
     }
 
     /// Run `source` and map its top-level `return` value to a process exit
@@ -209,7 +234,13 @@ impl Runtime {
         source: &str,
         timeout: Option<Duration>,
     ) -> Result<i32, RunError> {
-        let values = self.guarded(timeout, self.lua.load(source).eval_async::<MultiValue>())?;
+        let values = self.guarded(
+            timeout,
+            self.lua
+                .load(source)
+                .set_name(&self.chunk_name)
+                .eval_async::<MultiValue>(),
+        )?;
         Ok(exit_code_of(values))
     }
 

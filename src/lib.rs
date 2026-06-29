@@ -5,6 +5,7 @@
 
 pub mod capabilities;
 pub mod config;
+pub mod diagnostics;
 pub mod policy;
 pub mod runtime;
 pub mod serve;
