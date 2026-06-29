@@ -73,6 +73,9 @@ fn parse_location(body: &str, chunk_name: &str) -> Option<(usize, Option<usize>,
         return None;
     }
     let line: usize = rest[..line_end].parse().ok()?;
+    if line == 0 {
+        return None;
+    }
     let after_line = &rest[line_end..];
 
     // optional :col
@@ -129,5 +132,12 @@ mod tests {
         let displayed = "runtime error: app.lua:99: mystery";
         let out = render(SRC, "app.lua", displayed);
         assert_eq!(out, "lur: mystery");
+    }
+
+    #[test]
+    fn line_zero_falls_back_to_plain() {
+        // A zero line number must not underflow; fall back to the plain form.
+        let out = render(SRC, "app.lua", "runtime error: app.lua:0: mystery");
+        assert_eq!(out, "lur: app.lua:0: mystery");
     }
 }
