@@ -26,6 +26,27 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     Ok(())
 }
 
+/// `lur.time.now_ms` / `lur.time.monotonic_ms`.
+fn install_clocks(lua: &Lua, time: &Table) -> Result<(), RunError> {
+    let now_ms = lua
+        .create_function(|_, ()| {
+            let dur = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_e| {
+                Error::runtime("lur.time.now_ms: system clock is before the unix epoch")
+            })?;
+            Ok(dur.as_millis() as i64)
+        })
+        .map_err(RunError::Init)?;
+    time.set("now_ms", now_ms).map_err(RunError::Init)?;
+
+    let monotonic_ms = lua
+        .create_function(|_, ()| Ok(MONOTONIC_START.elapsed().as_millis() as i64))
+        .map_err(RunError::Init)?;
+    time.set("monotonic_ms", monotonic_ms)
+        .map_err(RunError::Init)?;
+
+    Ok(())
+}
+
 /// `lur.time.parse_rfc3339` / `lur.time.parse_http_date`.
 fn install_parsers(lua: &Lua, time: &Table) -> Result<(), RunError> {
     let parse_rfc3339 = lua
@@ -55,27 +76,6 @@ fn install_parsers(lua: &Lua, time: &Table) -> Result<(), RunError> {
         })
         .map_err(RunError::Init)?;
     time.set("parse_http_date", parse_http_date)
-        .map_err(RunError::Init)?;
-
-    Ok(())
-}
-
-/// `lur.time.now_ms` / `lur.time.monotonic_ms`.
-fn install_clocks(lua: &Lua, time: &Table) -> Result<(), RunError> {
-    let now_ms = lua
-        .create_function(|_, ()| {
-            let dur = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_e| {
-                Error::runtime("lur.time.now_ms: system clock is before the unix epoch")
-            })?;
-            Ok(dur.as_millis() as i64)
-        })
-        .map_err(RunError::Init)?;
-    time.set("now_ms", now_ms).map_err(RunError::Init)?;
-
-    let monotonic_ms = lua
-        .create_function(|_, ()| Ok(MONOTONIC_START.elapsed().as_millis() as i64))
-        .map_err(RunError::Init)?;
-    time.set("monotonic_ms", monotonic_ms)
         .map_err(RunError::Init)?;
 
     Ok(())

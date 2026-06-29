@@ -17,12 +17,12 @@ base64 = "0.22.1"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
 clap = { version = "4.6", features = ["derive"] }
 cron = "0.17.0"
-httpdate = "1.0.3"
 futures-util = { version = "0.3.32", default-features = false, features = ["std", "async-await"] }
 getrandom = "0.2.15"
 hex = "0.4.3"
 hmac = "0.12.1"
 http-body-util = "0.1.3"
+httpdate = "1.0.3"
 hyper = { version = "1.10.1", features = ["server", "http1"] }
 hyper-util = { version = "0.1.20", features = ["tokio"] }
 md-5 = "0.10.6"
