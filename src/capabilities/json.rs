@@ -8,6 +8,7 @@ use mlua::{Error, Lua, Table, Value};
 use serde_json::Value as Json;
 
 use super::null;
+use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
 /// Install `lur.json.encode` / `lur.json.decode`.
@@ -23,7 +24,8 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     json.set("encode", encode).map_err(RunError::Init)?;
 
     let decode = lua
-        .create_function(|lua, text: mlua::String| {
+        .create_function(|lua, text: Value| {
+            let text: mlua::String = argcheck::arg(lua, text, "lur.json.decode", 1, "string")?;
             let parsed: Json = serde_json::from_slice(&text.as_bytes())
                 .map_err(|e| Error::runtime(e.to_string()))?;
             json_to_lua(lua, &parsed)

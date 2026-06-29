@@ -280,3 +280,20 @@ fn crypto_arg_type_error_is_lur_voiced() {
            'second-arg message: ' .. tostring(err2))",
     );
 }
+
+#[test]
+fn scalar_capabilities_arg_errors_are_lur_voiced() {
+    run(
+        "local function msg(f) local ok, e = pcall(f); assert(ok == false); return tostring(e) end\n\
+         assert(msg(function() return lur.base64.encode({}) end)\n\
+           :find('lur.base64.encode: argument #1 must be string, got table', 1, true), 'base64')\n\
+         assert(msg(function() return lur.cookie.parse({}) end)\n\
+           :find('lur.cookie.parse: argument #1 must be string, got table', 1, true), 'cookie')\n\
+         assert(msg(function() return lur.cookie.serialize('n', {}) end)\n\
+           :find('lur.cookie.serialize: argument #2 must be string, got table', 1, true), 'cookie2')\n\
+         assert(msg(function() return lur.time.parse_rfc3339({}) end)\n\
+           :find('lur.time.parse_rfc3339: argument #1 must be string, got table', 1, true), 'time')\n\
+         assert(msg(function() return lur.json.decode({}) end)\n\
+           :find('lur.json.decode: argument #1 must be string, got table', 1, true), 'json')",
+    );
+}

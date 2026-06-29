@@ -5,8 +5,9 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use mlua::{Error, Lua, Table};
+use mlua::{Error, Lua, Table, Value};
 
+use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
 /// Install `lur.base64.encode` / `lur.base64.decode`.
@@ -14,14 +15,16 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let base64 = lua.create_table().map_err(RunError::Init)?;
 
     let encode = lua
-        .create_function(|lua, data: mlua::String| {
+        .create_function(|lua, data: Value| {
+            let data: mlua::String = argcheck::arg(lua, data, "lur.base64.encode", 1, "string")?;
             lua.create_string(STANDARD.encode(data.as_bytes()))
         })
         .map_err(RunError::Init)?;
     base64.set("encode", encode).map_err(RunError::Init)?;
 
     let decode = lua
-        .create_function(|lua, text: mlua::String| {
+        .create_function(|lua, text: Value| {
+            let text: mlua::String = argcheck::arg(lua, text, "lur.base64.decode", 1, "string")?;
             let bytes = STANDARD
                 .decode(text.as_bytes())
                 .map_err(|e| Error::runtime(format!("lur.base64.decode: {e}")))?;
