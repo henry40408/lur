@@ -132,3 +132,99 @@ fn json_encode_rejects_non_utf8_string() {
          assert(ok == false, 'non-UTF-8 must be rejected')",
     );
 }
+
+#[test]
+fn cookie_parse_basic_and_multiple() {
+    run("local c = lur.cookie.parse('sid=abc; theme=dark')\n\
+         assert(c.sid == 'abc', 'sid')\n\
+         assert(c.theme == 'dark', 'theme')");
+}
+
+#[test]
+fn cookie_parse_trims_whitespace_including_tabs() {
+    run(
+        "local c = lur.cookie.parse('  a=1 ;' .. string.char(9) .. 'b=2' .. string.char(9))\n\
+         assert(c.a == '1', 'a trimmed')\n\
+         assert(c.b == '2', 'b trimmed')",
+    );
+}
+
+#[test]
+fn cookie_parse_is_lenient_and_keeps_inner_equals() {
+    run(
+        "assert(next(lur.cookie.parse('')) == nil, 'empty -> empty table')\n\
+         local c = lur.cookie.parse('garbage; x=1')\n\
+         assert(c.x == '1' and c.garbage == nil, 'segment without = is skipped')\n\
+         assert(lur.cookie.parse('=novalue; y=2').y == '2', 'empty name skipped')\n\
+         assert(lur.cookie.parse('k=1; k=2').k == '2', 'later duplicate wins')\n\
+         assert(lur.cookie.parse('t=a=b').t == 'a=b', 'value keeps inner =')",
+    );
+}
+
+#[test]
+fn cookie_serialize_bare_and_single_attributes() {
+    run("local s = lur.cookie.serialize\n\
+         assert(s('sid', 'abc') == 'sid=abc', 'bare')\n\
+         assert(s('a', 'b', {domain='example.com'}) == 'a=b; Domain=example.com', 'domain')\n\
+         assert(s('a', 'b', {path='/'}) == 'a=b; Path=/', 'path')\n\
+         assert(s('a', 'b', {max_age=3600}) == 'a=b; Max-Age=3600', 'max_age')\n\
+         assert(s('a', 'b', {max_age=0}) == 'a=b; Max-Age=0', 'max_age zero')\n\
+         assert(s('a', 'b', {max_age=-1}) == 'a=b; Max-Age=-1', 'max_age negative')\n\
+         assert(s('a', 'b', {http_only=true}) == 'a=b; HttpOnly', 'http_only')\n\
+         assert(s('a', 'b', {secure=true}) == 'a=b; Secure', 'secure')\n\
+         assert(s('a', 'b', {same_site='lax'}) == 'a=b; SameSite=Lax', 'same_site canon')");
+}
+
+#[test]
+fn cookie_serialize_false_omits_and_order_is_fixed() {
+    run("local s = lur.cookie.serialize\n\
+         assert(s('a', 'b', {secure=false, http_only=false}) == 'a=b', 'false omits flags')\n\
+         local full = s('sid', 'abc', {\n\
+           domain='example.com', path='/', max_age=3600,\n\
+           expires='Mon, 29 Jun 2026 12:53:14 GMT',\n\
+           http_only=true, secure=true, same_site='Strict' })\n\
+         assert(full == 'sid=abc; Domain=example.com; Path=/; Max-Age=3600; '\n\
+           .. 'Expires=Mon, 29 Jun 2026 12:53:14 GMT; HttpOnly; Secure; SameSite=Strict',\n\
+           'fixed attribute order')");
+}
+
+#[test]
+fn cookie_serialize_same_site_none_requires_secure() {
+    run("local s = lur.cookie.serialize\n\
+         assert(pcall(function() return s('a','b',{same_site='None'}) end) == false,\n\
+           'None without secure raises')\n\
+         assert(s('a','b',{same_site='None', secure=true}) == 'a=b; Secure; SameSite=None',\n\
+           'None with secure ok')\n\
+         assert(pcall(function() return s('a','b',{same_site='bogus'}) end) == false,\n\
+           'unknown same_site raises')");
+}
+
+#[test]
+fn cookie_serialize_rejects_invalid_inputs() {
+    run("local s = lur.cookie.serialize\n\
+         assert(pcall(function() return s('a b', 'v') end) == false, 'name with space')\n\
+         assert(pcall(function() return s('a=b', 'v') end) == false, 'name with =')\n\
+         assert(pcall(function() return s('', 'v') end) == false, 'empty name')\n\
+         assert(pcall(function() return s('a', 'b;c') end) == false, 'value with ;')\n\
+         assert(pcall(function() return s('a', 'b' .. string.char(10) .. 'c') end) == false,\n\
+           'value with LF')\n\
+         assert(pcall(function() return s('a', 'b', {max_age=1.5}) end) == false,\n\
+           'non-integer max_age')\n\
+         assert(pcall(function() return s('a', 'b' .. string.char(13) .. 'c') end) == false,\n\
+           'value with CR')\n\
+         assert(pcall(function() return s('a', 'b', {domain='x' .. string.char(13) .. 'y'}) end) == false,\n\
+           'domain with CR')\n\
+         assert(pcall(function() return s('a', 'b', {path='x' .. string.char(10) .. 'y'}) end) == false,\n\
+           'path with LF')\n\
+         assert(pcall(function() return s('a', 'b', {expires='x' .. string.char(13) .. string.char(10) .. 'y'}) end) == false,\n\
+           'expires with CRLF')\n\
+         assert(pcall(function() return s('a', 'b', {max_age=9223372036854775808}) end) == false,\n\
+           'max_age = 2^63 out of range')");
+}
+
+#[test]
+fn cookie_serialize_allows_high_bytes() {
+    run("local s = lur.cookie.serialize\n\
+         local result = s('a', string.char(0xe2))\n\
+         assert(result == 'a=' .. string.char(0xe2), 'high byte should pass through')");
+}
