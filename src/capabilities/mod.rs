@@ -3,6 +3,7 @@
 //! Each submodule installs its slice of the single `lur` table; [`install`]
 //! orchestrates them and must run before `sandbox(true)` freezes the globals.
 
+pub(crate) mod argcheck;
 pub mod args;
 pub mod async_ops;
 pub mod base64;
