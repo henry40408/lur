@@ -150,7 +150,7 @@ load time. Matched params are percent-decoded to raw bytes and exposed as `req.p
    allocates it.
 2. `router.resolve` → **404** if nothing matches.
 3. `checkout()` a VM, `build_req` (sets `method`, `path`, `params`, `query`/`query_all`,
-   `headers`, `body`, the streaming `read`, and `json()`), then `call_handler` under the
+   `headers`, `cookies`, `body`, the streaming `read`, and `json()`), then `call_handler` under the
    two-layer timeout.
 4. Map the result: a returned table → `response_from` (reads `status`, default 200, and
    `body`, default empty); timeout → **503**; a Lua error → logged and **500**. A handler

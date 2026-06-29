@@ -264,7 +264,8 @@ Registration happens once at load time; the registered handlers then serve traff
   single-flight, skip a tick if the previous run is still going), and `timeout` (ms).
 
 The `req` object exposes `method`, `path`, `params`, `query` (last value per key),
-`query_all` (all values), `headers` (lowercased), `body` (raw bytes), and `json()`.
+`query_all` (all values), `headers` (lowercased), `cookies` (parsed `Cookie`
+header; empty table when absent), `body` (raw bytes), and `json()`.
 For large uploads, `read(n)` streams the body in chunks; once you start streaming,
 `body`/`json()` are no longer available.
 

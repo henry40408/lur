@@ -392,3 +392,38 @@ fn serve_http_is_a_registration_error_in_one_shot() {
         "lur.serve.http must error outside server mode"
     );
 }
+
+#[test]
+fn req_cookies_parses_the_cookie_header() {
+    let s = serve(
+        "lur.serve.http('GET', '/c', function(req)\n\
+         \treturn { body = (req.cookies.sid or '?') .. '|' .. (req.cookies.theme or '?') } end)",
+    );
+    let mut req = request("GET", "/c", "");
+    req.headers = vec![("Cookie".to_owned(), "sid=abc; theme=dark".to_owned())];
+    assert_eq!(s.dispatch_raw(&req).unwrap().body, b"abc|dark");
+}
+
+#[test]
+fn req_cookies_is_empty_table_when_absent() {
+    let s = serve(
+        "lur.serve.http('GET', '/c', function(req)\n\
+         \treturn { body = (next(req.cookies) == nil) and 'empty' or 'nonempty' } end)",
+    );
+    let resp = s.dispatch("GET", "/c", b"").expect("dispatch ok");
+    assert_eq!(resp.body, b"empty");
+}
+
+#[test]
+fn req_cookies_merges_multiple_headers_later_wins() {
+    let s = serve(
+        "lur.serve.http('GET', '/c', function(req)\n\
+         \treturn { body = req.cookies.a .. '|' .. req.cookies.b } end)",
+    );
+    let mut req = request("GET", "/c", "");
+    req.headers = vec![
+        ("Cookie".to_owned(), "a=1; b=2".to_owned()),
+        ("Cookie".to_owned(), "b=3".to_owned()),
+    ];
+    assert_eq!(s.dispatch_raw(&req).unwrap().body, b"1|3");
+}
