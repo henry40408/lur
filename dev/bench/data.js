@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782662272485,
+  "lastUpdate": 1782743903709,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -839,6 +839,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 392056,
             "range": "± 12333",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "21b92634c6fc693210c8ee85f8d64468b45ff4f4",
+          "message": "feat: add lur.cookie capability (parse & serialize) (#46)\n\n* docs: add lur.cookie design spec\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs: add lur.cookie implementation plan\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* feat: add lur.cookie.parse\n\n* feat: add lur.cookie.serialize\n\n* docs: document lur.cookie\n\nAdd lur.cookie entry to the README Data & I/O section with parse/serialize\ninterface documentation, and update ARCHITECTURE capability-order line to\nreflect cookie's position after crypto in the build sequence.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* test: broaden lur.cookie serialize rejection coverage; tighten max_age bound\n\n---------\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-29T22:37:11+08:00",
+          "tree_id": "42642af28a1386e220fb043f6b943068f83d18fa",
+          "url": "https://github.com/henry40408/lur/commit/21b92634c6fc693210c8ee85f8d64468b45ff4f4"
+        },
+        "date": 1782743903292,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 270313,
+            "range": "± 2243",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5322,
+            "range": "± 182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208178,
+            "range": "± 926",
             "unit": "ns/iter"
           }
         ]
