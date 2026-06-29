@@ -42,6 +42,10 @@ pub struct Server {
     max_body: Option<usize>,
     /// Grace period for draining in-flight work on graceful shutdown.
     shutdown_grace: Duration,
+    /// App source text, retained for rendering handler/cron errors (diagnostics).
+    source: Arc<str>,
+    /// Bare chunk name (no `@` prefix) used by the diagnostics renderer.
+    chunk_name: String,
 }
 
 /// One pre-warmed VM in the pool: its sandboxed Lua state and the handler
@@ -219,7 +223,11 @@ impl Server {
 
         // Warm up each VM inside the runtime so an app.lua that awaits at the top
         // level (e.g. fetching config) still works.
-        let chunk_name = format!("@{}", config.chunk_name.as_deref().unwrap_or("script"));
+        let bare_chunk_name = config
+            .chunk_name
+            .clone()
+            .unwrap_or_else(|| "script".to_owned());
+        let chunk_name = format!("@{bare_chunk_name}");
         let (vms, routes, crons) = rt.block_on(async {
             let mut vms = Vec::with_capacity(pool_size);
             let mut routes: Option<Vec<(String, String)>> = None;
@@ -283,6 +291,8 @@ impl Server {
             per_event_timeout: config.per_event_timeout,
             max_body: config.max_body,
             shutdown_grace: config.shutdown_grace,
+            source: Arc::from(source),
+            chunk_name: bare_chunk_name,
         })
     }
 
@@ -424,7 +434,10 @@ impl Server {
         let response = match self.dispatch_async(&raw).await {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("lur: handler error: {e}");
+                eprintln!(
+                    "lur: handler error:\n{}",
+                    crate::diagnostics::render(&self.source, &self.chunk_name, &e.to_string())
+                );
                 Response {
                     status: 500,
                     body: b"Internal Server Error".to_vec(),
@@ -483,7 +496,11 @@ impl Server {
                 eprintln!("error: cron[{}]: timed out", job.name);
             }
             Err(CallError::Lua(e)) => {
-                eprintln!("error: cron[{}]: {e}", job.name);
+                eprintln!(
+                    "error: cron[{}]:\n{}",
+                    job.name,
+                    crate::diagnostics::render(&self.source, &self.chunk_name, &e.to_string())
+                );
             }
         }
     }

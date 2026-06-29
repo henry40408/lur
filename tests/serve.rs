@@ -427,3 +427,28 @@ fn req_cookies_merges_multiple_headers_later_wins() {
     ];
     assert_eq!(s.dispatch_raw(&req).unwrap().body, b"1|3");
 }
+
+#[test]
+fn handler_error_carries_location_for_diagnostics() {
+    // A handler that raises a Lua error is returned from dispatch as
+    // Err(RunError::Script(...)). The error must carry a parsable chunk+line
+    // location so that diagnostics::render (called in the hyper handle layer)
+    // can produce a rustc-style snippet. We verify the location is present; the
+    // render output itself is covered by diagnostics::tests.
+    let s = serve(
+        "lur.serve.http('GET', '/boom', function(req)\n\
+         \tlocal x = nil\n\
+         \treturn x.y\n\
+         end)",
+    );
+    // dispatch propagates Lua errors as Err; the 500 is produced by the hyper adapter.
+    let err = s
+        .dispatch("GET", "/boom", b"")
+        .expect_err("a handler error must be returned as Err from dispatch");
+    // With chunk_name defaulting to "script", the error must contain "script:3".
+    let msg = err.to_string();
+    assert!(
+        msg.contains("script:3"),
+        "error must carry the chunk name and line so the renderer can locate it: {msg}"
+    );
+}

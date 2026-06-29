@@ -288,6 +288,12 @@ end)
 `lur serve` drains in-flight requests and cron runs on `SIGTERM`/`SIGINT` within
 `--shutdown-grace` before exiting.
 
+### Diagnostics
+
+Errors are reported against your script's path with the failing line and a
+source snippet (rustc-style), followed by a stack traceback. Server handler and
+cron errors are rendered the same way to stderr (and still become a `500`).
+
 ## Development
 
 ```sh
