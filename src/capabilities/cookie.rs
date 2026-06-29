@@ -38,23 +38,35 @@ fn trim_ows(mut s: &[u8]) -> &[u8] {
     s
 }
 
+/// Split a `Cookie` header value into (name, value) byte pairs using the
+/// lenient rules: split on `;`, trim OWS per segment, split on the first `=`,
+/// skip a segment with no `=` or an empty name. Values are verbatim. Borrows
+/// from the input; duplicate names are preserved in order (a caller building a
+/// map collapses them, later-wins).
+pub(crate) fn cookie_pairs(header: &[u8]) -> Vec<(&[u8], &[u8])> {
+    let mut pairs = Vec::new();
+    for segment in header.split(|&b| b == b';') {
+        let segment = trim_ows(segment);
+        let Some(eq) = segment.iter().position(|&b| b == b'=') else {
+            continue;
+        };
+        let name = &segment[..eq];
+        if name.is_empty() {
+            continue;
+        }
+        pairs.push((name, &segment[eq + 1..]));
+    }
+    pairs
+}
+
 /// `lur.cookie.parse(header) -> { name = value, ... }`.
 fn install_parse(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
     let parse = lua
         .create_function(|lua, header: mlua::String| {
             let out = lua.create_table()?;
             let bytes = header.as_bytes();
-            for segment in bytes.split(|&b| b == b';') {
-                let segment = trim_ows(segment);
-                let Some(eq) = segment.iter().position(|&b| b == b'=') else {
-                    continue; // no '=' -> skip
-                };
-                let name = &segment[..eq];
-                if name.is_empty() {
-                    continue; // empty name -> skip
-                }
-                let value = &segment[eq + 1..];
-                // Later duplicate overwrites earlier: plain table assignment.
+            // Later duplicate overwrites earlier: plain table assignment.
+            for (name, value) in cookie_pairs(&bytes) {
                 out.set(lua.create_string(name)?, lua.create_string(value)?)?;
             }
             Ok(out)
@@ -222,4 +234,42 @@ fn install_serialize(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
         .map_err(RunError::Init)?;
     cookie.set("serialize", serialize).map_err(RunError::Init)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cookie_pairs;
+
+    #[test]
+    fn cookie_pairs_basic_and_multiple() {
+        assert_eq!(cookie_pairs(b"sid=abc"), vec![(&b"sid"[..], &b"abc"[..])]);
+        assert_eq!(
+            cookie_pairs(b"sid=abc; theme=dark"),
+            vec![(&b"sid"[..], &b"abc"[..]), (&b"theme"[..], &b"dark"[..])]
+        );
+    }
+
+    #[test]
+    fn cookie_pairs_trims_ows_including_tabs() {
+        assert_eq!(
+            cookie_pairs(b"  a=1 ;\tb=2\t"),
+            vec![(&b"a"[..], &b"1"[..]), (&b"b"[..], &b"2"[..])]
+        );
+    }
+
+    #[test]
+    fn cookie_pairs_is_lenient() {
+        assert_eq!(cookie_pairs(b""), Vec::<(&[u8], &[u8])>::new());
+        assert_eq!(cookie_pairs(b"garbage; x=1"), vec![(&b"x"[..], &b"1"[..])]);
+        assert_eq!(cookie_pairs(b"=noname; y=2"), vec![(&b"y"[..], &b"2"[..])]);
+    }
+
+    #[test]
+    fn cookie_pairs_keeps_inner_equals_and_duplicates() {
+        assert_eq!(cookie_pairs(b"t=a=b"), vec![(&b"t"[..], &b"a=b"[..])]);
+        assert_eq!(
+            cookie_pairs(b"k=1; k=2"),
+            vec![(&b"k"[..], &b"1"[..]), (&b"k"[..], &b"2"[..])]
+        );
+    }
 }
