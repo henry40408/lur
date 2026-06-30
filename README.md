@@ -246,9 +246,14 @@ Everything is exposed under the `lur` global. Functions raise a Lua error on fai
 - **`lur.db`** — `exec(sql, ...params) → { rows_affected, last_insert_id }`,
   `query(sql, ...params) → array of row tables` (keyed by column name), and
   `tx(fn)` which runs `fn(tx)` on a pinned connection, committing on return and rolling
-  back on error. Use `?` placeholders; tables must be JSON-encoded first.
-- **`lur.kv`** — `get(key) → bytes | nil`, `set(key, bytes)`, `delete(key)`. A simple
-  key/value store sharing the same SQLite pool.
+  back on error. Write transactions use `BEGIN IMMEDIATE` and wait out lock contention via
+  a 5 s `busy_timeout`. Use `?` placeholders; tables must be JSON-encoded first.
+- **`lur.kv`** — `get(key) → bytes | nil`, `set(key, bytes)`, `delete(key)` plus atomic
+  ops: `add(key, value)` (set-if-absent; returns bool), `cas(key, expected, new)` (compare-
+  and-set; `nil` expected = must-be-absent, `nil` new = delete; returns bool),
+  `incr(key, n?)` / `decr(key, n?)` (integer counters; default step 1; counters read back
+  via `get` as their decimal string), and `update(key, fn)` (read-modify-write; return `nil`
+  from `fn` to delete). All backed by the shared SQLite pool.
 
 ### Concurrency
 
@@ -258,8 +263,11 @@ Everything is exposed under the `lur` global. Functions raise a Lua error on fai
   a time; tasks interleave only at I/O await points. `--max-concurrency` caps in-flight
   tasks.
 - **`lur.state`** — process-wide shared state across the VM pool, primitives only:
-  `get(key)`, `set(key, value)` (`nil` deletes), `incr(key, n?)` (atomic add), and
-  `update(key, fn)` (optimistic CAS retry loop; `fn` runs with no lock held).
+  `get(key)`, `set(key, value)` (`nil` deletes), `incr(key, n?)` / `decr(key, n?)`
+  (atomic integer add/subtract; step defaults to 1; fractional or non-integer steps are
+  rejected), `add(key, value)` (set-if-absent; returns bool), `cas(key, expected, new)`
+  (value compare-and-set; `nil` means absent; returns bool), and `update(key, fn)`
+  (optimistic CAS retry loop; `fn` runs with no lock held).
 
 ### Server mode (`lur serve`)
 
