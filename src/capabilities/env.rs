@@ -8,13 +8,15 @@ use std::sync::Arc;
 
 use mlua::{Error, Lua, Table, Value};
 
+use crate::capabilities::argcheck;
 use crate::policy::Policy;
 use crate::runtime::RunError;
 
 /// Install `lur.env`, gated by `policy`.
 pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunError> {
     let env = lua
-        .create_function(move |lua, name: mlua::String| {
+        .create_function(move |lua, name: Value| {
+            let name: mlua::String = argcheck::arg(lua, name, "lur.env", 1, "string")?;
             let bytes = name.as_bytes();
             let name = std::str::from_utf8(&bytes)
                 .map_err(|e| Error::runtime(format!("lur.env: variable name is not UTF-8: {e}")))?;

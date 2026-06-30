@@ -7,8 +7,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use mlua::{Error, Lua, Table};
+use mlua::{Error, Lua, Table, Value};
 
+use crate::capabilities::argcheck;
 use crate::policy::Policy;
 use crate::runtime::RunError;
 
@@ -18,7 +19,8 @@ pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunErr
 
     let read_policy = Arc::clone(&policy);
     let read = lua
-        .create_function(move |lua, path: mlua::String| {
+        .create_function(move |lua, path: Value| {
+            let path: mlua::String = argcheck::arg(lua, path, "lur.fs.read", 1, "string")?;
             let requested = bytes_to_path(&path.as_bytes());
             let resolved = read_policy
                 .allows_read(&requested)
@@ -32,7 +34,9 @@ pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunErr
 
     let write_policy = Arc::clone(&policy);
     let write = lua
-        .create_function(move |_, (path, data): (mlua::String, mlua::String)| {
+        .create_function(move |lua, (path, data): (Value, Value)| {
+            let path: mlua::String = argcheck::arg(lua, path, "lur.fs.write", 1, "string")?;
+            let data: mlua::String = argcheck::arg(lua, data, "lur.fs.write", 2, "string")?;
             let requested = bytes_to_path(&path.as_bytes());
             let resolved = write_policy
                 .allows_write(&requested)

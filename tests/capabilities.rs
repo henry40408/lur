@@ -297,3 +297,18 @@ fn scalar_capabilities_arg_errors_are_lur_voiced() {
            :find('lur.json.decode: argument #1 must be string, got table', 1, true), 'json')",
     );
 }
+
+#[test]
+fn io_fs_env_log_state_arg_errors_are_lur_voiced() {
+    run(
+        "local function msg(f) local ok, e = pcall(f); assert(ok == false); return tostring(e) end\n\
+         assert(msg(function() return lur.stdout.write({}) end)\n\
+           :find('lur.stdout.write: argument #1 must be string, got table', 1, true), 'stdout')\n\
+         assert(msg(function() return lur.log.info({}) end)\n\
+           :find('lur.log.info: argument #1 must be string, got table', 1, true), 'log')\n\
+         assert(msg(function() return lur.state.get({}) end)\n\
+           :find('lur.state.get: argument #1 must be string, got table', 1, true), 'state')\n\
+         assert(msg(function() return lur.state.update('k', 'notfn') end)\n\
+           :find('lur.state.update: argument #2 must be function, got string', 1, true), 'update')",
+    );
+}
