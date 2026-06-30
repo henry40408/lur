@@ -250,61 +250,76 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                     let pool = db::ensure_pool(&cell, &path).await?;
                     let mut conn = db::begin_immediate(&pool).await?;
 
-                    // read current value as bytes|nil (type-aware, same as get)
-                    let cur: Value = match sqlx::query("SELECT value FROM lur_kv WHERE key = ?")
-                        .bind(&key)
-                        .fetch_optional(&mut *conn)
-                        .await
-                        .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?
-                    {
-                        None => Value::Nil,
-                        Some(r) => match value_to_bytes(&r)? {
+                    // Run the full read → transform → write → commit sequence.
+                    // Every `?` propagates an Err out of this inner block; the
+                    // mutable borrow of `conn` ends when this Future is awaited
+                    // and dropped, freeing `conn` for the rollback below.
+                    let result: mlua::Result<Value> = async {
+                        // read current value as bytes|nil (type-aware, same as get)
+                        let cur: Value = match sqlx::query("SELECT value FROM lur_kv WHERE key = ?")
+                            .bind(&key)
+                            .fetch_optional(&mut *conn)
+                            .await
+                            .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?
+                        {
                             None => Value::Nil,
-                            Some(bytes) => Value::String(lua.create_string(bytes)?),
-                        },
-                    };
+                            Some(r) => match value_to_bytes(&r)? {
+                                None => Value::Nil,
+                                Some(bytes) => Value::String(lua.create_string(bytes)?),
+                            },
+                        };
 
-                    IN_KV_UPDATE.with(|f| f.set(true));
-                    let result = func.call_async::<Value>(cur).await;
-                    IN_KV_UPDATE.with(|f| f.set(false));
+                        IN_KV_UPDATE.with(|f| f.set(true));
+                        let transform_result = func.call_async::<Value>(cur).await;
+                        IN_KV_UPDATE.with(|f| f.set(false));
 
-                    let new = match result {
-                        Ok(v) => v,
-                        Err(e) => {
-                            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-                            return Err(e);
-                        }
-                    };
+                        let new = match transform_result {
+                            Ok(v) => v,
+                            Err(e) => return Err(e),
+                        };
 
-                    match &new {
-                        Value::Nil => {
-                            sqlx::query("DELETE FROM lur_kv WHERE key = ?")
-                                .bind(&key)
-                                .execute(&mut *conn)
-                                .await
-                                .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
-                        }
-                        Value::String(s) => {
-                            sqlx::query("INSERT OR REPLACE INTO lur_kv (key, value) VALUES (?, ?)")
+                        match &new {
+                            Value::Nil => {
+                                sqlx::query("DELETE FROM lur_kv WHERE key = ?")
+                                    .bind(&key)
+                                    .execute(&mut *conn)
+                                    .await
+                                    .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
+                            }
+                            Value::String(s) => {
+                                sqlx::query(
+                                    "INSERT OR REPLACE INTO lur_kv (key, value) VALUES (?, ?)",
+                                )
                                 .bind(&key)
                                 .bind(s.as_bytes().to_vec())
                                 .execute(&mut *conn)
                                 .await
                                 .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
+                            }
+                            other => {
+                                return Err(Error::runtime(format!(
+                                    "lur.kv.update: transform must return a string or nil, got {}",
+                                    other.type_name()
+                                )));
+                            }
                         }
-                        other => {
+                        sqlx::query("COMMIT")
+                            .execute(&mut *conn)
+                            .await
+                            .map_err(|e| Error::runtime(format!("lur.kv.update: commit: {e}")))?;
+                        Ok(new)
+                    }
+                    .await;
+
+                    // On any error from the sequence above, roll back the open
+                    // transaction and return the original error unchanged.
+                    match result {
+                        Ok(v) => Ok(v),
+                        Err(e) => {
                             let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-                            return Err(Error::runtime(format!(
-                                "lur.kv.update: transform must return a string or nil, got {}",
-                                other.type_name()
-                            )));
+                            Err(e)
                         }
                     }
-                    sqlx::query("COMMIT")
-                        .execute(&mut *conn)
-                        .await
-                        .map_err(|e| Error::runtime(format!("lur.kv.update: commit: {e}")))?;
-                    Ok(new)
                 }
             })
             .map_err(RunError::Init)?;

@@ -207,6 +207,24 @@ fn kv_update_read_modify_write() {
 }
 
 #[test]
+fn kv_update_no_leaked_transaction_after_transform_error() {
+    // A transform that errors must not leave an open (IMMEDIATE) transaction on
+    // the pooled connection.  If it did, the next update would deadlock or fail
+    // because SQLite only permits one writer at a time.
+    let dir = tempfile::tempdir().unwrap();
+    let rt = db_runtime(dir.path().join("test.db"));
+    rt.run(
+        "local ok, err = pcall(function()\n\
+           lur.kv.update('z', function(_) error('boom') end)\n\
+         end)\n\
+         assert(ok == false, 'expected error from bad transform: ' .. tostring(err))\n\
+         local v = lur.kv.update('z2', function(_) return 'ok' end)\n\
+         assert(v == 'ok', 'a fresh update works after a transform error (no leaked transaction): got ' .. tostring(v))",
+    )
+    .expect("no leaked transaction after transform error");
+}
+
+#[test]
 fn kv_incr_decr_counters() {
     let dir = tempfile::tempdir().unwrap();
     let rt = db_runtime(dir.path().join("test.db"));
