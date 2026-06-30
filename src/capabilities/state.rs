@@ -124,32 +124,6 @@ impl StateStore {
     }
 }
 
-/// Extract an optional integer step argument. Accepts Lua integers and
-/// whole-number floats; rejects fractional floats with a lur-voiced error.
-fn integer_step_arg(value: Value, fname: &str, n: usize) -> mlua::Result<Option<i64>> {
-    match value {
-        Value::Nil => Ok(None),
-        Value::Integer(i) => Ok(Some(i)),
-        Value::Number(f) => {
-            if f.fract() != 0.0 {
-                return Err(mlua::Error::RuntimeError(format!(
-                    "{fname}: argument #{n} must be integer, got float"
-                )));
-            }
-            if f < i64::MIN as f64 || f > i64::MAX as f64 {
-                return Err(mlua::Error::RuntimeError(format!(
-                    "{fname}: argument #{n} out of integer range"
-                )));
-            }
-            Ok(Some(f as i64))
-        }
-        _ => Err(mlua::Error::RuntimeError(format!(
-            "{fname}: argument #{n} must be integer, got {}",
-            value.type_name()
-        ))),
-    }
-}
-
 thread_local! {
     /// Set while an `update` transform runs, so a re-entrant `lur.state` call on
     /// the same call stack raises a clear error instead of deadlocking.
@@ -222,7 +196,7 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
     let incr = lua
         .create_function(move |lua, (key, n): (Value, Value)| {
             let key: mlua::String = argcheck::arg(lua, key, "lur.state.incr", 1, "string")?;
-            let n = integer_step_arg(n, "lur.state.incr", 2)?;
+            let n = argcheck::integer_arg(n, "lur.state.incr", 2)?;
             reject_reentry()?;
             s.incr(key.as_bytes().to_vec(), n.unwrap_or(1))
                 .map_err(|e| match e {
@@ -241,7 +215,7 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
     let decr = lua
         .create_function(move |lua, (key, n): (Value, Value)| {
             let key: mlua::String = argcheck::arg(lua, key, "lur.state.decr", 1, "string")?;
-            let n = integer_step_arg(n, "lur.state.decr", 2)?;
+            let n = argcheck::integer_arg(n, "lur.state.decr", 2)?;
             reject_reentry()?;
             let delta = n.unwrap_or(1).checked_neg().ok_or_else(|| {
                 mlua::Error::RuntimeError("lur.state.decr: step too large".into())
