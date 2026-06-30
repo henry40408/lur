@@ -52,6 +52,24 @@ fn update_fn_cannot_reenter_state() {
 }
 
 #[test]
+fn state_incr_is_integer_and_has_decr() {
+    let rt = lur::runtime::Runtime::new().expect("runtime builds");
+    rt.run(
+        "assert(lur.state.incr('n') == 1, 'first incr -> 1')\n\
+         assert(lur.state.incr('n', 4) == 5, 'incr by 4')\n\
+         assert(lur.state.decr('n', 2) == 3, 'decr by 2')\n\
+         -- fractional step is rejected\n\
+         local ok = pcall(function() return lur.state.incr('n', 0.5) end)\n\
+         assert(ok == false, 'fractional step rejected')\n\
+         -- non-integer existing value is rejected\n\
+         lur.state.set('s', 'text')\n\
+         local ok2, err = pcall(function() return lur.state.incr('s') end)\n\
+         assert(ok2 == false and tostring(err):find('not an integer'), 'msg: ' .. tostring(err))",
+    )
+    .expect("state integer incr/decr");
+}
+
+#[test]
 fn state_is_shared_across_vms_from_the_same_config() {
     // Cross-VM sharing is the whole point (§6): the store is host-side. Two VMs
     // built from the same config share the same store Arc.

@@ -134,8 +134,9 @@ Process-wide shared state across the VM pool (primitives only): `get`/`set`
 ```lua
 lur.state.set("hits", 0)
 assert(lur.state.incr("hits", 2) == 2)
+assert(lur.state.decr("hits", 1) == 1)
 lur.state.update("hits", function(n) return (n or 0) + 1 end)
-assert(lur.state.get("hits") == 3)
+assert(lur.state.get("hits") == 2)
 lur.state.set("hits", nil)
 assert(lur.state.get("hits") == nil)
 ```
