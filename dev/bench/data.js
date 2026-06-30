@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782752732795,
+  "lastUpdate": 1782779344767,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1007,6 +1007,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 209736,
             "range": "± 5129",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dd246ce6ce6d8af265efb1cf835b2ed7b6b52914",
+          "message": "feat(diagnostics): lur-voiced capability argument errors (#50)\n\n* docs: add diagnostics plan 2 (capability arg messages)\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* feat(diagnostics): add argcheck helper for lur-voiced arg errors\n\n* feat(diagnostics): lur-voiced arg errors in lur.crypto\n\nMigrate all 8 create_function sites in lur.crypto to use\nargcheck::arg so type mismatches produce lur-voiced messages.\nThread fname through hash_fn<D>. Remove #[allow(dead_code)]\nfrom argcheck now that it has a real consumer.\n\nNote: in mlua+Luau, pcall errors from Rust are WrappedFailure\nuserdata (not plain strings); tostring() is required to get\nthe human-readable message in Lua assertions.\n\n* docs: fix plan 2 test idiom (tostring on pcall errors for luau)\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* feat(diagnostics): lur-voiced arg errors in base64/cookie/time/json\n\n* feat(diagnostics): lur-voiced arg errors in io/fs/env/log/state\n\n* docs: document lur-voiced capability argument errors\n\n---------\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-30T08:27:50+08:00",
+          "tree_id": "b46e963adb9fb320f463f0f5426ff399f1e95e9f",
+          "url": "https://github.com/henry40408/lur/commit/dd246ce6ce6d8af265efb1cf835b2ed7b6b52914"
+        },
+        "date": 1782779343826,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 272907,
+            "range": "± 7732",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5141,
+            "range": "± 175",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207770,
+            "range": "± 6834",
             "unit": "ns/iter"
           }
         ]
