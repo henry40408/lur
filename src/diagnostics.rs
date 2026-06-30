@@ -73,8 +73,20 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> S
     out.push_str(&format!("{g}{pad} |{r}\n"));
     out.push_str(&format!("{g}{gutter} |{r} {src_line}\n"));
     // Caret: under `col` when known, else under the first non-whitespace char.
-    let caret_col = col.unwrap_or_else(|| src_line.len() - src_line.trim_start().len() + 1);
-    let caret_pad = " ".repeat(caret_col.saturating_sub(1));
+    // The pad mirrors the source prefix character-for-character — tabs stay tabs
+    // so the caret lands at the same terminal tab stop; everything else becomes a
+    // space (char-counted, so multibyte prefixes don't shift it).
+    let prefix_end = match col {
+        Some(c) => src_line
+            .char_indices()
+            .nth(c.saturating_sub(1))
+            .map_or(src_line.len(), |(i, _)| i),
+        None => src_line.len() - src_line.trim_start().len(),
+    };
+    let caret_pad: String = src_line[..prefix_end]
+        .chars()
+        .map(|ch| if ch == '\t' { '\t' } else { ' ' })
+        .collect();
     out.push_str(&format!("{g}{pad} |{r} {caret_pad}{e}^{r}\n"));
 
     if let Some(tb) = traceback {
@@ -207,6 +219,22 @@ mod tests {
         assert!(
             out.contains("      ^"),
             "caret indented to the column: {out}"
+        );
+    }
+
+    #[test]
+    fn caret_mirrors_tab_indentation() {
+        // Luau emits no column, so the caret falls back to the first
+        // non-whitespace char. The caret line must reproduce the source line's
+        // leading tabs (not collapse them to single spaces), so `^` lands under
+        // the statement at the terminal's tab stops instead of drifting left.
+        let src = "local x = nil\n\t\tprint(x.y)\n";
+        let displayed = "runtime error: tab.lua:2: attempt to index nil with 'y'";
+        let out = render(src, "tab.lua", displayed, false);
+        let caret_line = out.lines().last().expect("a caret line");
+        assert!(
+            caret_line.ends_with("\t\t^"),
+            "caret pad should mirror the two leading tabs: {caret_line:?}"
         );
     }
 
