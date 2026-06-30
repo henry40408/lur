@@ -179,3 +179,22 @@ fn kv_add_and_cas() {
     )
     .expect("kv add + cas");
 }
+
+#[test]
+fn kv_incr_decr_counters() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = db_runtime(dir.path().join("test.db"));
+    rt.run(
+        "assert(lur.kv.incr('hits') == 1, 'first incr creates at 1')\n\
+         assert(lur.kv.incr('hits', 4) == 5, 'incr by 4')\n\
+         assert(lur.kv.decr('hits', 2) == 3, 'decr by 2')\n\
+         assert(lur.kv.get('hits') == '3', 'counter reads back as decimal bytes')\n\
+         -- incr on a non-integer value errors and leaves it intact\n\
+         lur.kv.set('blob', 'hello')\n\
+         local ok, err = pcall(function() return lur.kv.incr('blob') end)\n\
+         assert(ok == false, 'incr on a blob errors')\n\
+         assert(tostring(err):find('not an integer'), 'clear message: ' .. tostring(err))\n\
+         assert(lur.kv.get('blob') == 'hello', 'blob untouched after failed incr')",
+    )
+    .expect("kv incr/decr");
+}

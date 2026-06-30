@@ -6,6 +6,7 @@ use mlua::{Error, Lua, Table, Value};
 use sqlx::{Row, TypeInfo, ValueRef};
 
 use super::db::{self, SqliteShared};
+use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
 /// Install `lur.kv` sharing `db`'s lazily-opened pool.
@@ -177,9 +178,74 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
             .map_err(RunError::Init)?;
         kv.set("cas", cas).map_err(RunError::Init)?;
     }
+    {
+        let cell = std::sync::Arc::clone(&shared.cell);
+        let path = std::sync::Arc::clone(&shared.path);
+        let incr = lua
+            .create_async_function(move |lua, (key, n): (String, Value)| {
+                let cell = std::sync::Arc::clone(&cell);
+                let path = std::sync::Arc::clone(&path);
+                async move {
+                    let n: Option<i64> = argcheck::arg(&lua, n, "lur.kv.incr", 2, "integer")?;
+                    incr_by(&cell, &path, key, n.unwrap_or(1)).await
+                }
+            })
+            .map_err(RunError::Init)?;
+        kv.set("incr", incr).map_err(RunError::Init)?;
+    }
+    {
+        let cell = std::sync::Arc::clone(&shared.cell);
+        let path = std::sync::Arc::clone(&shared.path);
+        let decr = lua
+            .create_async_function(move |lua, (key, n): (String, Value)| {
+                let cell = std::sync::Arc::clone(&cell);
+                let path = std::sync::Arc::clone(&path);
+                async move {
+                    let n: Option<i64> = argcheck::arg(&lua, n, "lur.kv.decr", 2, "integer")?;
+                    let delta = n
+                        .unwrap_or(1)
+                        .checked_neg()
+                        .ok_or_else(|| Error::runtime("lur.kv.decr: step too large".to_string()))?;
+                    incr_by(&cell, &path, key, delta).await
+                }
+            })
+            .map_err(RunError::Init)?;
+        kv.set("decr", decr).map_err(RunError::Init)?;
+    }
 
     lur.set("kv", kv).map_err(RunError::Init)?;
     Ok(())
+}
+
+/// Atomically add `delta` to an integer counter `key`, creating it at `delta`
+/// when absent. Returns the new value, or errors if the key holds a
+/// non-integer (the `WHERE typeof(value)='integer'` guard returns no row).
+async fn incr_by(
+    cell: &std::sync::Arc<std::sync::OnceLock<sqlx::sqlite::SqlitePool>>,
+    path: &std::sync::Arc<Option<std::path::PathBuf>>,
+    key: String,
+    delta: i64,
+) -> mlua::Result<i64> {
+    let pool = db::ensure_pool(cell, path).await?;
+    let row = sqlx::query(
+        "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
+         ON CONFLICT(key) DO UPDATE SET value = value + excluded.value \
+         WHERE typeof(lur_kv.value) = 'integer' \
+         RETURNING value",
+    )
+    .bind(key)
+    .bind(delta)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| Error::runtime(format!("lur.kv.incr: {e}")))?;
+    match row {
+        Some(r) => r
+            .try_get::<i64, usize>(0)
+            .map_err(|e| Error::runtime(format!("lur.kv.incr: {e}"))),
+        None => Err(Error::runtime(
+            "lur.kv.incr: existing value is not an integer".to_string(),
+        )),
+    }
 }
 
 /// Decode column 0 of a single-column row into bytes, returning `None` for
