@@ -297,6 +297,10 @@ Capability functions report argument-type mistakes in their own voice, e.g.
 `lur.crypto.sha256: argument #1 must be string, got table`. Type coercion is
 unchanged — only the error message is clearer.
 
+Output is colorized when stderr is a terminal, and plain when it is piped or
+redirected. Set [`NO_COLOR`](https://no-color.org) (to any non-empty value) to
+disable color even on a terminal.
+
 ## Development
 
 ```sh

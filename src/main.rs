@@ -331,7 +331,12 @@ fn run_one_shot(cli: Cli) -> ExitCode {
             let chunk = cli.script.display().to_string();
             eprintln!(
                 "{}",
-                lur::diagnostics::render(&source, &chunk, &e.to_string())
+                lur::diagnostics::render(
+                    &source,
+                    &chunk,
+                    &e.to_string(),
+                    lur::diagnostics::stderr_color()
+                )
             );
             ExitCode::FAILURE
         }

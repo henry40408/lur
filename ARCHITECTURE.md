@@ -34,10 +34,10 @@ CLI on top. The public modules are `capabilities`, `config`, `policy`, `runtime`
 | `src/main.rs` | CLI (clap), config/policy resolution, mode dispatch, exit codes. Not part of the library. |
 | `src/runtime.rs` | The shared core: `build_lua`, the `Runtime` (one-shot), `RuntimeConfig`, `RunError`, the deadline/timeout machinery. |
 | `src/serve.rs` | Server mode: the VM `Pool`, `Router`, request dispatch, cron schedulers, graceful shutdown. |
+| `src/diagnostics.rs` | `render` — rustc-style error renderer: snippet + filtered traceback; `lur: <body>` fallback when no source snippet can be rendered. ANSI color gated by `stderr_color` (TTY + `NO_COLOR`). Consumed by `runtime.rs` (one-shot) and `serve.rs` (handler/cron errors). |
 | `src/policy.rs` | `Policy` — the capability allow/deny model (`strict()` / `loose()`) and its checks. |
 | `src/config.rs` | TOML config file parsing and the profile/allowlist model. |
 | `src/units.rs` | `parse_size` (×1024) and `parse_duration` for CLI value parsers. |
-| `src/diagnostics.rs` | `render` — rustc-style error renderer: snippet + filtered traceback; plain fallback when no location parses. |
 | `src/capabilities/` | One submodule per `lur.*` table; `mod.rs::install` orchestrates them. |
 
 ## The shared core: `build_lua`
