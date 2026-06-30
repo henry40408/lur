@@ -212,14 +212,37 @@ assert(#lur.db.query("SELECT id FROM t") == 2)
 
 ### lur.kv
 
-A simple key/value store over the same SQLite pool: `get(key) → bytes | nil`,
-`set(key, bytes)`, `delete(key)`.
+A key/value store over the same SQLite pool. Keys are strings; values are raw
+bytes. Basic operations: `get(key) → bytes | nil`, `set(key, bytes)`,
+`delete(key)`. Atomic ops: `add` (set-if-absent), `cas` (compare-and-swap),
+`incr`/`decr` (integer counters), `update` (read-modify-write).
 
 ```lua
 lur.kv.set("greeting", "hi")
 assert(lur.kv.get("greeting") == "hi")
 lur.kv.delete("greeting")
 assert(lur.kv.get("greeting") == nil)
+
+-- add: insert only when key is absent (returns true on insert, false if already set)
+assert(lur.kv.add("once", "first") == true)
+assert(lur.kv.add("once", "again") == false)
+assert(lur.kv.get("once") == "first")
+
+-- cas: compare-and-swap (expected, new) — returns true if applied
+assert(lur.kv.cas("once", "first", "second") == true)
+assert(lur.kv.cas("once", "first", "nope")  == false)
+
+-- incr/decr: integer counters (create-at-1 when absent; optional step)
+assert(lur.kv.incr("hits")    == 1)
+assert(lur.kv.incr("hits", 4) == 5)
+assert(lur.kv.decr("hits", 2) == 3)
+
+-- update: read-modify-write; transform returns new value (string) or nil to delete
+lur.kv.update("counter", function(cur)
+  local n = tonumber(cur) or 0
+  return tostring(n + 1)
+end)
+assert(lur.kv.get("counter") == "1")
 ```
 
 ## Concurrency

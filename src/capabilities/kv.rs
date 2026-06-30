@@ -2,12 +2,30 @@
 //! table (spec §6). Keys are strings, values raw bytes. Atomic operations
 //! (add/cas/incr/decr/update) use `SQLite`'s own atomicity; see the design spec.
 
+use std::cell::Cell;
+
 use mlua::{Error, Lua, Table, Value};
 use sqlx::{Row, TypeInfo, ValueRef};
 
 use super::db::{self, SqliteShared};
 use crate::capabilities::argcheck;
 use crate::runtime::RunError;
+
+thread_local! {
+    /// Set while a kv.update transform runs, so a nested lur.kv/lur.db call on
+    /// the same stack raises a clear error instead of deadlocking on the pinned
+    /// transaction connection.
+    static IN_KV_UPDATE: Cell<bool> = const { Cell::new(false) };
+}
+
+fn reject_kv_reentry(fname: &str) -> mlua::Result<()> {
+    if IN_KV_UPDATE.with(Cell::get) {
+        return Err(Error::runtime(format!(
+            "{fname}: cannot re-enter lur.kv from inside update()"
+        )));
+    }
+    Ok(())
+}
 
 /// Install `lur.kv` sharing `db`'s lazily-opened pool.
 pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunError> {
@@ -21,6 +39,7 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                 let cell = std::sync::Arc::clone(&cell);
                 let path = std::sync::Arc::clone(&path);
                 async move {
+                    reject_kv_reentry("lur.kv.get")?;
                     let pool = db::ensure_pool(&cell, &path).await?;
                     let row = sqlx::query("SELECT value FROM lur_kv WHERE key = ?")
                         .bind(key)
@@ -47,6 +66,7 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                 let cell = std::sync::Arc::clone(&cell);
                 let path = std::sync::Arc::clone(&path);
                 async move {
+                    reject_kv_reentry("lur.kv.set")?;
                     let pool = db::ensure_pool(&cell, &path).await?;
                     sqlx::query("INSERT OR REPLACE INTO lur_kv (key, value) VALUES (?, ?)")
                         .bind(key)
@@ -68,6 +88,7 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                 let cell = std::sync::Arc::clone(&cell);
                 let path = std::sync::Arc::clone(&path);
                 async move {
+                    reject_kv_reentry("lur.kv.delete")?;
                     let pool = db::ensure_pool(&cell, &path).await?;
                     sqlx::query("DELETE FROM lur_kv WHERE key = ?")
                         .bind(key)
@@ -88,6 +109,7 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                 let cell = std::sync::Arc::clone(&cell);
                 let path = std::sync::Arc::clone(&path);
                 async move {
+                    reject_kv_reentry("lur.kv.add")?;
                     let pool = db::ensure_pool(&cell, &path).await?;
                     let res = sqlx::query(
                         "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
@@ -118,6 +140,7 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                     let cell = std::sync::Arc::clone(&cell);
                     let path = std::sync::Arc::clone(&path);
                     async move {
+                        reject_kv_reentry("lur.kv.cas")?;
                         let pool = db::ensure_pool(&cell, &path).await?;
                         let exp = expected.map(|s| s.as_bytes().to_vec());
                         let neu = new.map(|s| s.as_bytes().to_vec());
@@ -186,6 +209,7 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                 let cell = std::sync::Arc::clone(&cell);
                 let path = std::sync::Arc::clone(&path);
                 async move {
+                    reject_kv_reentry("lur.kv.incr")?;
                     let n: Option<i64> = argcheck::arg(&lua, n, "lur.kv.incr", 2, "integer")?;
                     incr_by("lur.kv.incr", &cell, &path, key, n.unwrap_or(1)).await
                 }
@@ -201,6 +225,7 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                 let cell = std::sync::Arc::clone(&cell);
                 let path = std::sync::Arc::clone(&path);
                 async move {
+                    reject_kv_reentry("lur.kv.decr")?;
                     let n: Option<i64> = argcheck::arg(&lua, n, "lur.kv.decr", 2, "integer")?;
                     let delta = n
                         .unwrap_or(1)
@@ -211,6 +236,79 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
             })
             .map_err(RunError::Init)?;
         kv.set("decr", decr).map_err(RunError::Init)?;
+    }
+
+    {
+        let cell = std::sync::Arc::clone(&shared.cell);
+        let path = std::sync::Arc::clone(&shared.path);
+        let update = lua
+            .create_async_function(move |lua, (key, func): (String, mlua::Function)| {
+                let cell = std::sync::Arc::clone(&cell);
+                let path = std::sync::Arc::clone(&path);
+                async move {
+                    reject_kv_reentry("lur.kv.update")?;
+                    let pool = db::ensure_pool(&cell, &path).await?;
+                    let mut conn = db::begin_immediate(&pool).await?;
+
+                    // read current value as bytes|nil (type-aware, same as get)
+                    let cur: Value = match sqlx::query("SELECT value FROM lur_kv WHERE key = ?")
+                        .bind(&key)
+                        .fetch_optional(&mut *conn)
+                        .await
+                        .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?
+                    {
+                        None => Value::Nil,
+                        Some(r) => match value_to_bytes(&r)? {
+                            None => Value::Nil,
+                            Some(bytes) => Value::String(lua.create_string(bytes)?),
+                        },
+                    };
+
+                    IN_KV_UPDATE.with(|f| f.set(true));
+                    let result = func.call_async::<Value>(cur).await;
+                    IN_KV_UPDATE.with(|f| f.set(false));
+
+                    let new = match result {
+                        Ok(v) => v,
+                        Err(e) => {
+                            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                            return Err(e);
+                        }
+                    };
+
+                    match &new {
+                        Value::Nil => {
+                            sqlx::query("DELETE FROM lur_kv WHERE key = ?")
+                                .bind(&key)
+                                .execute(&mut *conn)
+                                .await
+                                .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
+                        }
+                        Value::String(s) => {
+                            sqlx::query("INSERT OR REPLACE INTO lur_kv (key, value) VALUES (?, ?)")
+                                .bind(&key)
+                                .bind(s.as_bytes().to_vec())
+                                .execute(&mut *conn)
+                                .await
+                                .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
+                        }
+                        other => {
+                            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                            return Err(Error::runtime(format!(
+                                "lur.kv.update: transform must return a string or nil, got {}",
+                                other.type_name()
+                            )));
+                        }
+                    }
+                    sqlx::query("COMMIT")
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(|e| Error::runtime(format!("lur.kv.update: commit: {e}")))?;
+                    Ok(new)
+                }
+            })
+            .map_err(RunError::Init)?;
+        kv.set("update", update).map_err(RunError::Init)?;
     }
 
     lur.set("kv", kv).map_err(RunError::Init)?;
@@ -257,7 +355,7 @@ async fn incr_by(
 fn value_to_bytes(row: &sqlx::sqlite::SqliteRow) -> mlua::Result<Option<Vec<u8>>> {
     let raw = row
         .try_get_raw(0)
-        .map_err(|e| Error::runtime(format!("lur.kv.get: {e}")))?;
+        .map_err(|e| Error::runtime(format!("lur.kv: {e}")))?;
     if raw.is_null() {
         return Ok(None);
     }
@@ -278,5 +376,5 @@ where
     T: sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite>,
 {
     row.try_get::<T, usize>(0)
-        .map_err(|e| Error::runtime(format!("lur.kv.get: decoding value: {e}")))
+        .map_err(|e| Error::runtime(format!("lur.kv: decoding value: {e}")))
 }

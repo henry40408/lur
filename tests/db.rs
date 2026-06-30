@@ -181,6 +181,32 @@ fn kv_add_and_cas() {
 }
 
 #[test]
+fn kv_update_read_modify_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = db_runtime(dir.path().join("test.db"));
+    rt.run(
+        "-- create via update (current is nil)\n\
+         local v = lur.kv.update('k', function(cur)\n\
+           assert(cur == nil, 'absent starts nil')\n\
+           return 'a'\n\
+         end)\n\
+         assert(v == 'a', 'update returns the new value')\n\
+         -- transform existing\n\
+         lur.kv.update('k', function(cur) return cur .. 'b' end)\n\
+         assert(lur.kv.get('k') == 'ab', 'appended')\n\
+         -- delete by returning nil\n\
+         local d = lur.kv.update('k', function(_) return nil end)\n\
+         assert(d == nil and lur.kv.get('k') == nil, 'nil deletes')\n\
+         -- re-entry from inside the transform errors\n\
+         local ok, err = pcall(function()\n\
+           lur.kv.update('k', function(_) lur.kv.set('x', 'y'); return '1' end)\n\
+         end)\n\
+         assert(ok == false and tostring(err):find('re%-enter'), 'reentry blocked: ' .. tostring(err))",
+    )
+    .expect("kv update RMW + reentry guard");
+}
+
+#[test]
 fn kv_incr_decr_counters() {
     let dir = tempfile::tempdir().unwrap();
     let rt = db_runtime(dir.path().join("test.db"));
