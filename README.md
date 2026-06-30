@@ -121,6 +121,8 @@ lur <script.lua> [SCRIPT_ARGS...]      # one-shot
 lur serve <app.lua> [FLAGS]            # server
 ```
 
+`lur docs` prints the embedded usage guide.
+
 `SIZE` accepts a binary (×1024) suffix: bare/`b`, `k`/`kb`, `m`/`mb`, `g`/`gb`
 (e.g. `256m`). `DURATION` accepts `ms`, `s`, `m` (minutes), `h` (e.g. `500ms`, `2m`).
 

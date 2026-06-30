@@ -79,7 +79,7 @@ struct CommonFlags {
     no_config: bool,
 }
 
-/// `lur` — run a sandboxed Lua (Luau) script.
+/// `lur` — run a sandboxed Lua (Luau) script. Run `lur docs` to print the embedded usage guide.
 #[derive(Parser)]
 #[command(name = "lur", version = env!("GIT_VERSION"), about)]
 struct Cli {
@@ -246,6 +246,11 @@ fn main() -> ExitCode {
     if argv.get(1).map(String::as_str) == Some("serve") {
         let serve_argv = std::iter::once(argv[0].clone()).chain(argv.iter().skip(2).cloned());
         return run_serve(ServeCli::parse_from(serve_argv));
+    }
+    if argv.get(1).map(String::as_str) == Some("docs") {
+        const GUIDE: &str = include_str!("../docs/GUIDE.md");
+        print!("{}", lur::docs::render(GUIDE, lur::color::stdout_color()));
+        return ExitCode::SUCCESS;
     }
     run_one_shot(Cli::parse())
 }
