@@ -223,10 +223,7 @@ impl Server {
 
         // Warm up each VM inside the runtime so an app.lua that awaits at the top
         // level (e.g. fetching config) still works.
-        let bare_chunk_name = config
-            .chunk_name
-            .clone()
-            .unwrap_or_else(|| "script".to_owned());
+        let bare_chunk_name = config.chunk_name.as_deref().unwrap_or("script").to_owned();
         let chunk_name = format!("@{bare_chunk_name}");
         let (vms, routes, crons) = rt.block_on(async {
             let mut vms = Vec::with_capacity(pool_size);

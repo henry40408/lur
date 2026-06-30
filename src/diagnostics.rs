@@ -2,7 +2,8 @@
 
 /// Render `displayed` (an mlua error's `Display`) against `source`, rustc-style.
 /// `chunk_name` is the bare path used as the chunk name (no `@`). Falls back to
-/// `lur: <message>` when no in-range location can be parsed. Never panics.
+/// `lur: <body>` (the label-stripped message) whenever a source snippet can't be
+/// rendered — whether the location is unparsable or out of range. Never panics.
 pub fn render(source: &str, chunk_name: &str, displayed: &str) -> String {
     // Split off the traceback (runtime errors append one; syntax errors don't).
     let (head, traceback) = match displayed.split_once("\nstack traceback:") {
@@ -21,7 +22,9 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str) -> String {
         return format!("lur: {body}");
     };
     let Some(src_line) = source.lines().nth(line - 1) else {
-        return format!("lur: {message}");
+        // Location parsed but points past the source: fall back to the same
+        // `lur: {body}` form as the unparsable case, keeping the location text.
+        return format!("lur: {body}");
     };
 
     let mut out = String::new();
@@ -129,9 +132,11 @@ mod tests {
 
     #[test]
     fn out_of_range_line_falls_back_to_plain() {
+        // Uniform with the unparsable/line-zero cases: fall back to `lur: {body}`,
+        // preserving the location text rather than dropping it.
         let displayed = "runtime error: app.lua:99: mystery";
         let out = render(SRC, "app.lua", displayed);
-        assert_eq!(out, "lur: mystery");
+        assert_eq!(out, "lur: app.lua:99: mystery");
     }
 
     #[test]
