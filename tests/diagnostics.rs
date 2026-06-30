@@ -11,7 +11,12 @@ fn rendered_runtime_error_has_snippet() {
     let err = rt
         .run("local x = nil\nprint(x.y)\n")
         .expect_err("script raises");
-    let out = lur::diagnostics::render("local x = nil\nprint(x.y)\n", "app.lua", &err.to_string());
+    let out = lur::diagnostics::render(
+        "local x = nil\nprint(x.y)\n",
+        "app.lua",
+        &err.to_string(),
+        false,
+    );
     assert!(out.contains("--> app.lua:2"), "{out}");
     assert!(out.contains("2 | print(x.y)"), "{out}");
 }

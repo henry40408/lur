@@ -433,7 +433,12 @@ impl Server {
             Err(e) => {
                 eprintln!(
                     "lur: handler error:\n{}",
-                    crate::diagnostics::render(&self.source, &self.chunk_name, &e.to_string())
+                    crate::diagnostics::render(
+                        &self.source,
+                        &self.chunk_name,
+                        &e.to_string(),
+                        crate::diagnostics::stderr_color(),
+                    )
                 );
                 Response {
                     status: 500,
@@ -496,7 +501,12 @@ impl Server {
                 eprintln!(
                     "error: cron[{}]:\n{}",
                     job.name,
-                    crate::diagnostics::render(&self.source, &self.chunk_name, &e.to_string())
+                    crate::diagnostics::render(
+                        &self.source,
+                        &self.chunk_name,
+                        &e.to_string(),
+                        crate::diagnostics::stderr_color(),
+                    )
                 );
             }
         }
