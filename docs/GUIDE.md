@@ -141,13 +141,61 @@ assert(lur.state.get("hits") == nil)
 ## Capabilities (policy-gated)
 
 ### lur.fs
+
+`read(path) → bytes`, `write(path, bytes)`. Paths are canonicalized before the
+allowlist check, so `..`/symlink escapes are rejected. Grant access with
+`--allow-fs-read`/`--allow-fs-write`/`--allow-fs` (or `--loose`/`-A`).
+
+```lua
+lur.fs.write("./note.txt", "hello")
+assert(lur.fs.read("./note.txt") == "hello")
+```
+
 ### lur.env
+
+`lur.env(name) → string | nil`. Returns `nil` for **both** "denied" and "unset",
+so it can't be used as an oracle. Grant names with `--allow-env` (or `-A`).
+
+```lua
+assert(lur.env("LUR_GUIDE_DEFINITELY_UNSET") == nil)
+```
+
 ### lur.http
 
 ## Storage
 
 ### lur.db
+
+Requires `--db <path>`. `exec(sql, ...params)` returns
+`{ rows_affected, last_insert_id }`; `query(sql, ...params)` returns an array of
+row tables keyed by column; `tx(fn)` runs on a pinned connection (commit on
+return, rollback on error). Use `?` placeholders.
+
+```lua
+lur.db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+local r = lur.db.exec("INSERT INTO t (name) VALUES (?)", "alice")
+assert(r.rows_affected == 1)
+
+local rows = lur.db.query("SELECT name FROM t WHERE id = ?", r.last_insert_id)
+assert(rows[1].name == "alice")
+
+lur.db.tx(function(tx)
+  tx.exec("INSERT INTO t (name) VALUES (?)", "bob")
+end)
+assert(#lur.db.query("SELECT id FROM t") == 2)
+```
+
 ### lur.kv
+
+A simple key/value store over the same SQLite pool: `get(key) → bytes | nil`,
+`set(key, bytes)`, `delete(key)`.
+
+```lua
+lur.kv.set("greeting", "hi")
+assert(lur.kv.get("greeting") == "hi")
+lur.kv.delete("greeting")
+assert(lur.kv.get("greeting") == nil)
+```
 
 ## Concurrency
 
