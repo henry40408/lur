@@ -84,6 +84,90 @@ fn every_runnable_example_succeeds() {
     );
 }
 
+/// Lua that walks the live `lur` table and writes every function's dotted path
+/// (e.g. `crypto.hex.encode`) to `./__lur_fns.txt`, one per line.
+const REFLECT_LUA: &str = r#"
+local names = {}
+local function walk(prefix, t, depth)
+  if depth > 4 then return end
+  for k, v in pairs(t) do
+    if type(k) == "string" then
+      local path = prefix .. k
+      local ty = type(v)
+      if ty == "function" then
+        names[#names + 1] = path
+      elseif ty == "table" then
+        walk(path .. ".", v, depth + 1)
+      end
+    end
+  end
+end
+walk("", lur, 0)
+table.sort(names)
+lur.fs.write("./__lur_fns.txt", table.concat(names, "\n"))
+"#;
+
+/// Reflect the runtime `lur` table into the set of function dotted-paths it
+/// exposes (the authoritative list of what the guide must example).
+fn runtime_functions() -> Vec<String> {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // SAFETY: process-global cwd; safe only because nextest isolates each test.
+    std::env::set_current_dir(dir.path()).expect("chdir");
+    let rt = Runtime::with_config(permissive_config(dir.path().join("reflect.db")))
+        .expect("runtime builds");
+    rt.run(REFLECT_LUA).expect("reflection script runs");
+    std::fs::read_to_string(dir.path().join("__lur_fns.txt"))
+        .expect("read reflected function list")
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The set of `lur.<dotted.path>` functions actually *called* (followed by `(`)
+/// across all guide code blocks (runnable and `ignore`). Indexing like
+/// `lur.args.positional[1]` is not a call, so data fields are excluded.
+fn called_functions(blocks: &[Block]) -> std::collections::HashSet<String> {
+    let mut called = std::collections::HashSet::new();
+    for b in blocks {
+        let bytes = b.code.as_bytes();
+        let mut i = 0;
+        while let Some(rel) = b.code[i..].find("lur.") {
+            let start = i + rel + 4;
+            let mut j = start;
+            while j < bytes.len()
+                && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b'.')
+            {
+                j += 1;
+            }
+            let path = b.code[start..j].trim_end_matches('.');
+            if !path.is_empty() && j < bytes.len() && bytes[j] == b'(' {
+                called.insert(path.to_string());
+            }
+            i = j.max(start);
+        }
+    }
+    called
+}
+
+#[test]
+fn every_runtime_function_has_an_example() {
+    let funcs = runtime_functions();
+    assert!(!funcs.is_empty(), "reflection found no lur functions");
+    let called = called_functions(&lua_blocks(GUIDE));
+    // Functions intentionally without a worked example (none today).
+    const EXCEPTIONS: &[&str] = &[];
+    let mut missing: Vec<String> = funcs
+        .into_iter()
+        .filter(|f| !called.contains(f) && !EXCEPTIONS.contains(&f.as_str()))
+        .collect();
+    missing.sort();
+    assert!(
+        missing.is_empty(),
+        "lur functions with no example in the guide: {missing:?}"
+    );
+}
+
 #[test]
 fn every_capability_is_documented() {
     const CAPS: &[&str] = &[

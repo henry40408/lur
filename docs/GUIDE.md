@@ -107,7 +107,9 @@ lur.stdout.flush()
 
 ```lua ignore
 -- Reading stdin needs piped input; run as: echo hi | lur read.lua
-for line in lur.stdin.lines() do
+local all = lur.stdin.read()        -- drain everything (read(n) reads up to n bytes)
+lur.stdout.write(all)
+for line in lur.stdin.lines() do    -- or iterate newline-stripped lines
   lur.stdout.write(line .. "\n")
 end
 ```
@@ -175,6 +177,14 @@ local posted = lur.http.post("https://api.example.com/items", {
   json = { name = "widget" },
 })
 local body = posted.json()
+
+-- The verb helpers wrap `request`; use `request` directly for any method.
+lur.http.request("OPTIONS", "https://api.example.com/items")
+lur.http.put("https://api.example.com/items/1", { json = { name = "v2" } })
+lur.http.patch("https://api.example.com/items/1", { json = { name = "v3" } })
+lur.http.delete("https://api.example.com/items/1")
+local probe = lur.http.head("https://example.com")
+assert(probe.status == 200)
 ```
 
 ## Storage
@@ -234,6 +244,20 @@ local settled = lur.async.settled({
 })
 assert(settled[1].ok == false)
 assert(settled[2].ok == true and settled[2].value == "ok")
+
+-- race: the first task to settle wins (the one that never awaits).
+local first = lur.async.race({
+  function() return "fast" end,
+  function() lur.async.sleep(20); return "slow" end,
+})
+assert(first == "fast")
+
+-- any: the first task to *succeed* wins, skipping earlier failures.
+local winner = lur.async.any({
+  function() error("nope") end,
+  function() return "winner" end,
+})
+assert(winner == "winner")
 ```
 
 ## Server mode
