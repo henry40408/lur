@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782830077282,
+  "lastUpdate": 1782831212726,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1133,6 +1133,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207864,
             "range": "± 4350",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6f8220bb09e4345e85e8aea1bf5390538c86d1fb",
+          "message": "fix(diagnostics): align caret under tab-indented source lines (#53)\n\nThe caret line padded with single spaces counted from the byte offset of\nthe first non-whitespace char. A leading tab is one byte but renders to a\ntab stop, so the caret drifted left of the statement on tab-indented code.\nMirror the source prefix character-for-character instead — keep tabs as\ntabs, count other chars (multibyte-safe) as single spaces — so the caret\nlands at the same terminal tab stop as the code it points at.\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-30T22:51:24+08:00",
+          "tree_id": "9a03665c1de1825096d82fed113e55aa177a0a59",
+          "url": "https://github.com/henry40408/lur/commit/6f8220bb09e4345e85e8aea1bf5390538c86d1fb"
+        },
+        "date": 1782831212452,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 276697,
+            "range": "± 2379",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5268,
+            "range": "± 330",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207331,
+            "range": "± 1640",
             "unit": "ns/iter"
           }
         ]
