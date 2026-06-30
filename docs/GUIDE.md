@@ -162,6 +162,21 @@ assert(lur.env("LUR_GUIDE_DEFINITELY_UNSET") == nil)
 
 ### lur.http
 
+`request(method, url, opts?)` plus `get`/`post`/`put`/`patch`/`delete`/`head`.
+`opts` may set `headers`, `query`, `body` **or** `json`, and `timeout` (ms).
+Response: `{ status, body, headers, headers_all, json() }`. Every hop is checked
+against the network allowlist and the SSRF guard; grant hosts with `--allow-net`.
+
+```lua ignore
+local res = lur.http.get("https://example.com", { timeout = 5000 })
+assert(res.status == 200)
+
+local posted = lur.http.post("https://api.example.com/items", {
+  json = { name = "widget" },
+})
+local body = posted.json()
+```
+
 ## Storage
 
 ### lur.db
@@ -224,3 +239,21 @@ assert(settled[2].ok == true and settled[2].value == "ok")
 ## Server mode
 
 ### lur.serve
+
+Server mode (`lur serve app.lua`). Registration happens once at load.
+`serve.http(method, path, handler)` — paths may contain `:name` segments bound
+into `req.params`; the handler returns `{ status?, body? }`. `serve.cron(spec,
+handler, opts?)` takes a 6-field cron expression and optional `name`/`overlap`/
+`timeout`. `req` exposes `method`, `path`, `params`, `query`, `query_all`,
+`headers`, `cookies`, `body`, and `json()`.
+
+```lua ignore
+lur.serve.http("POST", "/echo", function(req)
+  local data = req.json()
+  return { status = 200, body = lur.json.encode(data) }
+end)
+
+lur.serve.cron("0 */5 * * * *", function()
+  lur.log.info("tick\n")
+end, { name = "ticker", overlap = false })
+```
