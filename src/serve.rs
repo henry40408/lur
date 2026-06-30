@@ -437,7 +437,7 @@ impl Server {
                         &self.source,
                         &self.chunk_name,
                         &e.to_string(),
-                        crate::diagnostics::stderr_color(),
+                        crate::color::stderr_color(),
                     )
                 );
                 Response {
@@ -505,7 +505,7 @@ impl Server {
                         &self.source,
                         &self.chunk_name,
                         &e.to_string(),
-                        crate::diagnostics::stderr_color(),
+                        crate::color::stderr_color(),
                     )
                 );
             }
