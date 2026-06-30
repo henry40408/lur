@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782831212726,
+  "lastUpdate": 1782843215074,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1175,6 +1175,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207331,
             "range": "± 1640",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "47bedea2dd1439bb7b2e3265b0816a949b30c460",
+          "message": "feat(storage): atomic operations for lur.kv & lur.state + db busy handling (#54)\n\n* docs(spec): storage atomic operations — kv/state parity + db busy handling\n\nDesign for: lur.kv atomic ops (incr/decr, add, cas, update) over SQLite,\nmatching primitives on lur.state (cas, add, decr; incr → integer), and\nbusy handling for lur.db (busy_timeout + BEGIN IMMEDIATE for tx/update).\nAlso fixes a latent lur.kv.get crash on non-BLOB cells via a type-aware\ndecoder.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs(plan): storage atomic operations implementation plan\n\n8 tasks: extract kv module + type-aware get, db busy handling\n(busy_timeout + BEGIN IMMEDIATE), kv add/cas/incr/decr/update,\nstate integer incr + decr/cas/add, and docs.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* refactor(kv): extract lur.kv into its own module; type-aware get\n\n* feat(db): busy_timeout + BEGIN IMMEDIATE write transactions\n\n* feat(kv): add (set-if-absent) and cas (compare-and-set)\n\n* feat(kv): integer incr/decr counters with a non-integer guard\n\n* fix(kv): voice incr_by errors per-function (incr/decr)\n\n* feat(kv): update (read-modify-write) with a re-entry guard\n\n* fix(kv): roll back update transaction on read/write/commit errors\n\n* feat(state): integer incr + decr (reject fractional/non-integer)\n\n* fix(kv): reject fractional incr/decr step (Luau truncates silently)\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* feat(state): add lur.state.cas (value-based CAS) and lur.state.add (set-if-absent)\n\n- Derive `PartialEq` on `Prim` to enable value comparison\n- Add `StateStore::cas_value(key, expected, new) -> bool`: snapshots current\n  value, compares by value (not version), then delegates to `compare_and_set`\n- Wire `lur.state.cas(key, expected, new)` and `lur.state.add(key, value)` into\n  the install function with `argcheck` key validation and re-entry guard\n- Add runnable assert-based examples for `cas` and `add` in docs/GUIDE.md\n- Add five integration tests covering all four nil/value combos and error voicing\n\n* refactor(state): use shared argcheck::integer_arg helper\n\n* docs: document kv/state atomic ops and db busy handling\n\n* fix(db): roll back tx on commit failure; test REAL decode; doc cas/update caveats\n\n---------\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-01T02:12:14+08:00",
+          "tree_id": "8a27a83c98430fbc039d063879423980e11760fe",
+          "url": "https://github.com/henry40408/lur/commit/47bedea2dd1439bb7b2e3265b0816a949b30c460"
+        },
+        "date": 1782843214768,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 291439,
+            "range": "± 5771",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5207,
+            "range": "± 60",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 210921,
+            "range": "± 4445",
             "unit": "ns/iter"
           }
         ]
