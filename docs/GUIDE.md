@@ -85,15 +85,58 @@ assert(lur.time.parse_http_date("Thu, 01 Jan 1970 00:00:01 GMT") == 1000)
 
 ### lur.log
 
+`info`/`warn`/`error` write to **stderr** (stdout is the data channel); each
+call emits `<level>: <msg>\n`.
+
+```lua
+lur.log.info("starting\n")
+lur.log.warn("careful\n")
+lur.log.error("oops\n")
+```
+
 ### lur.io
 
-`lur.stdout.write(bytes)` / `lur.stdout.flush()` is the data channel.
-`lur.stdin.read()` drains all input.
+`lur.stdout.write(bytes)` / `flush()` is the data channel (raw bytes, no
+newline). `lur.stdin.read()` drains all input, `read(n)` reads up to `n` (`nil`
+at EOF), and `lines()` iterates newline-stripped lines.
+
+```lua
+lur.stdout.write("data\n")
+lur.stdout.flush()
+```
+
+```lua ignore
+-- Reading stdin needs piped input; run as: echo hi | lur read.lua
+for line in lur.stdin.lines() do
+  lur.stdout.write(line .. "\n")
+end
+```
 
 ## State & arguments
 
 ### lur.args
+
+`lur.args.positional` is a 1-indexed array; `lur.args.flags` maps
+`--name value` / `--name=value` to the string and a bare `--flag` to `true`.
+
+```lua
+assert(type(lur.args.positional) == "table")
+assert(type(lur.args.flags) == "table")
+```
+
 ### lur.state
+
+Process-wide shared state across the VM pool (primitives only): `get`/`set`
+(`nil` deletes), `incr` (atomic add), `update` (optimistic CAS).
+
+```lua
+lur.state.set("hits", 0)
+assert(lur.state.incr("hits", 2) == 2)
+lur.state.update("hits", function(n) return (n or 0) + 1 end)
+assert(lur.state.get("hits") == 3)
+lur.state.set("hits", nil)
+assert(lur.state.get("hits") == nil)
+```
 
 ## Capabilities (policy-gated)
 
@@ -109,6 +152,26 @@ assert(lur.time.parse_http_date("Thu, 01 Jan 1970 00:00:01 GMT") == 1000)
 ## Concurrency
 
 ### lur.async
+
+`sleep(ms)` and combinators over arrays of zero-arg functions: `all` (fail-fast),
+`race`/`any` (first to settle/succeed), `settled` (never raises). Lua runs one
+step at a time; tasks interleave at I/O await points.
+
+```lua
+lur.async.sleep(1)
+local results = lur.async.all({
+  function() return 1 end,
+  function() return 2 end,
+})
+assert(results[1] == 1 and results[2] == 2)
+
+local settled = lur.async.settled({
+  function() error("boom") end,
+  function() return "ok" end,
+})
+assert(settled[1].ok == false)
+assert(settled[2].ok == true and settled[2].value == "ok")
+```
 
 ## Server mode
 
