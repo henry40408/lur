@@ -112,6 +112,58 @@ fn tx_rolls_back_on_error() {
 }
 
 #[test]
+fn kv_incr_is_atomic_under_concurrent_writers() {
+    // The atomicity claim: kv.incr is a single guarded upsert, so concurrent
+    // writers (each its own Runtime + pool, all pointing at one db file) under
+    // WAL + busy_timeout must not lose an update. Each thread runs a tight incr
+    // loop; the final counter must equal threads * per_thread exactly.
+    //
+    // Two writers, deliberately: WAL serializes them (one writes, the other
+    // waits out the lock via busy_timeout and retries) without a lost update.
+    // Three-plus writers hammering one key can thundering-herd into busy_timeout
+    // exhaustion on a slow/over-subscribed CI runner — a SQLite contention
+    // characteristic, not an atomicity defect; two writers exercise the
+    // serialize-and-retry path that the claim is actually about.
+    const THREADS: i64 = 2;
+    const PER_THREAD: i64 = 200;
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = RuntimeConfig {
+        db_path: Some(dir.path().join("counter.db")),
+        ..Default::default()
+    };
+
+    // Establish the db file (WAL + lur_kv table) and seed the counter at 0 in
+    // one thread first, so the workers contend on writes — not on the cold-open
+    // WAL-mode switch, which is a startup race distinct from incr atomicity.
+    Runtime::with_config(config.clone())
+        .expect("runtime builds")
+        .run("lur.kv.incr('c', 0)")
+        .expect("seed counter at 0");
+
+    let handles: Vec<_> = (0..THREADS)
+        .map(|_| {
+            let cfg = config.clone();
+            std::thread::spawn(move || {
+                let rt = Runtime::with_config(cfg).expect("runtime builds");
+                rt.run(&format!("for _ = 1, {PER_THREAD} do lur.kv.incr('c') end"))
+                    .expect("incr loop runs");
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().expect("worker thread joined");
+    }
+
+    let rt = Runtime::with_config(config).expect("runtime builds");
+    rt.run(&format!(
+        "assert(tonumber(lur.kv.get('c')) == {}, 'lost an update: got ' .. tostring(lur.kv.get('c')))",
+        THREADS * PER_THREAD
+    ))
+    .expect("concurrent counter total is exact");
+}
+
+#[test]
 fn db_without_a_path_errors() {
     let rt = Runtime::new().expect("runtime builds"); // db_path is None
     assert!(
