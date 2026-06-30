@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782813988683,
+  "lastUpdate": 1782830077282,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1091,6 +1091,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208210,
             "range": "± 1938",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c6da0b5aeb3ba298c268e79aa221a1126226791f",
+          "message": "feat(docs): embedded `lur docs` cookbook — styled rendering + tested examples (#52)\n\n* docs(spec): guided-tour embedded `lur docs` cookbook design\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs(spec): render `lur docs` via pulldown-cmark + hand-rolled ANSI sink\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs(plan): guided-tour implementation plan; spec covers kv+async\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* refactor(color): extract shared NO_COLOR/TTY gate into src/color.rs\n\n* feat(docs): markdown renderer for lur docs over pulldown-cmark\n\n* feat(docs): add lur docs subcommand and guide skeleton\n\n* test(docs): run guide lua examples + assert capability coverage\n\n* docs(guide): json, base64, crypto, cookie, time sections\n\n* docs(guide): log, io, args, state, async sections\n\n* docs(guide): fs, env, db, kv sections\n\n* docs(guide): http, serve sections; document new modules\n\n* fix(docs): strengthen guide harness floor; tidy renderer per review\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* docs(spec): lur docs render overhaul — glamour-aligned layout + Lua highlight\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs(plan): lur docs render overhaul implementation plan\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* feat(docs): hand-rolled Lua syntax highlighter\n\n* feat(docs): glamour-aligned heading hierarchy and framed code blocks\n\n* fix(docs): indent wrapped body lines to section margin; review tidy\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\n\n* test(docs): function-level coverage guard; example every lur API\n\nA reflection-based guard walks the live lur table and asserts every exposed\nfunction is called in a guide code block, then fills the 8 gaps it surfaced\n(async.race/any, http.request/put/patch/delete/head, stdin.read).\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-30T22:30:58+08:00",
+          "tree_id": "8e6c4e62080b2b3b1d3507238f39b222ae71661a",
+          "url": "https://github.com/henry40408/lur/commit/c6da0b5aeb3ba298c268e79aa221a1126226791f"
+        },
+        "date": 1782830077013,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 272370,
+            "range": "± 3407",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5367,
+            "range": "± 97",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207864,
+            "range": "± 4350",
             "unit": "ns/iter"
           }
         ]
