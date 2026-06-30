@@ -125,6 +125,7 @@ pub fn render(markdown: &str, color: bool) -> String {
     let mut list_depth: usize = 0;
     let mut margin: usize = 0; // left indent of the current section's body
     let mut in_code = false;
+    let mut in_blockquote = false;
     let mut heading_level: usize = 0; // 0 = not in a heading
 
     for ev in Parser::new(markdown) {
@@ -152,7 +153,11 @@ pub fn render(markdown: &str, color: bool) -> String {
                 out.push('\n');
                 heading_level = 0;
             }
-            Event::Start(Tag::Paragraph) => out.push_str(&" ".repeat(margin)),
+            Event::Start(Tag::Paragraph) => {
+                if !in_blockquote {
+                    out.push_str(&" ".repeat(margin));
+                }
+            }
             Event::Start(Tag::Strong | Tag::Emphasis) => out.push_str(st(BOLD)),
             Event::End(TagEnd::Strong | TagEnd::Emphasis) => out.push_str(st(RESET)),
             Event::Start(Tag::List(_)) => list_depth += 1,
@@ -167,6 +172,7 @@ pub fn render(markdown: &str, color: bool) -> String {
                 out.push_str("- ");
             }
             Event::Start(Tag::BlockQuote(_)) => {
+                in_blockquote = true;
                 out.push_str(&" ".repeat(margin));
                 out.push_str(st(DIM));
                 out.push('\u{2502}');
@@ -188,7 +194,6 @@ pub fn render(markdown: &str, color: bool) -> String {
                     // Frame each code line with `│ ` at the section margin, and
                     // syntax-highlight the line content.
                     for line in text.split_inclusive('\n') {
-                        let nl = line.ends_with('\n');
                         let body = line.strip_suffix('\n').unwrap_or(line);
                         out.push('\n');
                         out.push_str(&" ".repeat(margin));
@@ -197,15 +202,20 @@ pub fn render(markdown: &str, color: bool) -> String {
                         out.push_str(st(RESET));
                         out.push(' ');
                         out.push_str(&highlight_lua(body, color));
-                        let _ = nl;
                     }
                 } else {
                     out.push_str(&text);
                 }
             }
-            Event::End(TagEnd::Paragraph | TagEnd::Item | TagEnd::BlockQuote(_))
-            | Event::SoftBreak
-            | Event::HardBreak => out.push('\n'),
+            Event::End(TagEnd::Paragraph | TagEnd::Item) => out.push('\n'),
+            Event::End(TagEnd::BlockQuote(_)) => {
+                in_blockquote = false;
+                out.push('\n');
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                out.push('\n');
+                out.push_str(&" ".repeat(margin));
+            }
             Event::Rule => out.push_str("\n---\n"),
             _ => {}
         }
@@ -246,6 +256,15 @@ mod tests {
         );
         // The code frame bar is present.
         assert!(out.contains('\u{2502}'), "code frame: {out:?}");
+    }
+
+    #[test]
+    fn wrapped_paragraph_lines_keep_the_margin() {
+        let md = "### lur.json\n\nfirst line here\nsecond line here\n";
+        let out = render(md, false);
+        // Under H3 the body margin is 4; the continuation line must be indented too.
+        assert!(out.contains("    first line here"), "{out:?}");
+        assert!(out.contains("    second line here"), "{out:?}");
     }
 
     #[test]

@@ -76,8 +76,8 @@ When true, it wraps tokens in 16-color SGR:
 | Token class | Color (16-color SGR) | Notes |
 | --- | --- | --- |
 | keyword | `\x1b[1;36m` bold cyan | `and break do else elseif end false for function goto if in local nil not or repeat return then true until while` |
-| string | `\x1b[32m` green | `"…"`, `'…'` (with `\` escapes), and long brackets `[[ … ]]` / `[=*[ … ]=*]` |
-| comment | `\x1b[90m` bright black | `-- …` to EOL, and long comments `--[[ … ]]` |
+| string | `\x1b[32m` green | `"…"`, `'…'` (with `\` escapes), and long brackets `[[ … ]]` only (leveled `[=[ … ]=]` not highlighted — scanned as operators) |
+| comment | `\x1b[90m` bright black | `-- …` to EOL, and long comments `--[[ … ]]` only (leveled `--[=[ … ]=]` not highlighted — scanned as operators) |
 | number | `\x1b[33m` yellow | decimal, float, `0x…` hex |
 | other | default | identifiers, operators, punctuation, whitespace |
 
