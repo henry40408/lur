@@ -129,15 +129,26 @@ assert(type(lur.args.flags) == "table")
 ### lur.state
 
 Process-wide shared state across the VM pool (primitives only): `get`/`set`
-(`nil` deletes), `incr` (atomic add), `update` (optimistic CAS).
+(`nil` deletes), `incr` (atomic add), `update` (optimistic CAS), `cas`
+(value-based compare-and-set), `add` (set-if-absent).
 
 ```lua
 lur.state.set("hits", 0)
 assert(lur.state.incr("hits", 2) == 2)
+assert(lur.state.decr("hits", 1) == 1)
 lur.state.update("hits", function(n) return (n or 0) + 1 end)
-assert(lur.state.get("hits") == 3)
+assert(lur.state.get("hits") == 2)
 lur.state.set("hits", nil)
 assert(lur.state.get("hits") == nil)
+-- cas(key, expected, new): swaps new in only when current value equals expected
+lur.state.set("x", 10)
+assert(lur.state.cas("x", 10, 20) == true)   -- matched: 10 -> 20
+assert(lur.state.cas("x", 10, 30) == false)  -- stale: value is now 20
+assert(lur.state.get("x") == 20)
+-- add(key, value): set-if-absent (returns true on success, false if already set)
+assert(lur.state.add("once", "hello") == true)
+assert(lur.state.add("once", "world") == false)
+assert(lur.state.get("once") == "hello")
 ```
 
 ## Capabilities (policy-gated)
@@ -212,14 +223,40 @@ assert(#lur.db.query("SELECT id FROM t") == 2)
 
 ### lur.kv
 
-A simple key/value store over the same SQLite pool: `get(key) → bytes | nil`,
-`set(key, bytes)`, `delete(key)`.
+A key/value store over the same SQLite pool. Keys are strings; values are raw
+bytes. Basic operations: `get(key) → bytes | nil`, `set(key, bytes)`,
+`delete(key)`. Atomic ops: `add` (set-if-absent), `cas` (compare-and-swap),
+`incr`/`decr` (integer counters), `update` (read-modify-write).
 
 ```lua
 lur.kv.set("greeting", "hi")
 assert(lur.kv.get("greeting") == "hi")
 lur.kv.delete("greeting")
 assert(lur.kv.get("greeting") == nil)
+
+-- add: insert only when key is absent (returns true on insert, false if already set)
+assert(lur.kv.add("once", "first") == true)
+assert(lur.kv.add("once", "again") == false)
+assert(lur.kv.get("once") == "first")
+
+-- cas: compare-and-swap (expected, new) — returns true if applied
+assert(lur.kv.cas("once", "first", "second") == true)
+assert(lur.kv.cas("once", "first", "nope")  == false)
+-- cas compares raw bytes: a counter created by incr/decr (stored as an integer) will not match — drive counters via incr/decr, not cas.
+
+-- incr/decr: integer counters (create-at-1 when absent; optional step)
+assert(lur.kv.incr("hits")    == 1)
+assert(lur.kv.incr("hits", 4) == 5)
+assert(lur.kv.decr("hits", 2) == 3)
+
+-- update: read-modify-write; transform returns new value (string) or nil to delete.
+-- The transform must not call lur.db write operations: a nested lur.kv call fast-fails;
+-- a lur.db write is bounded by the 5 s busy_timeout rather than failing immediately.
+lur.kv.update("counter", function(cur)
+  local n = tonumber(cur) or 0
+  return tostring(n + 1)
+end)
+assert(lur.kv.get("counter") == "1")
 ```
 
 ## Concurrency

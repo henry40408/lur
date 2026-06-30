@@ -16,7 +16,7 @@ use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
 /// A stored primitive value (nil is represented by absence).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Prim {
     Bool(bool),
     Num(f64),
@@ -30,6 +30,12 @@ enum Prim {
 struct Versioned {
     value: Option<Prim>,
     version: u64,
+}
+
+/// Why an integer counter operation failed.
+enum IncrError {
+    NotInteger,
+    Overflow,
 }
 
 /// The host-side store shared across all VMs in a runtime/pool.
@@ -53,20 +59,26 @@ impl StateStore {
         map.insert(key, Versioned { value, version });
     }
 
-    /// Atomic `+n` fast path. Errors if the existing value is not a number.
-    fn incr(&self, key: Vec<u8>, n: f64) -> Result<f64, ()> {
+    /// Atomic integer `+n` fast path. Errors if the existing value is not a
+    /// whole number, or on i64 overflow.
+    fn incr(&self, key: Vec<u8>, n: i64) -> Result<i64, IncrError> {
         let mut map = self.lock();
-        let base = match map.get(&key).and_then(|v| v.value.as_ref()) {
-            None => 0.0,
-            Some(Prim::Num(x)) => *x,
-            Some(_) => return Err(()),
+        let base: i64 = match map.get(&key).and_then(|v| v.value.as_ref()) {
+            None => 0,
+            Some(Prim::Num(x))
+                if x.fract() == 0.0 && *x >= i64::MIN as f64 && *x <= i64::MAX as f64 =>
+            {
+                *x as i64
+            }
+            Some(_) => return Err(IncrError::NotInteger),
+            // Some(Prim::Num(non-whole)) also falls through to NotInteger.
         };
+        let new = base.checked_add(n).ok_or(IncrError::Overflow)?;
         let version = map.get(&key).map_or(0, |v| v.version) + 1;
-        let new = base + n;
         map.insert(
             key,
             Versioned {
-                value: Some(Prim::Num(new)),
+                value: Some(Prim::Num(new as f64)),
                 version,
             },
         );
@@ -97,6 +109,18 @@ impl StateStore {
             },
         );
         true
+    }
+
+    /// Value-based compare-and-set: succeeds iff the current value equals
+    /// `expected` (by value, not version). Avoids float-equality traps for
+    /// strings and booleans; the caller accepts those semantics for numbers.
+    /// `None` means "absent". Returns true if the swap was applied.
+    fn cas_value(&self, key: &[u8], expected: &Option<Prim>, new: Option<Prim>) -> bool {
+        let (current, version) = self.snapshot(key);
+        if &current != expected {
+            return false;
+        }
+        self.compare_and_set(key, version, new)
     }
 }
 
@@ -172,17 +196,41 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
     let incr = lua
         .create_function(move |lua, (key, n): (Value, Value)| {
             let key: mlua::String = argcheck::arg(lua, key, "lur.state.incr", 1, "string")?;
-            let n: Option<f64> = argcheck::arg(lua, n, "lur.state.incr", 2, "number")?;
+            let n = argcheck::integer_arg(n, "lur.state.incr", 2)?;
             reject_reentry()?;
-            s.incr(key.as_bytes().to_vec(), n.unwrap_or(1.0))
-                .map_err(|()| {
-                    mlua::Error::RuntimeError(
-                        "lur.state.incr: existing value is not a number".into(),
-                    )
+            s.incr(key.as_bytes().to_vec(), n.unwrap_or(1))
+                .map_err(|e| match e {
+                    IncrError::NotInteger => mlua::Error::RuntimeError(
+                        "lur.state.incr: existing value is not an integer".into(),
+                    ),
+                    IncrError::Overflow => {
+                        mlua::Error::RuntimeError("lur.state.incr: counter overflow".into())
+                    }
                 })
         })
         .map_err(RunError::Init)?;
     state.set("incr", incr).map_err(RunError::Init)?;
+
+    let s = store.clone();
+    let decr = lua
+        .create_function(move |lua, (key, n): (Value, Value)| {
+            let key: mlua::String = argcheck::arg(lua, key, "lur.state.decr", 1, "string")?;
+            let n = argcheck::integer_arg(n, "lur.state.decr", 2)?;
+            reject_reentry()?;
+            let delta = n.unwrap_or(1).checked_neg().ok_or_else(|| {
+                mlua::Error::RuntimeError("lur.state.decr: step too large".into())
+            })?;
+            s.incr(key.as_bytes().to_vec(), delta).map_err(|e| match e {
+                IncrError::NotInteger => mlua::Error::RuntimeError(
+                    "lur.state.decr: existing value is not an integer".into(),
+                ),
+                IncrError::Overflow => {
+                    mlua::Error::RuntimeError("lur.state.decr: counter overflow".into())
+                }
+            })
+        })
+        .map_err(RunError::Init)?;
+    state.set("decr", decr).map_err(RunError::Init)?;
 
     let s = store.clone();
     let update = lua
@@ -209,6 +257,29 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
         })
         .map_err(RunError::Init)?;
     state.set("update", update).map_err(RunError::Init)?;
+
+    let s = store.clone();
+    let cas = lua
+        .create_function(move |lua, (key, expected, new): (Value, Value, Value)| {
+            let key: mlua::String = argcheck::arg(lua, key, "lur.state.cas", 1, "string")?;
+            reject_reentry()?;
+            let expected_prim = from_lua(&expected)?;
+            let new_prim = from_lua(&new)?;
+            Ok(s.cas_value(&key.as_bytes(), &expected_prim, new_prim))
+        })
+        .map_err(RunError::Init)?;
+    state.set("cas", cas).map_err(RunError::Init)?;
+
+    let s = store.clone();
+    let add = lua
+        .create_function(move |lua, (key, value): (Value, Value)| {
+            let key: mlua::String = argcheck::arg(lua, key, "lur.state.add", 1, "string")?;
+            reject_reentry()?;
+            let new_prim = from_lua(&value)?;
+            Ok(s.cas_value(&key.as_bytes(), &None, new_prim))
+        })
+        .map_err(RunError::Init)?;
+    state.set("add", add).map_err(RunError::Init)?;
 
     lur.set("state", state).map_err(RunError::Init)?;
     Ok(())
