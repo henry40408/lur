@@ -187,7 +187,7 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                 let path = std::sync::Arc::clone(&path);
                 async move {
                     let n: Option<i64> = argcheck::arg(&lua, n, "lur.kv.incr", 2, "integer")?;
-                    incr_by(&cell, &path, key, n.unwrap_or(1)).await
+                    incr_by("lur.kv.incr", &cell, &path, key, n.unwrap_or(1)).await
                 }
             })
             .map_err(RunError::Init)?;
@@ -205,8 +205,8 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                     let delta = n
                         .unwrap_or(1)
                         .checked_neg()
-                        .ok_or_else(|| Error::runtime("lur.kv.decr: step too large".to_string()))?;
-                    incr_by(&cell, &path, key, delta).await
+                        .ok_or_else(|| Error::runtime("lur.kv.decr: step too large"))?;
+                    incr_by("lur.kv.decr", &cell, &path, key, delta).await
                 }
             })
             .map_err(RunError::Init)?;
@@ -221,6 +221,7 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
 /// when absent. Returns the new value, or errors if the key holds a
 /// non-integer (the `WHERE typeof(value)='integer'` guard returns no row).
 async fn incr_by(
+    voice: &str,
     cell: &std::sync::Arc<std::sync::OnceLock<sqlx::sqlite::SqlitePool>>,
     path: &std::sync::Arc<Option<std::path::PathBuf>>,
     key: String,
@@ -237,14 +238,14 @@ async fn incr_by(
     .bind(delta)
     .fetch_optional(&pool)
     .await
-    .map_err(|e| Error::runtime(format!("lur.kv.incr: {e}")))?;
+    .map_err(|e| Error::runtime(format!("{voice}: {e}")))?;
     match row {
         Some(r) => r
             .try_get::<i64, usize>(0)
-            .map_err(|e| Error::runtime(format!("lur.kv.incr: {e}"))),
-        None => Err(Error::runtime(
-            "lur.kv.incr: existing value is not an integer".to_string(),
-        )),
+            .map_err(|e| Error::runtime(format!("{voice}: {e}"))),
+        None => Err(Error::runtime(format!(
+            "{voice}: existing value is not an integer"
+        ))),
     }
 }
 

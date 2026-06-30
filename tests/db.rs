@@ -194,7 +194,12 @@ fn kv_incr_decr_counters() {
          local ok, err = pcall(function() return lur.kv.incr('blob') end)\n\
          assert(ok == false, 'incr on a blob errors')\n\
          assert(tostring(err):find('not an integer'), 'clear message: ' .. tostring(err))\n\
-         assert(lur.kv.get('blob') == 'hello', 'blob untouched after failed incr')",
+         assert(lur.kv.get('blob') == 'hello', 'blob untouched after failed incr')\n\
+         -- decr on a non-integer value errors with decr voicing (not incr)\n\
+         lur.kv.set('blob2', 'x')\n\
+         local ok2, err2 = pcall(function() return lur.kv.decr('blob2') end)\n\
+         assert(ok2 == false, 'decr on a blob errors')\n\
+         assert(tostring(err2):find('lur.kv.decr'), 'decr error is voiced as decr: ' .. tostring(err2))",
     )
     .expect("kv incr/decr");
 }
