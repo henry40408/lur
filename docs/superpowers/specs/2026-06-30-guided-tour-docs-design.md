@@ -29,7 +29,9 @@ after the API surface and diagnostics settled so it is written once.
 - No `lur docs <capability>` section filter — `lur docs` prints the whole guide;
   users pipe to a pager. (Possible follow-up.)
 - No pager/TTY paging built in.
-- No rendering of Markdown to styled terminal output — raw Markdown to stdout.
+- No turnkey Markdown-renderer crate (e.g. `termimad`) — its `crossterm` /
+  `crossbeam` / `serde` footprint is too heavy for this project. Rendering is
+  hand-rolled over a parser (see component 2).
 - The guide does not duplicate the full CLI flag reference; it points to README
   for exhaustive flags and the policy/sandbox model.
 
@@ -51,15 +53,16 @@ A Markdown cookbook. Structure:
 Each section heading includes the capability's table name verbatim (e.g. a
 heading containing `lur.crypto`) so the drift test (below) can find it.
 
-### 2. `lur docs` subcommand
+### 2. `lur docs` subcommand + Markdown renderer
 
 Dispatched the same way `serve` is: `main()` peeks `argv[1]`. When it equals
-`docs`, print the embedded guide to stdout and exit `0`:
+`docs`, render the embedded guide to stdout and exit `0`:
 
 ```rust
 // in main(), alongside the existing `serve` peek
 if argv.get(1).map(String::as_str) == Some("docs") {
-    print!("{}", include_str!("../docs/GUIDE.md"));
+    const GUIDE: &str = include_str!("../docs/GUIDE.md");
+    print!("{}", docs::render(GUIDE, docs::stdout_color()));
     return ExitCode::SUCCESS;
 }
 ```
@@ -69,6 +72,36 @@ no runtime file lookup). The one-shot `lur script.lua [args]` grammar is
 untouched. Add a one-line mention of `lur docs` to the README CLI section and
 the clap `about` text for discoverability (clap does not see the peeked
 subcommand otherwise).
+
+**Renderer (`src/docs.rs`, new module).** A hand-rolled ANSI sink over
+[`pulldown-cmark`](https://crates.io/crates/pulldown-cmark) (0.13.4, MIT,
+published 2026-05-20 — clears the 7-day cooldown). Add it with
+`default-features = false` so only the parser is pulled in (non-optional deps:
+`bitflags`, `memchr`, `unicase` — all tiny and ubiquitous); the `html` output,
+`getopts`, and `serde` features stay off.
+
+- `pub fn render(markdown: &str, color: bool) -> String` walks the
+  `pulldown_cmark::Parser` event stream and emits ANSI-styled text:
+  - **Headings** → bold (deeper levels dimmer/with leading `#`s preserved for
+    hierarchy), a blank line around them.
+  - **Inline code** / **fenced code blocks** → a distinct color (e.g. the same
+    bold-blue used by diagnostics), code blocks indented.
+  - **Emphasis** → italic/underline; **strong** → bold.
+  - **Lists** → `- ` bullets with nesting indentation; **block quotes** → a `│ `
+    prefix.
+  - Links render as `text (url)`.
+  When `color` is `false`, every style string is empty, so the output is the
+  document's text with structural whitespace but **no escape codes** — never raw
+  half-rendered Markdown with stray `**`/`` ` `` noise left to the reader. (The
+  parser still strips the Markdown syntax; only the ANSI styling is gated.)
+- `pub fn stdout_color() -> bool` mirrors `diagnostics::stderr_color` but checks
+  **stdout** (`lur docs` writes there): colorize only when stdout is a TTY and
+  `NO_COLOR` is unset/empty. The shared env+TTY predicate
+  (`color_from_env(no_color, is_tty)`) is reused — lift it to a small shared
+  helper rather than duplicating the rule in two modules.
+
+This keeps full control over the styling, adds a near-zero dependency footprint,
+and gives the same `NO_COLOR`/TTY behavior as the diagnostics renderer.
 
 ### 3. `tests/guide.rs` — code blocks as tests
 
@@ -105,19 +138,21 @@ capability without documenting it fails this test.
 ## Data flow
 
 ```
-docs/GUIDE.md ──include_str!──> binary  ──`lur docs`──> stdout
+docs/GUIDE.md ──include_str!──> binary ──docs::render(NO_COLOR/TTY)──> stdout
       │
       └────────include_str!──> tests/guide.rs ──scan fences──> run runnable
-                                                            └─> assert names present
+                              (raw markdown)                 └─> assert names present
 ```
 
 The Markdown file is the only source; both the binary and the test read it via
-`include_str!`, so they cannot disagree.
+`include_str!`, so they cannot disagree. The renderer is independent of the test
+harness: the harness scans the **raw** Markdown for ```` ```lua ```` fences, so
+styling never affects which examples run.
 
 ## Error handling
 
-- `lur docs`: pure print + exit `0`; no failure path (the content is compiled
-  in).
+- `lur docs`: render + print + exit `0`; no failure path. `pulldown-cmark` parses
+  any input infallibly, and the content is compiled in.
 - Test harness: a runnable block that raises surfaces as a test failure with the
   block's ordinal and a leading snippet. An `ignore`d block is never executed.
   If the drift test finds a missing capability name, it fails listing the
@@ -128,8 +163,15 @@ The Markdown file is the only source; both the binary and the test read it via
 - The examples *are* the regression tests (assert-based self-verification).
 - Pure-compute capabilities run end-to-end; network/server examples are `ignore`.
 - The drift guard keeps the capability list and the guide's sections in sync.
+- **Renderer unit tests** (`src/docs.rs`): `color = true` output contains ANSI
+  escape codes; `color = false` output contains **no** escape codes *and* none of
+  the Markdown markup characters that the parser strips (no stray `**`, `` ` ``,
+  `#` heading markers) — proving plain mode is clean text, not half-rendered
+  Markdown. Plus the shared `color_from_env` truth table (TTY × `NO_COLOR`),
+  which already exists for diagnostics and is reused here.
 - Existing suites (`cargo nextest run`) continue to gate; `tests/guide.rs` joins
-  them. No production runtime code changes beyond the `main()` dispatch arm.
+  them. Production code changes are limited to the `main()` dispatch arm, the new
+  `src/docs.rs` module, and lifting `color_from_env` into a shared helper.
 
 ## Implementation note: batching
 
