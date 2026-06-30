@@ -243,7 +243,10 @@ fn kv_incr_decr_counters() {
          lur.kv.set('blob2', 'x')\n\
          local ok2, err2 = pcall(function() return lur.kv.decr('blob2') end)\n\
          assert(ok2 == false, 'decr on a blob errors')\n\
-         assert(tostring(err2):find('lur.kv.decr'), 'decr error is voiced as decr: ' .. tostring(err2))",
+         assert(tostring(err2):find('lur.kv.decr'), 'decr error is voiced as decr: ' .. tostring(err2))\n\
+         -- fractional step must be rejected (Luau would silently truncate via coercion)\n\
+         local ok3, err3 = pcall(function() return lur.kv.incr('hits', 1.5) end)\n\
+         assert(ok3 == false and tostring(err3):find('must be integer'), 'fractional step rejected: ' .. tostring(err3))",
     )
     .expect("kv incr/decr");
 }

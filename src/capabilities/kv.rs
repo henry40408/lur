@@ -205,12 +205,12 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
         let cell = std::sync::Arc::clone(&shared.cell);
         let path = std::sync::Arc::clone(&shared.path);
         let incr = lua
-            .create_async_function(move |lua, (key, n): (String, Value)| {
+            .create_async_function(move |_, (key, n): (String, Value)| {
                 let cell = std::sync::Arc::clone(&cell);
                 let path = std::sync::Arc::clone(&path);
                 async move {
                     reject_kv_reentry("lur.kv.incr")?;
-                    let n: Option<i64> = argcheck::arg(&lua, n, "lur.kv.incr", 2, "integer")?;
+                    let n = argcheck::integer_arg(n, "lur.kv.incr", 2)?;
                     incr_by("lur.kv.incr", &cell, &path, key, n.unwrap_or(1)).await
                 }
             })
@@ -221,12 +221,12 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
         let cell = std::sync::Arc::clone(&shared.cell);
         let path = std::sync::Arc::clone(&shared.path);
         let decr = lua
-            .create_async_function(move |lua, (key, n): (String, Value)| {
+            .create_async_function(move |_, (key, n): (String, Value)| {
                 let cell = std::sync::Arc::clone(&cell);
                 let path = std::sync::Arc::clone(&path);
                 async move {
                     reject_kv_reentry("lur.kv.decr")?;
-                    let n: Option<i64> = argcheck::arg(&lua, n, "lur.kv.decr", 2, "integer")?;
+                    let n = argcheck::integer_arg(n, "lur.kv.decr", 2)?;
                     let delta = n
                         .unwrap_or(1)
                         .checked_neg()
