@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782779344767,
+  "lastUpdate": 1782813988683,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1049,6 +1049,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207770,
             "range": "± 6834",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a030a1dfcbac09be59743fe81fe2c55b46bbd820",
+          "message": "feat(diagnostics): colorize error output (NO_COLOR) + tidy #49 deferred polish (#51)\n\n* chore(diagnostics): unify error fallback payload and tidy #49 deferred polish\n\n- Out-of-range locations now fall back to `lur: {body}` like the\n  unparsable/line-zero cases, preserving the location text instead of\n  dropping it to just the message.\n- serve.rs: `as_deref().unwrap_or().to_owned()` over `clone().unwrap_or_else`.\n- ARCHITECTURE: regroup the diagnostics module-map row next to its\n  runtime/serve consumers and note the `lur: {body}` fallback.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* feat(diagnostics): colorize error output, honoring NO_COLOR\n\nRender rustc-style diagnostics with ANSI color (bold-red `error:`/caret,\nbold-blue gutter and `-->`) when stderr is a TTY. Color is suppressed for\nnon-TTY stderr (pipe/redirect) and when NO_COLOR is set to a non-empty value\n(no-color.org de-facto standard).\n\n`render` gains a `color: bool`; the gate lives in `color_from_env` (pure,\nunit-tested truth table) wired by `stderr_color`. With color off every escape\nstring is empty, so plain output is byte-identical to before.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-06-30T18:05:19+08:00",
+          "tree_id": "a0ee4644194e2fd2b32a7c3bcecba0f95b651082",
+          "url": "https://github.com/henry40408/lur/commit/a030a1dfcbac09be59743fe81fe2c55b46bbd820"
+        },
+        "date": 1782813988430,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 268241,
+            "range": "± 6173",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5204,
+            "range": "± 115",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208210,
+            "range": "± 1938",
             "unit": "ns/iter"
           }
         ]
