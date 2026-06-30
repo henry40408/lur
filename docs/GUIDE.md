@@ -11,12 +11,21 @@ Every example below is run as part of the test suite, so it stays correct.
 ## Data & I/O
 
 ### lur.json
+
+```lua
+assert(lur.json.encode(true) == "true")
+```
+
 ### lur.base64
 ### lur.crypto
 ### lur.cookie
 ### lur.time
 ### lur.log
+
 ### lur.io
+
+`lur.stdout.write(bytes)` / `lur.stdout.flush()` is the data channel.
+`lur.stdin.read()` drains all input.
 
 ## State & arguments
 
