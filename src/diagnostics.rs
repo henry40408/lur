@@ -1,8 +1,5 @@
 //! Human-readable, rustc-style rendering of script errors against their source.
 
-use std::ffi::OsStr;
-use std::io::IsTerminal;
-
 /// ANSI styles for the rendered diagnostic. All fields are empty strings when
 /// color is off, so the colored and plain code paths are identical save for the
 /// (then-empty) escape sequences.
@@ -31,23 +28,6 @@ impl Palette {
             }
         }
     }
-}
-
-/// Decide whether to emit ANSI color from the `NO_COLOR` env value (if any) and
-/// whether the target stream is a TTY. Color is on only when the stream is a TTY
-/// and `NO_COLOR` is unset or empty (the de-facto standard: a non-empty
-/// `NO_COLOR` disables color regardless of its value).
-fn color_from_env(no_color: Option<&OsStr>, stream_is_tty: bool) -> bool {
-    stream_is_tty && no_color.is_none_or(|v| v.is_empty())
-}
-
-/// Whether diagnostics written to stderr should be colorized, honoring
-/// `NO_COLOR` and a non-TTY stderr (pipe/redirect).
-pub fn stderr_color() -> bool {
-    color_from_env(
-        std::env::var_os("NO_COLOR").as_deref(),
-        std::io::stderr().is_terminal(),
-    )
 }
 
 /// Render `displayed` (an mlua error's `Display`) against `source`, rustc-style.
@@ -156,8 +136,7 @@ fn parse_location(body: &str, chunk_name: &str) -> Option<(usize, Option<usize>,
 
 #[cfg(test)]
 mod tests {
-    use super::{color_from_env, render};
-    use std::ffi::OsStr;
+    use super::render;
 
     const SRC: &str = "local x = nil\nprint(x.y)\n";
 
@@ -229,19 +208,6 @@ mod tests {
             out.contains("      ^"),
             "caret indented to the column: {out}"
         );
-    }
-
-    #[test]
-    fn color_from_env_truth_table() {
-        // On a TTY with NO_COLOR unset → colorize.
-        assert!(color_from_env(None, true));
-        // NO_COLOR present and non-empty disables, even on a TTY.
-        assert!(!color_from_env(Some(OsStr::new("1")), true));
-        // An empty NO_COLOR does not disable (de-facto standard).
-        assert!(color_from_env(Some(OsStr::new("")), true));
-        // Non-TTY (pipe/redirect) never colorizes, regardless of NO_COLOR.
-        assert!(!color_from_env(None, false));
-        assert!(!color_from_env(Some(OsStr::new("1")), false));
     }
 
     #[test]

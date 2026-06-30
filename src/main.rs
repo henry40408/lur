@@ -335,7 +335,7 @@ fn run_one_shot(cli: Cli) -> ExitCode {
                     &source,
                     &chunk,
                     &e.to_string(),
-                    lur::diagnostics::stderr_color()
+                    lur::color::stderr_color()
                 )
             );
             ExitCode::FAILURE
