@@ -16,7 +16,7 @@ use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
 /// A stored primitive value (nil is represented by absence).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Prim {
     Bool(bool),
     Num(f64),
@@ -109,6 +109,18 @@ impl StateStore {
             },
         );
         true
+    }
+
+    /// Value-based compare-and-set: succeeds iff the current value equals
+    /// `expected` (by value, not version). Avoids float-equality traps for
+    /// strings and booleans; the caller accepts those semantics for numbers.
+    /// `None` means "absent". Returns true if the swap was applied.
+    fn cas_value(&self, key: &[u8], expected: &Option<Prim>, new: Option<Prim>) -> bool {
+        let (current, version) = self.snapshot(key);
+        if &current != expected {
+            return false;
+        }
+        self.compare_and_set(key, version, new)
     }
 }
 
@@ -271,6 +283,29 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
         })
         .map_err(RunError::Init)?;
     state.set("update", update).map_err(RunError::Init)?;
+
+    let s = store.clone();
+    let cas = lua
+        .create_function(move |lua, (key, expected, new): (Value, Value, Value)| {
+            let key: mlua::String = argcheck::arg(lua, key, "lur.state.cas", 1, "string")?;
+            reject_reentry()?;
+            let expected_prim = from_lua(&expected)?;
+            let new_prim = from_lua(&new)?;
+            Ok(s.cas_value(&key.as_bytes(), &expected_prim, new_prim))
+        })
+        .map_err(RunError::Init)?;
+    state.set("cas", cas).map_err(RunError::Init)?;
+
+    let s = store.clone();
+    let add = lua
+        .create_function(move |lua, (key, value): (Value, Value)| {
+            let key: mlua::String = argcheck::arg(lua, key, "lur.state.add", 1, "string")?;
+            reject_reentry()?;
+            let new_prim = from_lua(&value)?;
+            Ok(s.cas_value(&key.as_bytes(), &None, new_prim))
+        })
+        .map_err(RunError::Init)?;
+    state.set("add", add).map_err(RunError::Init)?;
 
     lur.set("state", state).map_err(RunError::Init)?;
     Ok(())

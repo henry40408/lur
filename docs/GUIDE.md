@@ -129,7 +129,8 @@ assert(type(lur.args.flags) == "table")
 ### lur.state
 
 Process-wide shared state across the VM pool (primitives only): `get`/`set`
-(`nil` deletes), `incr` (atomic add), `update` (optimistic CAS).
+(`nil` deletes), `incr` (atomic add), `update` (optimistic CAS), `cas`
+(value-based compare-and-set), `add` (set-if-absent).
 
 ```lua
 lur.state.set("hits", 0)
@@ -139,6 +140,15 @@ lur.state.update("hits", function(n) return (n or 0) + 1 end)
 assert(lur.state.get("hits") == 2)
 lur.state.set("hits", nil)
 assert(lur.state.get("hits") == nil)
+-- cas(key, expected, new): swaps new in only when current value equals expected
+lur.state.set("x", 10)
+assert(lur.state.cas("x", 10, 20) == true)   -- matched: 10 -> 20
+assert(lur.state.cas("x", 10, 30) == false)  -- stale: value is now 20
+assert(lur.state.get("x") == 20)
+-- add(key, value): set-if-absent (returns true on success, false if already set)
+assert(lur.state.add("once", "hello") == true)
+assert(lur.state.add("once", "world") == false)
+assert(lur.state.get("once") == "hello")
 ```
 
 ## Capabilities (policy-gated)
