@@ -119,3 +119,19 @@ fn db_without_a_path_errors() {
         "using lur.db without --db must error"
     );
 }
+
+#[test]
+fn kv_get_reads_an_integer_cell_as_decimal_bytes() {
+    // A counter (INTEGER affinity) written into lur_kv must read back through
+    // kv.get as its decimal-string bytes, not crash on a Vec<u8> type mismatch.
+    let dir = tempfile::tempdir().unwrap();
+    let rt = db_runtime(dir.path().join("test.db"));
+    rt.run(
+        "lur.db.exec(\"INSERT INTO lur_kv(key,value) VALUES('c', 42)\")\n\
+         assert(lur.kv.get('c') == '42', 'integer cell reads as \"42\"')\n\
+         lur.kv.set('b', 'raw')\n\
+         assert(lur.kv.get('b') == 'raw', 'blob cell still reads raw bytes')\n\
+         assert(lur.kv.get('missing') == nil, 'absent is nil')",
+    )
+    .expect("type-aware kv.get");
+}

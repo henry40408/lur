@@ -20,8 +20,16 @@ use crate::runtime::RunError;
 /// A dynamically-bound `SQLite` query.
 type Query<'q> = sqlx::query::Query<'q, sqlx::Sqlite, SqliteArguments>;
 
+/// Shared, lazily-opened `SQLite` pool plus its configured path, handed from
+/// `db::install` to `kv::install` so both capabilities use one pool.
+pub struct SqliteShared {
+    pub(crate) cell: Arc<OnceLock<SqlitePool>>,
+    pub(crate) path: Arc<Option<PathBuf>>,
+}
+
 /// Install `lur.db`. `db_path` of `None` makes every call raise a clear error.
-pub fn install(lua: &Lua, lur: &Table, db_path: Option<PathBuf>) -> Result<(), RunError> {
+/// Returns the shared pool handle so `kv::install` can reuse the same pool.
+pub fn install(lua: &Lua, lur: &Table, db_path: Option<PathBuf>) -> Result<SqliteShared, RunError> {
     let cell: Arc<OnceLock<SqlitePool>> = Arc::new(OnceLock::new());
     let path = Arc::new(db_path);
     let db = lua.create_table().map_err(RunError::Init)?;
@@ -88,9 +96,10 @@ pub fn install(lua: &Lua, lur: &Table, db_path: Option<PathBuf>) -> Result<(), R
     }
 
     lur.set("db", db).map_err(RunError::Init)?;
-
-    install_kv(lua, lur, &cell, &path)?;
-    Ok(())
+    Ok(SqliteShared {
+        cell: Arc::clone(&cell),
+        path: Arc::clone(&path),
+    })
 }
 
 /// Pinned-connection transaction: build a `tx` handle whose exec/query run on
@@ -176,85 +185,6 @@ async fn run_tx(
     }
 }
 
-/// Install `lur.kv` over the internal `lur_kv(key TEXT, value BLOB)` table,
-/// sharing the same lazily-opened pool. Keys are strings, values raw bytes.
-fn install_kv(
-    lua: &Lua,
-    lur: &Table,
-    cell: &Arc<OnceLock<SqlitePool>>,
-    path: &Arc<Option<PathBuf>>,
-) -> Result<(), RunError> {
-    let kv = lua.create_table().map_err(RunError::Init)?;
-
-    {
-        let cell = Arc::clone(cell);
-        let path = Arc::clone(path);
-        let get = lua
-            .create_async_function(move |lua, key: String| {
-                let cell = Arc::clone(&cell);
-                let path = Arc::clone(&path);
-                async move {
-                    let pool = ensure_pool(&cell, &path).await?;
-                    let row = sqlx::query("SELECT value FROM lur_kv WHERE key = ?")
-                        .bind(key)
-                        .fetch_optional(&pool)
-                        .await
-                        .map_err(|e| Error::runtime(format!("lur.kv.get: {e}")))?;
-                    match row {
-                        Some(r) => Ok(Value::String(lua.create_string(get::<Vec<u8>>(&r, 0)?)?)),
-                        None => Ok(Value::Nil),
-                    }
-                }
-            })
-            .map_err(RunError::Init)?;
-        kv.set("get", get).map_err(RunError::Init)?;
-    }
-    {
-        let cell = Arc::clone(cell);
-        let path = Arc::clone(path);
-        let set = lua
-            .create_async_function(move |_, (key, value): (String, mlua::String)| {
-                let cell = Arc::clone(&cell);
-                let path = Arc::clone(&path);
-                async move {
-                    let pool = ensure_pool(&cell, &path).await?;
-                    sqlx::query("INSERT OR REPLACE INTO lur_kv (key, value) VALUES (?, ?)")
-                        .bind(key)
-                        .bind(value.as_bytes().to_vec())
-                        .execute(&pool)
-                        .await
-                        .map_err(|e| Error::runtime(format!("lur.kv.set: {e}")))?;
-                    Ok(())
-                }
-            })
-            .map_err(RunError::Init)?;
-        kv.set("set", set).map_err(RunError::Init)?;
-    }
-    {
-        let cell = Arc::clone(cell);
-        let path = Arc::clone(path);
-        let delete = lua
-            .create_async_function(move |_, key: String| {
-                let cell = Arc::clone(&cell);
-                let path = Arc::clone(&path);
-                async move {
-                    let pool = ensure_pool(&cell, &path).await?;
-                    sqlx::query("DELETE FROM lur_kv WHERE key = ?")
-                        .bind(key)
-                        .execute(&pool)
-                        .await
-                        .map_err(|e| Error::runtime(format!("lur.kv.delete: {e}")))?;
-                    Ok(())
-                }
-            })
-            .map_err(RunError::Init)?;
-        kv.set("delete", delete).map_err(RunError::Init)?;
-    }
-
-    lur.set("kv", kv).map_err(RunError::Init)?;
-    Ok(())
-}
-
 /// Convert a result row to a Lua table keyed by column name (spec §6 read map).
 fn read_row(lua: &Lua, row: &SqliteRow) -> mlua::Result<Table> {
     let t = lua.create_table()?;
@@ -287,7 +217,7 @@ where
 }
 
 /// Get the pool, opening it on first use. Errors clearly when no `--db` is set.
-async fn ensure_pool(
+pub(crate) async fn ensure_pool(
     cell: &OnceLock<SqlitePool>,
     path: &Option<PathBuf>,
 ) -> mlua::Result<SqlitePool> {

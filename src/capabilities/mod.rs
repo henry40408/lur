@@ -15,6 +15,7 @@ pub mod fs;
 pub mod http;
 pub mod io;
 pub mod json;
+pub mod kv;
 pub mod log;
 pub mod null;
 pub mod serve;
@@ -47,7 +48,8 @@ pub fn install(
     fs::install(lua, &lur, config.policy.clone())?;
     http::install(lua, &lur, config.policy.clone(), config.max_http_body)?;
     env::install(lua, &lur, config.policy.clone())?;
-    db::install(lua, &lur, config.db_path.clone())?;
+    let sqlite = db::install(lua, &lur, config.db_path.clone())?;
+    kv::install(lua, &lur, &sqlite)?;
     async_ops::install(lua, &lur, config.max_concurrency)?;
     args::install(lua, &lur, &config.args)?;
     serve::install(lua, &lur, serve_registry)?;
