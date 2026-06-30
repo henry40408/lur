@@ -184,11 +184,11 @@ async fn run_tx(
     let conn = shared.lock().await.take();
     match result {
         Ok(_) => {
-            if let Some(mut conn) = conn {
-                sqlx::query("COMMIT")
-                    .execute(&mut *conn)
-                    .await
-                    .map_err(|e| Error::runtime(format!("lur.db.tx: commit: {e}")))?;
+            if let Some(mut conn) = conn
+                && let Err(e) = sqlx::query("COMMIT").execute(&mut *conn).await
+            {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                return Err(Error::runtime(format!("lur.db.tx: commit: {e}")));
             }
             Ok(())
         }

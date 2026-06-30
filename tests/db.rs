@@ -225,6 +225,29 @@ fn kv_update_no_leaked_transaction_after_transform_error() {
 }
 
 #[test]
+fn kv_get_reads_a_real_cell_as_decimal_bytes() {
+    // A REAL (floating-point) value inserted directly into lur_kv must read back
+    // through kv.get as its decimal-string bytes via the "REAL" branch of
+    // value_to_bytes — not crash on a Vec<u8> type mismatch.
+    let dir = tempfile::tempdir().unwrap();
+    let rt = db_runtime(dir.path().join("test.db"));
+    rt.run(
+        "lur.db.exec(\"INSERT INTO lur_kv(key,value) VALUES('r', 3.5)\")\n\
+         assert(lur.kv.get('r') == '3.5', 'real cell reads as \"3.5\"')\n\
+         -- INTEGER cell → decimal string\n\
+         lur.db.exec(\"INSERT INTO lur_kv(key,value) VALUES('i', 42)\")\n\
+         assert(lur.kv.get('i') == '42', 'integer cell reads as \"42\"')\n\
+         -- TEXT/BLOB cell → raw bytes\n\
+         lur.kv.set('t', 'hello')\n\
+         assert(lur.kv.get('t') == 'hello', 'text cell reads as raw bytes')\n\
+         -- NULL cell → nil\n\
+         lur.db.exec(\"INSERT INTO lur_kv(key,value) VALUES('n', NULL)\")\n\
+         assert(lur.kv.get('n') == nil, 'null cell reads as nil')",
+    )
+    .expect("REAL cell reads as decimal bytes");
+}
+
+#[test]
 fn kv_incr_decr_counters() {
     let dir = tempfile::tempdir().unwrap();
     let rt = db_runtime(dir.path().join("test.db"));

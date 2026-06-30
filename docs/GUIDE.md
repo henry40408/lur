@@ -242,13 +242,16 @@ assert(lur.kv.get("once") == "first")
 -- cas: compare-and-swap (expected, new) — returns true if applied
 assert(lur.kv.cas("once", "first", "second") == true)
 assert(lur.kv.cas("once", "first", "nope")  == false)
+-- cas compares raw bytes: a counter created by incr/decr (stored as an integer) will not match — drive counters via incr/decr, not cas.
 
 -- incr/decr: integer counters (create-at-1 when absent; optional step)
 assert(lur.kv.incr("hits")    == 1)
 assert(lur.kv.incr("hits", 4) == 5)
 assert(lur.kv.decr("hits", 2) == 3)
 
--- update: read-modify-write; transform returns new value (string) or nil to delete
+-- update: read-modify-write; transform returns new value (string) or nil to delete.
+-- The transform must not call lur.db write operations: a nested lur.kv call fast-fails;
+-- a lur.db write is bounded by the 5 s busy_timeout rather than failing immediately.
 lur.kv.update("counter", function(cur)
   local n = tonumber(cur) or 0
   return tostring(n + 1)
