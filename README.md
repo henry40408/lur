@@ -293,6 +293,9 @@ end)
 Errors are reported against your script's path with the failing line and a
 source snippet (rustc-style), followed by a stack traceback. Server handler and
 cron errors are rendered the same way to stderr (and still become a `500`).
+Capability functions report argument-type mistakes in their own voice, e.g.
+`lur.crypto.sha256: argument #1 must be string, got table`. Type coercion is
+unchanged — only the error message is clearer.
 
 ## Development
 
