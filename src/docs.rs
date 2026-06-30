@@ -59,11 +59,6 @@ pub fn render(markdown: &str, color: bool) -> String {
                 out.push_str(reset);
                 out.push('\n');
             }
-            Event::Start(Tag::Link { dest_url, .. }) => {
-                // Emitted as `text (url)`; capture url for the end tag.
-                out.push_str(""); // text comes via Event::Text
-                let _ = dest_url; // url appended below on link text via simple form
-            }
             Event::Code(text) => {
                 out.push_str(code);
                 out.push_str(&text);
@@ -71,9 +66,9 @@ pub fn render(markdown: &str, color: bool) -> String {
             }
             Event::Text(text) => {
                 if in_code_block {
-                    // Indent each code line by two spaces.
-                    for (i, line) in text.split_inclusive('\n').enumerate() {
-                        if i == 0 || !line.is_empty() {
+                    // Indent each code line by two spaces; blank lines are emitted as-is.
+                    for line in text.split_inclusive('\n') {
+                        if !line.trim().is_empty() {
                             out.push_str("  ");
                         }
                         out.push_str(line);

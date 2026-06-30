@@ -25,8 +25,13 @@ fn lua_blocks(md: &str) -> Vec<Block> {
             continue;
         };
         let info = info.trim();
-        if info != "lua" && info != "lua ignore" {
+        let info_lower = info.to_ascii_lowercase();
+        if !info_lower.starts_with("lua") {
             continue;
+        }
+        // Catch typos like ```Lua, ```lua title=x before they silently escape the suite.
+        if info != "lua" && info != "lua ignore" {
+            panic!("unrecognised lua fence info string {info:?} — use `lua` or `lua ignore`");
         }
         let ignore = info == "lua ignore";
         let mut code = String::new();
@@ -54,13 +59,14 @@ fn permissive_config(db_path: std::path::PathBuf) -> RuntimeConfig {
 #[test]
 fn every_runnable_example_succeeds() {
     let blocks = lua_blocks(GUIDE);
-    assert!(!blocks.is_empty(), "no ```lua blocks found in the guide");
+    let mut ran: usize = 0;
     for (i, block) in blocks.iter().enumerate() {
         if block.ignore {
             continue;
         }
         // Each block gets its own temp dir (cwd for relative fs paths) + db.
         let dir = tempfile::tempdir().expect("tempdir");
+        // SAFETY: set_current_dir is process-global; safe only because nextest runs each test in its own process.
         std::env::set_current_dir(dir.path()).expect("chdir");
         let rt = Runtime::with_config(permissive_config(dir.path().join("guide.db")))
             .expect("runtime builds");
@@ -70,7 +76,12 @@ fn every_runnable_example_succeeds() {
                 block.code
             );
         }
+        ran += 1;
     }
+    assert!(
+        ran >= 11,
+        "expected at least 11 runnable guide examples, but only ran {ran} — did examples get mistagged or removed?"
+    );
 }
 
 #[test]
