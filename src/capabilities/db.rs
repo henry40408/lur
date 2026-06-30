@@ -102,6 +102,24 @@ pub fn install(lua: &Lua, lur: &Table, db_path: Option<PathBuf>) -> Result<Sqlit
     })
 }
 
+/// Acquire a pooled connection and open a write transaction with `BEGIN
+/// IMMEDIATE`, so the write lock is taken up front (no read→write upgrade
+/// busy/deadlock) and the caller's body runs exactly once. The caller MUST
+/// finish with `COMMIT` or `ROLLBACK`.
+pub(crate) async fn begin_immediate(
+    pool: &SqlitePool,
+) -> mlua::Result<sqlx::pool::PoolConnection<sqlx::Sqlite>> {
+    let mut conn = pool
+        .acquire()
+        .await
+        .map_err(|e| Error::runtime(format!("lur.db.tx: acquire: {e}")))?;
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
+    Ok(conn)
+}
+
 /// Pinned-connection transaction: build a `tx` handle whose exec/query run on
 /// one connection, call `func(tx)`, then commit on a normal return or roll back
 /// and re-raise on error (spec §6).
@@ -112,11 +130,8 @@ async fn run_tx(
     func: Function,
 ) -> mlua::Result<()> {
     let pool = ensure_pool(cell, path).await?;
-    let txn = pool
-        .begin()
-        .await
-        .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
-    let shared = Arc::new(tokio::sync::Mutex::new(Some(txn)));
+    let conn = begin_immediate(&pool).await?;
+    let shared = Arc::new(tokio::sync::Mutex::new(Some(conn)));
 
     let handle = lua.create_table()?;
     {
@@ -126,11 +141,11 @@ async fn run_tx(
                 let shared = Arc::clone(&shared);
                 async move {
                     let mut guard = shared.lock().await;
-                    let txn = guard
+                    let conn = guard
                         .as_mut()
                         .ok_or_else(|| Error::runtime("lur.db.tx: transaction already finished"))?;
                     let res = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql)), &params)?
-                        .execute(&mut **txn)
+                        .execute(&mut **conn)
                         .await
                         .map_err(|e| Error::runtime(format!("lur.db.tx exec: {e}")))?;
                     let t = lua.create_table()?;
@@ -148,11 +163,11 @@ async fn run_tx(
                 let shared = Arc::clone(&shared);
                 async move {
                     let mut guard = shared.lock().await;
-                    let txn = guard
+                    let conn = guard
                         .as_mut()
                         .ok_or_else(|| Error::runtime("lur.db.tx: transaction already finished"))?;
                     let rows = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql)), &params)?
-                        .fetch_all(&mut **txn)
+                        .fetch_all(&mut **conn)
                         .await
                         .map_err(|e| Error::runtime(format!("lur.db.tx query: {e}")))?;
                     let out = lua.create_table()?;
@@ -166,19 +181,20 @@ async fn run_tx(
     }
 
     let result = func.call_async::<MultiValue>(handle).await;
-    let txn = shared.lock().await.take();
+    let conn = shared.lock().await.take();
     match result {
         Ok(_) => {
-            if let Some(txn) = txn {
-                txn.commit()
+            if let Some(mut conn) = conn {
+                sqlx::query("COMMIT")
+                    .execute(&mut *conn)
                     .await
                     .map_err(|e| Error::runtime(format!("lur.db.tx: commit: {e}")))?;
             }
             Ok(())
         }
         Err(e) => {
-            if let Some(txn) = txn {
-                let _ = txn.rollback().await;
+            if let Some(mut conn) = conn {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
             }
             Err(e)
         }
@@ -239,6 +255,7 @@ async fn open_pool(path: &Path) -> sqlx::Result<SqlitePool> {
     let opts = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
+        .busy_timeout(std::time::Duration::from_millis(5000))
         .journal_mode(SqliteJournalMode::Wal);
     let pool = SqlitePoolOptions::new().connect_with(opts).await?;
     sqlx::query("CREATE TABLE IF NOT EXISTS lur_kv (key TEXT PRIMARY KEY, value BLOB)")

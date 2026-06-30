@@ -121,6 +121,28 @@ fn db_without_a_path_errors() {
 }
 
 #[test]
+fn tx_uses_a_write_lock_and_still_commits_and_rolls_back() {
+    // Smoke test that the BEGIN IMMEDIATE rewrite preserves tx semantics:
+    // a committing tx persists, an erroring tx rolls back, on the same db.
+    let dir = tempfile::tempdir().unwrap();
+    let rt = db_runtime(dir.path().join("test.db"));
+    rt.run(
+        "lur.db.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, n INTEGER)')\n\
+         lur.db.exec('INSERT INTO t VALUES (1, 0)')\n\
+         lur.db.tx(function(tx) tx.exec('UPDATE t SET n = 5 WHERE id = 1') end)\n\
+         assert(lur.db.query('SELECT n FROM t WHERE id=1')[1].n == 5, 'committed')\n\
+         pcall(function()\n\
+           lur.db.tx(function(tx)\n\
+             tx.exec('UPDATE t SET n = 99 WHERE id = 1')\n\
+             error('boom')\n\
+           end)\n\
+         end)\n\
+         assert(lur.db.query('SELECT n FROM t WHERE id=1')[1].n == 5, 'rolled back')",
+    )
+    .expect("tx commit + rollback under IMMEDIATE");
+}
+
+#[test]
 fn kv_get_reads_an_integer_cell_as_decimal_bytes() {
     // A counter (INTEGER affinity) written into lur_kv must read back through
     // kv.get as its decimal-string bytes, not crash on a Vec<u8> type mismatch.
