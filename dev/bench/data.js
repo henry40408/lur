@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782843215074,
+  "lastUpdate": 1782844082464,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1217,6 +1217,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 210921,
             "range": "± 4445",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a6dfcef728fb7d15858b62d29b3eeadd7cf86f0f",
+          "message": "test(kv): verify incr atomicity under concurrent writers (#55)\n\nTwo writer threads, each its own Runtime + SQLite pool pointing at one db\nfile, run a tight lur.kv.incr loop; the final counter must equal threads ×\nper-thread exactly, proving the single guarded upsert loses no update when\nWAL serializes concurrent writers (one writes, the other waits out the lock\nvia busy_timeout and retries). The counter is seeded in one thread first so\nthe workers contend on writes, not on the cold-open WAL-mode switch.\n\nTwo writers, not more: 3+ threads hammering one key can thundering-herd into\nbusy_timeout exhaustion on a slow CI runner — a SQLite write-contention\ncharacteristic, not an atomicity defect — and two writers already exercise\nthe serialize-and-retry path the claim is about.\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-01T02:26:44+08:00",
+          "tree_id": "bcc9cd3e1760b7df02a2274b0d663502d3bdb3ec",
+          "url": "https://github.com/henry40408/lur/commit/a6dfcef728fb7d15858b62d29b3eeadd7cf86f0f"
+        },
+        "date": 1782844082200,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 292465,
+            "range": "± 5525",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5243,
+            "range": "± 100",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208231,
+            "range": "± 8971",
             "unit": "ns/iter"
           }
         ]
