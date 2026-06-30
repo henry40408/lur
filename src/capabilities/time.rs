@@ -7,8 +7,9 @@
 use std::sync::LazyLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use mlua::{Error, Lua, Table};
+use mlua::{Error, Lua, Table, Value};
 
+use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
 /// Process-fixed reference for `monotonic_ms`, captured on first use. Only the
@@ -50,7 +51,8 @@ fn install_clocks(lua: &Lua, time: &Table) -> Result<(), RunError> {
 /// `lur.time.parse_rfc3339` / `lur.time.parse_http_date`.
 fn install_parsers(lua: &Lua, time: &Table) -> Result<(), RunError> {
     let parse_rfc3339 = lua
-        .create_function(|_, s: mlua::String| {
+        .create_function(|lua, s: Value| {
+            let s: mlua::String = argcheck::arg(lua, s, "lur.time.parse_rfc3339", 1, "string")?;
             let s = s
                 .to_str()
                 .map_err(|e| Error::runtime(format!("lur.time.parse_rfc3339: {e}")))?;
@@ -63,7 +65,8 @@ fn install_parsers(lua: &Lua, time: &Table) -> Result<(), RunError> {
         .map_err(RunError::Init)?;
 
     let parse_http_date = lua
-        .create_function(|_, s: mlua::String| {
+        .create_function(|lua, s: Value| {
+            let s: mlua::String = argcheck::arg(lua, s, "lur.time.parse_http_date", 1, "string")?;
             let s = s
                 .to_str()
                 .map_err(|e| Error::runtime(format!("lur.time.parse_http_date: {e}")))?;

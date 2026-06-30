@@ -88,6 +88,12 @@ Each submodule sets its own slice (`lur.fs`, `lur.http`, …). Policy-gated modu
 `lur serve` (it is `None` in one-shot, which makes `lur.serve.*` raise a clear error).
 Everything is wired before `sandbox(true)` freezes it.
 
+Scalar-argument capability functions extract their arguments through
+`capabilities::argcheck::arg`, which preserves mlua's coercion but raises
+`lur.<cap>.<fn>: argument #<n> must be <type>, got <type>` on a type mismatch.
+Table/closure-taking capabilities (`http`, `serve`, `db`, `async`) validate
+their own arguments and are not routed through it.
+
 ### Policy enforcement
 
 [`Policy`](src/policy.rs) is the deny-by-default model shared into host callbacks behind

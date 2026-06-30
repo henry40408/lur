@@ -8,6 +8,7 @@ use std::io::{BufRead, Read, Write};
 
 use mlua::{Error, Lua, Table, Value};
 
+use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
 /// Install `lur.stdin` and `lur.stdout`.
@@ -25,7 +26,8 @@ fn install_stdin(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     // read(n) → up to n bytes, or nil once stdin is exhausted (so a byte loop
     //           can terminate on nil).
     let read = lua
-        .create_function(|lua, n: Option<usize>| {
+        .create_function(|lua, n: Value| {
+            let n: Option<usize> = argcheck::arg(lua, n, "lur.stdin.read", 1, "number")?;
             let stdin = std::io::stdin();
             let mut buf = Vec::new();
             match n {
@@ -100,7 +102,8 @@ fn install_stdout(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let stdout = lua.create_table().map_err(RunError::Init)?;
 
     let write = lua
-        .create_function(|_, data: mlua::String| {
+        .create_function(|lua, data: Value| {
+            let data: mlua::String = argcheck::arg(lua, data, "lur.stdout.write", 1, "string")?;
             std::io::stdout()
                 .lock()
                 .write_all(&data.as_bytes())

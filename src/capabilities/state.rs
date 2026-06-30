@@ -10,8 +10,9 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use mlua::{Function, Lua, Table, Value};
+use mlua::{Lua, Table, Value};
 
+use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
 /// A stored primitive value (nil is represented by absence).
@@ -148,7 +149,8 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
 
     let s = store.clone();
     let get = lua
-        .create_function(move |lua, key: mlua::String| {
+        .create_function(move |lua, key: Value| {
+            let key: mlua::String = argcheck::arg(lua, key, "lur.state.get", 1, "string")?;
             reject_reentry()?;
             to_lua(lua, s.get(&key.as_bytes()))
         })
@@ -157,7 +159,8 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
 
     let s = store.clone();
     let set = lua
-        .create_function(move |_, (key, value): (mlua::String, Value)| {
+        .create_function(move |lua, (key, value): (Value, Value)| {
+            let key: mlua::String = argcheck::arg(lua, key, "lur.state.set", 1, "string")?;
             reject_reentry()?;
             s.set(key.as_bytes().to_vec(), from_lua(&value)?);
             Ok(())
@@ -167,7 +170,9 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
 
     let s = store.clone();
     let incr = lua
-        .create_function(move |_, (key, n): (mlua::String, Option<f64>)| {
+        .create_function(move |lua, (key, n): (Value, Value)| {
+            let key: mlua::String = argcheck::arg(lua, key, "lur.state.incr", 1, "string")?;
+            let n: Option<f64> = argcheck::arg(lua, n, "lur.state.incr", 2, "number")?;
             reject_reentry()?;
             s.incr(key.as_bytes().to_vec(), n.unwrap_or(1.0))
                 .map_err(|()| {
@@ -181,7 +186,9 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
 
     let s = store.clone();
     let update = lua
-        .create_function(move |lua, (key, func): (mlua::String, Function)| {
+        .create_function(move |lua, (key, func): (Value, Value)| {
+            let key: mlua::String = argcheck::arg(lua, key, "lur.state.update", 1, "string")?;
+            let func: mlua::Function = argcheck::arg(lua, func, "lur.state.update", 2, "function")?;
             reject_reentry()?;
             let key = key.as_bytes().to_vec();
             loop {

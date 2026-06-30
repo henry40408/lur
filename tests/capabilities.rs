@@ -265,3 +265,50 @@ fn time_parse_http_date_to_epoch_millis() {
            'malformed http-date raises')",
     );
 }
+
+#[test]
+fn crypto_arg_type_error_is_lur_voiced() {
+    // In mlua+Luau, pcall errors from Rust are WrappedFailure userdata (not plain strings).
+    // tostring() calls the __tostring metamethod to get the human-readable message.
+    run(
+        "local ok, err = pcall(function() return lur.crypto.sha256({}) end)\n\
+         assert(ok == false, 'table arg rejected')\n\
+         assert(tostring(err):find('lur.crypto.sha256: argument #1 must be string, got table', 1, true),\n\
+           'lur-voiced message: ' .. tostring(err))\n\
+         local ok2, err2 = pcall(function() return lur.crypto.hmac_sha256('k', {}) end)\n\
+         assert(ok2 == false and tostring(err2):find('lur.crypto.hmac_sha256: argument #2 must be string, got table', 1, true),\n\
+           'second-arg message: ' .. tostring(err2))",
+    );
+}
+
+#[test]
+fn scalar_capabilities_arg_errors_are_lur_voiced() {
+    run(
+        "local function msg(f) local ok, e = pcall(f); assert(ok == false); return tostring(e) end\n\
+         assert(msg(function() return lur.base64.encode({}) end)\n\
+           :find('lur.base64.encode: argument #1 must be string, got table', 1, true), 'base64')\n\
+         assert(msg(function() return lur.cookie.parse({}) end)\n\
+           :find('lur.cookie.parse: argument #1 must be string, got table', 1, true), 'cookie')\n\
+         assert(msg(function() return lur.cookie.serialize('n', {}) end)\n\
+           :find('lur.cookie.serialize: argument #2 must be string, got table', 1, true), 'cookie2')\n\
+         assert(msg(function() return lur.time.parse_rfc3339({}) end)\n\
+           :find('lur.time.parse_rfc3339: argument #1 must be string, got table', 1, true), 'time')\n\
+         assert(msg(function() return lur.json.decode({}) end)\n\
+           :find('lur.json.decode: argument #1 must be string, got table', 1, true), 'json')",
+    );
+}
+
+#[test]
+fn io_fs_env_log_state_arg_errors_are_lur_voiced() {
+    run(
+        "local function msg(f) local ok, e = pcall(f); assert(ok == false); return tostring(e) end\n\
+         assert(msg(function() return lur.stdout.write({}) end)\n\
+           :find('lur.stdout.write: argument #1 must be string, got table', 1, true), 'stdout')\n\
+         assert(msg(function() return lur.log.info({}) end)\n\
+           :find('lur.log.info: argument #1 must be string, got table', 1, true), 'log')\n\
+         assert(msg(function() return lur.state.get({}) end)\n\
+           :find('lur.state.get: argument #1 must be string, got table', 1, true), 'state')\n\
+         assert(msg(function() return lur.state.update('k', 'notfn') end)\n\
+           :find('lur.state.update: argument #2 must be function, got string', 1, true), 'update')",
+    );
+}
