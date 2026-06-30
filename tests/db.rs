@@ -157,3 +157,25 @@ fn kv_get_reads_an_integer_cell_as_decimal_bytes() {
     )
     .expect("type-aware kv.get");
 }
+
+#[test]
+fn kv_add_and_cas() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = db_runtime(dir.path().join("test.db"));
+    rt.run(
+        "assert(lur.kv.add('k', 'first') == true, 'add inserts when absent')\n\
+         assert(lur.kv.add('k', 'second') == false, 'add is a no-op when present')\n\
+         assert(lur.kv.get('k') == 'first', 'value kept from first add')\n\
+         -- cas update-if-equal\n\
+         assert(lur.kv.cas('k', 'first', 'next') == true, 'cas applies on match')\n\
+         assert(lur.kv.cas('k', 'first', 'nope') == false, 'cas rejects on mismatch')\n\
+         assert(lur.kv.get('k') == 'next', 'value is the cas result')\n\
+         -- cas set-if-absent (expected = nil)\n\
+         assert(lur.kv.cas('fresh', nil, 'v') == true, 'cas(nil,...) sets when absent')\n\
+         assert(lur.kv.cas('fresh', nil, 'v2') == false, 'cas(nil,...) fails when present')\n\
+         -- cas delete-if-equal (new = nil)\n\
+         assert(lur.kv.cas('fresh', 'v', nil) == true, 'cas(...,nil) deletes on match')\n\
+         assert(lur.kv.get('fresh') == nil, 'deleted')",
+    )
+    .expect("kv add + cas");
+}

@@ -79,6 +79,104 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
             .map_err(RunError::Init)?;
         kv.set("delete", delete).map_err(RunError::Init)?;
     }
+    {
+        let cell = std::sync::Arc::clone(&shared.cell);
+        let path = std::sync::Arc::clone(&shared.path);
+        let add = lua
+            .create_async_function(move |_, (key, value): (String, mlua::String)| {
+                let cell = std::sync::Arc::clone(&cell);
+                let path = std::sync::Arc::clone(&path);
+                async move {
+                    let pool = db::ensure_pool(&cell, &path).await?;
+                    let res = sqlx::query(
+                        "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
+                         ON CONFLICT(key) DO NOTHING",
+                    )
+                    .bind(key)
+                    .bind(value.as_bytes().to_vec())
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| Error::runtime(format!("lur.kv.add: {e}")))?;
+                    Ok(res.rows_affected() == 1)
+                }
+            })
+            .map_err(RunError::Init)?;
+        kv.set("add", add).map_err(RunError::Init)?;
+    }
+    {
+        let cell = std::sync::Arc::clone(&shared.cell);
+        let path = std::sync::Arc::clone(&shared.path);
+        let cas = lua
+            .create_async_function(
+                move |_,
+                      (key, expected, new): (
+                    String,
+                    Option<mlua::String>,
+                    Option<mlua::String>,
+                )| {
+                    let cell = std::sync::Arc::clone(&cell);
+                    let path = std::sync::Arc::clone(&path);
+                    async move {
+                        let pool = db::ensure_pool(&cell, &path).await?;
+                        let exp = expected.map(|s| s.as_bytes().to_vec());
+                        let neu = new.map(|s| s.as_bytes().to_vec());
+                        let applied = match (exp, neu) {
+                            // expect absent, set new
+                            (None, Some(v)) => {
+                                sqlx::query(
+                                    "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
+                                     ON CONFLICT(key) DO NOTHING",
+                                )
+                                .bind(key)
+                                .bind(v)
+                                .execute(&pool)
+                                .await
+                                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
+                                .rows_affected()
+                                    == 1
+                            }
+                            // expect absent, want absent: succeeds iff already absent
+                            (None, None) => {
+                                let r = sqlx::query("SELECT 1 FROM lur_kv WHERE key = ?")
+                                    .bind(key)
+                                    .fetch_optional(&pool)
+                                    .await
+                                    .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?;
+                                r.is_none()
+                            }
+                            // expect value, set new
+                            (Some(e), Some(v)) => {
+                                sqlx::query(
+                                    "UPDATE lur_kv SET value = ? WHERE key = ? AND value = ?",
+                                )
+                                .bind(v)
+                                .bind(key)
+                                .bind(e)
+                                .execute(&pool)
+                                .await
+                                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
+                                .rows_affected()
+                                    == 1
+                            }
+                            // expect value, delete
+                            (Some(e), None) => {
+                                sqlx::query("DELETE FROM lur_kv WHERE key = ? AND value = ?")
+                                    .bind(key)
+                                    .bind(e)
+                                    .execute(&pool)
+                                    .await
+                                    .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
+                                    .rows_affected()
+                                    == 1
+                            }
+                        };
+                        Ok(applied)
+                    }
+                },
+            )
+            .map_err(RunError::Init)?;
+        kv.set("cas", cas).map_err(RunError::Init)?;
+    }
 
     lur.set("kv", kv).map_err(RunError::Init)?;
     Ok(())
