@@ -48,7 +48,8 @@ A Markdown cookbook. Structure:
    1–2 sentence intro and runnable `assert`-based example(s) covering every API
    function. Capabilities (mirroring the README API grouping):
    `json`, `base64`, `crypto`, `cookie`, `time`, `log`, `args`, `state`, `io`,
-   `fs`, `env`, `http`, `db`, `serve`.
+   `fs`, `env`, `http`, `db`, `kv`, `async`, `serve`. (The `lur.null` JSON
+   sentinel is shown inside the `json` section, not given its own heading.)
 
 Each section heading includes the capability's table name verbatim (e.g. a
 heading containing `lur.crypto`) so the drift test (below) can find it.
@@ -131,9 +132,10 @@ An integration test with two responsibilities.
 **(b) Drift guard.**
 A second test asserts every user-facing capability table name appears in the
 guide text. The list is the canonical set of `lur.*` tables:
-`json base64 crypto cookie time log args state io fs env http db serve`
-(internal plumbing — `argcheck`, `async_ops`, `null` — is excluded). Adding a
-capability without documenting it fails this test.
+`json base64 crypto cookie time log args state io fs env http db kv async serve`
+(internal plumbing — `argcheck` — and the `null` sentinel are excluded; `io`
+covers `lur.stdin`/`lur.stdout`). Adding a capability without documenting it
+fails this test.
 
 ## Data flow
 
