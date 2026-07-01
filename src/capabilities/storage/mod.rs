@@ -12,7 +12,7 @@ use mlua::{Error, Function, Lua, Table, Value};
 pub(crate) mod postgres;
 pub(crate) mod sqlite;
 
-use postgres::PgBackend;
+use postgres::{PgBackend, PgTransaction};
 use sqlite::{SqliteBackend, SqliteTransaction};
 
 /// Result of a write statement.
@@ -75,9 +75,7 @@ impl Backend {
     pub(crate) async fn begin(&self) -> mlua::Result<Transaction> {
         match self {
             Backend::Sqlite(b) => Ok(Transaction::Sqlite(b.begin().await?)),
-            Backend::Postgres(_) => Err(Error::runtime(
-                "lur.db.tx: postgres backend not yet implemented",
-            )),
+            Backend::Postgres(b) => Ok(Transaction::Postgres(b.begin().await?)),
         }
     }
 
@@ -163,6 +161,7 @@ impl Backend {
 /// A write transaction over some backend.
 pub(crate) enum Transaction {
     Sqlite(SqliteTransaction),
+    Postgres(PgTransaction),
 }
 
 impl Transaction {
@@ -174,6 +173,7 @@ impl Transaction {
     ) -> mlua::Result<ExecResult> {
         match self {
             Transaction::Sqlite(t) => t.exec(lua, sql, params).await,
+            Transaction::Postgres(t) => t.exec(lua, sql, params).await,
         }
     }
 
@@ -185,18 +185,21 @@ impl Transaction {
     ) -> mlua::Result<Table> {
         match self {
             Transaction::Sqlite(t) => t.query(lua, sql, params).await,
+            Transaction::Postgres(t) => t.query(lua, sql, params).await,
         }
     }
 
     pub(crate) async fn commit(&self) -> mlua::Result<()> {
         match self {
             Transaction::Sqlite(t) => t.commit().await,
+            Transaction::Postgres(t) => t.commit().await,
         }
     }
 
     pub(crate) async fn rollback(&self) {
         match self {
             Transaction::Sqlite(t) => t.rollback().await,
+            Transaction::Postgres(t) => t.rollback().await,
         }
     }
 }

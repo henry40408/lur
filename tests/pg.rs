@@ -105,3 +105,30 @@ fn pg_noncore_column_errors_until_cast_to_text() {
     ))
     .expect("cast-to-text read works");
 }
+
+#[test]
+fn pg_tx_commits_and_rolls_back() {
+    let Some(rt) = pg_runtime() else { return };
+    let t = unique("pg_tx");
+    rt.run(&format!(
+        "lur.db.exec('DROP TABLE IF EXISTS {t}')\n\
+         lur.db.exec('CREATE TABLE {t} (id BIGINT PRIMARY KEY, bal BIGINT)')\n\
+         lur.db.exec('INSERT INTO {t} VALUES (1,100),(2,0)')\n\
+         lur.db.tx(function(tx)\n\
+           tx.exec('UPDATE {t} SET bal = bal - 50 WHERE id = 1')\n\
+           tx.exec('UPDATE {t} SET bal = bal + 50 WHERE id = 2')\n\
+         end)\n\
+         assert(lur.db.query('SELECT bal FROM {t} WHERE id=1')[1].bal == 50, 'committed 1')\n\
+         assert(lur.db.query('SELECT bal FROM {t} WHERE id=2')[1].bal == 50, 'committed 2')\n\
+         local ok = pcall(function()\n\
+           lur.db.tx(function(tx)\n\
+             tx.exec('UPDATE {t} SET bal = 999 WHERE id = 1')\n\
+             error('boom')\n\
+           end)\n\
+         end)\n\
+         assert(not ok, 'tx raised')\n\
+         assert(lur.db.query('SELECT bal FROM {t} WHERE id=1')[1].bal == 50, 'rolled back')\n\
+         lur.db.exec('DROP TABLE {t}')"
+    ))
+    .expect("pg tx commit + rollback");
+}

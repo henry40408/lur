@@ -7,6 +7,7 @@
 use std::str::FromStr;
 
 use mlua::{Error, Lua, Table, Value};
+use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgArguments, PgConnectOptions, PgPool, PgPoolOptions, PgRow};
 use sqlx::{Column, Postgres, Row, TypeInfo, ValueRef};
 
@@ -159,5 +160,93 @@ impl PgBackend {
             out.raw_set(i as i64 + 1, read_row(lua, row)?)?;
         }
         Ok(out)
+    }
+
+    /// Open a `SERIALIZABLE` write transaction on a pinned connection. Serializable
+    /// (SSI) protects `db.tx` read-then-write logic against any concurrent writer,
+    /// at the cost that a conflict aborts with SQLSTATE 40001 — surfaced (usually
+    /// at COMMIT) as a lur-voiced error the caller handles. No retry (a body may
+    /// have external side effects).
+    pub(crate) async fn begin(&self) -> mlua::Result<PgTransaction> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
+        sqlx::query("BEGIN ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
+        Ok(PgTransaction {
+            conn: tokio::sync::Mutex::new(Some(conn)),
+        })
+    }
+}
+
+/// A pinned-connection Postgres write transaction. `exec`/`query` run on the
+/// pinned connection; `commit`/`rollback` take it. A call after finish errors.
+/// `commit` can surface SQLSTATE 40001 (serialization failure).
+pub(crate) struct PgTransaction {
+    conn: tokio::sync::Mutex<Option<PoolConnection<Postgres>>>,
+}
+
+impl PgTransaction {
+    pub(crate) async fn exec(
+        &self,
+        _lua: &Lua,
+        sql: String,
+        params: Vec<Value>,
+    ) -> mlua::Result<super::ExecResult> {
+        let mut guard = self.conn.lock().await;
+        let conn = guard
+            .as_mut()
+            .ok_or_else(|| Error::runtime("lur.db.tx: transaction already finished"))?;
+        let res = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql.as_str())), &params)?
+            .execute(&mut **conn)
+            .await
+            .map_err(|e| Error::runtime(format!("lur.db.tx exec: {e}")))?;
+        Ok(super::ExecResult {
+            rows_affected: res.rows_affected(),
+            last_insert_id: 0,
+        })
+    }
+
+    pub(crate) async fn query(
+        &self,
+        lua: &Lua,
+        sql: String,
+        params: Vec<Value>,
+    ) -> mlua::Result<Table> {
+        let mut guard = self.conn.lock().await;
+        let conn = guard
+            .as_mut()
+            .ok_or_else(|| Error::runtime("lur.db.tx: transaction already finished"))?;
+        let rows = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql.as_str())), &params)?
+            .fetch_all(&mut **conn)
+            .await
+            .map_err(|e| Error::runtime(format!("lur.db.tx query: {e}")))?;
+        let out = lua.create_table()?;
+        for (i, row) in rows.iter().enumerate() {
+            out.raw_set(i as i64 + 1, read_row(lua, row)?)?;
+        }
+        Ok(out)
+    }
+
+    pub(crate) async fn commit(&self) -> mlua::Result<()> {
+        let mut guard = self.conn.lock().await;
+        if let Some(mut conn) = guard.take()
+            && let Err(e) = sqlx::query("COMMIT").execute(&mut *conn).await
+        {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+            return Err(Error::runtime(format!("lur.db.tx: commit: {e}")));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn rollback(&self) {
+        let mut guard = self.conn.lock().await;
+        if let Some(mut conn) = guard.take() {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+        }
     }
 }
