@@ -6,7 +6,7 @@
 
 use std::str::FromStr;
 
-use mlua::{Error, Lua, Table, Value};
+use mlua::{Error, Function, Lua, Table, Value};
 use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgArguments, PgConnectOptions, PgPool, PgPoolOptions, PgRow};
 use sqlx::{Column, Postgres, Row, TypeInfo, ValueRef};
@@ -337,6 +337,84 @@ impl PgBackend {
         Ok(PgTransaction {
             conn: tokio::sync::Mutex::new(Some(conn)),
         })
+    }
+
+    /// Read-modify-write for `lur.kv.update`: a `SERIALIZABLE` transaction on a
+    /// pinned connection — read (type-aware, matching `kv_get`), call `func`, then
+    /// write/delete and commit; roll back and re-raise on any error. A conflicting
+    /// concurrent writer aborts this with SQLSTATE 40001 (surfaced, not retried).
+    /// The write stores the returned string as `kind=0` bytes so a value written by
+    /// `update` compares equal under `kv_cas` (which matches on `bytes`).
+    pub(crate) async fn kv_update(
+        &self,
+        lua: &Lua,
+        key: String,
+        func: Function,
+    ) -> mlua::Result<Value> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
+        sqlx::query("BEGIN ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
+
+        let result: mlua::Result<Value> = async {
+            let cur: Value = match sqlx::query("SELECT kind, bytes, num FROM lur_kv WHERE key = $1")
+                .bind(&key)
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?
+            {
+                None => Value::Nil,
+                Some(r) => Value::String(lua.create_string(kv_row_to_bytes(&r)?)?),
+            };
+
+            let new = func.call_async::<Value>(cur).await?;
+
+            match &new {
+                Value::Nil => {
+                    sqlx::query("DELETE FROM lur_kv WHERE key = $1")
+                        .bind(&key)
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
+                }
+                Value::String(s) => {
+                    sqlx::query(
+                        "INSERT INTO lur_kv (key, kind, bytes, num) VALUES ($1, 0, $2, NULL) \
+                         ON CONFLICT (key) DO UPDATE SET kind = 0, bytes = excluded.bytes, num = NULL",
+                    )
+                    .bind(&key)
+                    .bind(s.as_bytes().to_vec())
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
+                }
+                other => {
+                    return Err(Error::runtime(format!(
+                        "lur.kv.update: transform must return a string or nil, got {}",
+                        other.type_name()
+                    )));
+                }
+            }
+            sqlx::query("COMMIT")
+                .execute(&mut *conn)
+                .await
+                .map_err(|e| Error::runtime(format!("lur.kv.update: commit: {e}")))?;
+            Ok(new)
+        }
+        .await;
+
+        match result {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                Err(e)
+            }
+        }
     }
 }
 

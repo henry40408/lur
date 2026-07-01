@@ -139,9 +139,7 @@ impl Backend {
     ) -> mlua::Result<Value> {
         match self {
             Backend::Sqlite(b) => b.kv_update(lua, key, func).await,
-            Backend::Postgres(_) => Err(Error::runtime(
-                "lur.kv: postgres backend not yet implemented",
-            )),
+            Backend::Postgres(b) => b.kv_update(lua, key, func).await,
         }
     }
 }

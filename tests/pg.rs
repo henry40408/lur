@@ -156,6 +156,42 @@ fn pg_kv_set_get_delete_add_cas() {
 }
 
 #[test]
+fn pg_kv_update_read_modify_write() {
+    let Some(rt) = pg_runtime() else { return };
+    let k = unique("pgupd");
+    rt.run(&format!(
+        "lur.kv.set('{k}', 'a')\n\
+         local out = lur.kv.update('{k}', function(cur)\n\
+           assert(cur == 'a', 'sees current')\n\
+           return cur .. 'b'\n\
+         end)\n\
+         assert(out == 'ab', 'returns new')\n\
+         assert(lur.kv.get('{k}') == 'ab', 'persisted')\n\
+         lur.kv.update('{k}', function(_) return nil end)\n\
+         assert(lur.kv.get('{k}') == nil, 'nil deletes')\n\
+         local seen\n\
+         lur.kv.update('{k}', function(cur) seen = cur; return 'fresh' end)\n\
+         assert(seen == nil, 'absent key sees nil')\n\
+         assert(lur.kv.get('{k}') == 'fresh', 'created')\n\
+         lur.kv.delete('{k}')"
+    ))
+    .expect("pg kv.update RMW");
+}
+
+#[test]
+fn pg_kv_update_writes_bytes_that_cas_can_match() {
+    let Some(rt) = pg_runtime() else { return };
+    let k = unique("pgupdcas");
+    rt.run(&format!(
+        "lur.kv.set('{k}', 'x')\n\
+         lur.kv.update('{k}', function(_) return 'y' end)\n\
+         assert(lur.kv.cas('{k}', 'y', 'z') == true, 'update value matches cas')\n\
+         lur.kv.delete('{k}')"
+    ))
+    .expect("pg kv.update writes cas-comparable bytes");
+}
+
+#[test]
 fn pg_kv_incr_decr_and_integer_guard() {
     let Some(rt) = pg_runtime() else { return };
     let c = unique("pgctr");
