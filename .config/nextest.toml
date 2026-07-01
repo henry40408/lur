@@ -1,0 +1,6 @@
+[test-groups.pg-serial]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = "binary_id(lur::pg)"
+test-group = "pg-serial"

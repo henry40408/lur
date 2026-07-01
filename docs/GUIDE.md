@@ -259,6 +259,30 @@ end)
 assert(lur.kv.get("counter") == "1")
 ```
 
+### Postgres backend
+
+`--db` also accepts a `postgres://` / `postgresql://` connection string — the scheme
+selects the backend at first use, e.g.
+`lur --db postgres://user:pass@localhost/lur_dev app.lua`. Placeholders and row types
+are native to the engine, not translated: Postgres uses `$1, $2, …`, and only core
+scalar types read back (a non-core column must be cast, e.g. `col::text`). `db.tx` and
+`kv.update` run at `SERIALIZABLE` there and may raise on a conflict, so always drive
+them through `pcall` (or your own retry) instead of assuming they succeed:
+
+```lua ignore
+-- lur --db postgres://user:pass@localhost/lur_dev?sslmode=disable app.lua
+lur.db.exec("CREATE TABLE IF NOT EXISTS t (id SERIAL PRIMARY KEY, name TEXT)")
+local rows = lur.db.query("INSERT INTO t (name) VALUES ($1) RETURNING id", "alice")
+assert(rows[1].id ~= nil)
+
+local ok, err = pcall(function()
+  return lur.db.tx(function(tx)
+    tx.exec("UPDATE t SET name = $1 WHERE id = $2", "alicia", rows[1].id)
+  end)
+end)
+assert(ok or err ~= nil)
+```
+
 ## Concurrency
 
 ### lur.async
