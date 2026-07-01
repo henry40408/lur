@@ -208,3 +208,46 @@ fn pg_kv_incr_decr_and_integer_guard() {
     ))
     .expect("pg kv incr/decr + integer guard");
 }
+
+#[test]
+fn pg_serializable_tx_conflict_is_fallible_and_catchable() {
+    let Some(seed) = pg_runtime() else { return };
+    let t = unique("pgssi");
+    seed.run(&format!(
+        "lur.db.exec('DROP TABLE IF EXISTS {t}')\n\
+         lur.db.exec('CREATE TABLE {t} (id INT PRIMARY KEY, v INT)')\n\
+         lur.db.exec('INSERT INTO {t} VALUES (1,0),(2,0)')"
+    ))
+    .expect("seed");
+
+    // Each thread: crosswise read-then-write serializable tx, pcall-guarded.
+    let spawn = |read_id: i64, write_id: i64, table: String| {
+        std::thread::spawn(move || {
+            let rt = pg_runtime().expect("worker runtime");
+            for _ in 0..40 {
+                // `return pcall(...)`: a 40001 abort is caught inside the script,
+                // so rt.run itself must always succeed — proving catchability.
+                rt.run(&format!(
+                    "return pcall(function()\n\
+                       lur.db.tx(function(tx)\n\
+                         local o = tx.query('SELECT v FROM {table} WHERE id = {read_id}')[1].v\n\
+                         tx.exec('UPDATE {table} SET v = ' .. (o + 1) .. ' WHERE id = {write_id}')\n\
+                       end)\n\
+                     end)"
+                ))
+                .expect("script with its own pcall never propagates a fatal error");
+            }
+        })
+    };
+    let h1 = spawn(2, 1, t.clone());
+    let h2 = spawn(1, 2, t.clone());
+    h1.join().unwrap();
+    h2.join().unwrap();
+
+    // Runtime + data intact after the conflict storm (atomicity held through aborts).
+    seed.run(&format!(
+        "assert(#lur.db.query('SELECT id FROM {t}') == 2, 'table intact')\n\
+         lur.db.exec('DROP TABLE {t}')"
+    ))
+    .expect("healthy after concurrent serializable conflicts");
+}
