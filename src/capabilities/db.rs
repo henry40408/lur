@@ -409,8 +409,13 @@ mod tests {
                 .unwrap_err();
             assert!(is_busy(&busy), "SQLITE_BUSY not classified busy: {busy:?}");
 
+            // A non-busy DB error (syntax) must classify as not-busy. Run it on
+            // the connection we already hold: the pool (max 2) is fully checked
+            // out by `a` and `b`, so `execute(&pool)` would block on acquire for
+            // the 30 s timeout instead of reaching SQLite. `b`'s failed BEGIN
+            // left no open transaction, so it is a usable connection.
             let syntax = sqlx::query("NOT VALID SQL")
-                .execute(&pool)
+                .execute(&mut *b)
                 .await
                 .unwrap_err();
             assert!(!is_busy(&syntax), "syntax error wrongly classified busy");
