@@ -4,22 +4,14 @@
 //! script that never touches the DB pays nothing. Parameters use positional `?`
 //! placeholders bound from varargs.
 
-use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use mlua::{Error, Function, Lua, MultiValue, Table, Value, Variadic};
-use sqlx::sqlite::{
-    SqliteArguments, SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions,
-    SqliteRow,
-};
-use sqlx::{Column, Row, TypeInfo, ValueRef};
+use sqlx::sqlite::SqlitePool;
 
-use super::null;
+use crate::capabilities::storage::sqlite::{bind_all, open_pool, read_row, retry_busy};
 use crate::runtime::RunError;
-
-/// A dynamically-bound `SQLite` query.
-type Query<'q> = sqlx::query::Query<'q, sqlx::Sqlite, SqliteArguments>;
 
 /// Shared, lazily-opened `SQLite` pool plus its configured path, handed from
 /// `db::install` to `kv::install` so both capabilities use one pool.
@@ -109,63 +101,6 @@ pub fn install(lua: &Lua, lur: &Table, db_path: Option<PathBuf>) -> Result<Sqlit
         cell: Arc::clone(&cell),
         path: Arc::clone(&path),
     })
-}
-
-/// Retry policy for write-lock contention: 4 retries on top of the first try.
-const MAX_BUSY_RETRIES: u32 = 4;
-
-/// True when `e` is `SQLite` busy/locked (primary result codes 5/6, including
-/// their extended variants, recognized via code or message).
-fn is_busy(e: &sqlx::Error) -> bool {
-    if let Some(db) = e.as_database_error() {
-        let code = db.code();
-        let code = code.as_deref().unwrap_or("");
-        return code == "5"
-            || code == "6"
-            || db.message().contains("database is locked")
-            || db.message().contains("database table is locked");
-    }
-    false
-}
-
-/// Full-jitter exponential backoff: after the `attempt`-th failure (0-based),
-/// sleep a uniform random duration in `[0, min(cap, base·2^attempt))`.
-/// `base = 5 ms`, `cap = 200 ms`. Randomness is drawn from the OS CSPRNG
-/// (`getrandom`) so no new dependency is added.
-fn jitter_delay(attempt: u32) -> std::time::Duration {
-    const BASE_MS: u64 = 5;
-    const CAP_MS: u64 = 200;
-    // `attempt.min(6)` keeps the shift well clear of overflow; base·2^6 = 320 > cap.
-    let ceil = (BASE_MS << attempt.min(6)).clamp(1, CAP_MS);
-    let mut buf = [0u8; 8];
-    getrandom::getrandom(&mut buf).expect("OS CSPRNG unavailable");
-    let ms = u64::from_le_bytes(buf) % ceil;
-    std::time::Duration::from_millis(ms)
-}
-
-/// Run `op`, retrying on a busy/locked error with jittered backoff up to
-/// `MAX_BUSY_RETRIES` times. Non-busy errors return immediately. The caller
-/// keeps its own lur-voiced error mapping on the returned `sqlx::Error`.
-///
-/// `op` MUST rebuild its query (and re-clone any bound parameters) on each
-/// call, and MUST NOT be given work whose re-run would duplicate a side effect
-/// outside `SQLite`.
-pub(crate) async fn retry_busy<T, F, Fut>(mut op: F) -> sqlx::Result<T>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = sqlx::Result<T>>,
-{
-    let mut attempt = 0u32;
-    loop {
-        match op().await {
-            Ok(v) => return Ok(v),
-            Err(e) if is_busy(&e) && attempt < MAX_BUSY_RETRIES => {
-                tokio::time::sleep(jitter_delay(attempt)).await;
-                attempt += 1;
-            }
-            Err(e) => return Err(e),
-        }
-    }
 }
 
 /// Acquire a pooled connection and open a write transaction with `BEGIN
@@ -266,37 +201,6 @@ async fn run_tx(
     }
 }
 
-/// Convert a result row to a Lua table keyed by column name (spec §6 read map).
-fn read_row(lua: &Lua, row: &SqliteRow) -> mlua::Result<Table> {
-    let t = lua.create_table()?;
-    for col in row.columns() {
-        let i = col.ordinal();
-        let raw = row
-            .try_get_raw(i)
-            .map_err(|e| Error::runtime(format!("lur.db: {e}")))?;
-        let value = if raw.is_null() {
-            null::value(lua)?
-        } else {
-            match raw.type_info().name() {
-                "INTEGER" => Value::Integer(get::<i64>(row, i)?),
-                "REAL" => Value::Number(get::<f64>(row, i)?),
-                // TEXT and BLOB both come back as raw bytes (§4 byte semantics).
-                _ => Value::String(lua.create_string(get::<Vec<u8>>(row, i)?)?),
-            }
-        };
-        t.set(col.name(), value)?;
-    }
-    Ok(t)
-}
-
-fn get<'r, T>(row: &'r SqliteRow, i: usize) -> mlua::Result<T>
-where
-    T: sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite>,
-{
-    row.try_get::<T, usize>(i)
-        .map_err(|e| Error::runtime(format!("lur.db: decoding column {i}: {e}")))
-}
-
 /// Get the pool, opening it on first use. Errors clearly when no `--db` is set.
 pub(crate) async fn ensure_pool(
     cell: &OnceLock<SqlitePool>,
@@ -313,112 +217,4 @@ pub(crate) async fn ensure_pool(
         .map_err(|e| Error::runtime(format!("lur.db: opening {}: {e}", path.display())))?;
     let _ = cell.set(pool);
     Ok(cell.get().expect("pool just set").clone())
-}
-
-/// Open the `SQLite` pool in WAL mode and ensure the internal `lur_kv` table.
-async fn open_pool(path: &Path) -> sqlx::Result<SqlitePool> {
-    let opts = SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(true)
-        .busy_timeout(std::time::Duration::from_millis(200))
-        .journal_mode(SqliteJournalMode::Wal);
-    let pool = SqlitePoolOptions::new().connect_with(opts).await?;
-    sqlx::query("CREATE TABLE IF NOT EXISTS lur_kv (key TEXT PRIMARY KEY, value BLOB)")
-        .execute(&pool)
-        .await?;
-    Ok(pool)
-}
-
-/// Bind each Lua value as a positional parameter (spec §6 write mapping).
-pub(crate) fn bind_all<'q>(mut q: Query<'q>, params: &[Value]) -> mlua::Result<Query<'q>> {
-    for v in params {
-        q = bind_one(q, v)?;
-    }
-    Ok(q)
-}
-
-fn bind_one<'q>(q: Query<'q>, v: &Value) -> mlua::Result<Query<'q>> {
-    Ok(match v {
-        Value::Nil => q.bind(None::<i64>),
-        Value::UserData(_) if null::is_null(v) => q.bind(None::<i64>),
-        Value::Boolean(b) => q.bind(*b as i64),
-        Value::Integer(i) => q.bind(*i),
-        Value::Number(n) => {
-            if n.fract() == 0.0 && *n >= i64::MIN as f64 && *n <= i64::MAX as f64 {
-                q.bind(*n as i64)
-            } else {
-                q.bind(*n)
-            }
-        }
-        Value::String(s) => {
-            let bytes = s.as_bytes();
-            match std::str::from_utf8(&bytes) {
-                Ok(text) => q.bind(text.to_owned()),
-                Err(_) => q.bind(bytes.to_vec()),
-            }
-        }
-        other => {
-            return Err(Error::runtime(format!(
-                "lur.db: cannot bind a {} value (encode tables with lur.json.encode)",
-                other.type_name()
-            )));
-        }
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-
-    // A second BEGIN IMMEDIATE while the first still holds the write lock, with
-    // busy_timeout=0, yields a genuine SQLITE_BUSY — the exact error retry_busy
-    // must recognize. A syntax error must NOT be classified busy.
-    #[test]
-    fn is_busy_classifies_sqlite_lock_errors() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let dir = tempfile::tempdir().unwrap();
-            let opts = SqliteConnectOptions::new()
-                .filename(dir.path().join("busy.db"))
-                .create_if_missing(true)
-                .busy_timeout(std::time::Duration::from_millis(0))
-                .journal_mode(SqliteJournalMode::Wal);
-            let pool = SqlitePoolOptions::new()
-                .max_connections(2)
-                .connect_with(opts)
-                .await
-                .unwrap();
-            sqlx::query("CREATE TABLE t (x)")
-                .execute(&pool)
-                .await
-                .unwrap();
-
-            let mut a = pool.acquire().await.unwrap();
-            sqlx::query("BEGIN IMMEDIATE")
-                .execute(&mut *a)
-                .await
-                .unwrap();
-            let mut b = pool.acquire().await.unwrap();
-            let busy = sqlx::query("BEGIN IMMEDIATE")
-                .execute(&mut *b)
-                .await
-                .unwrap_err();
-            assert!(is_busy(&busy), "SQLITE_BUSY not classified busy: {busy:?}");
-
-            // A non-busy DB error (syntax) must classify as not-busy. Run it on
-            // the connection we already hold: the pool (max 2) is fully checked
-            // out by `a` and `b`, so `execute(&pool)` would block on acquire for
-            // the 30 s timeout instead of reaching SQLite. `b`'s failed BEGIN
-            // left no open transaction, so it is a usable connection.
-            let syntax = sqlx::query("NOT VALID SQL")
-                .execute(&mut *b)
-                .await
-                .unwrap_err();
-            assert!(!is_busy(&syntax), "syntax error wrongly classified busy");
-        });
-    }
 }

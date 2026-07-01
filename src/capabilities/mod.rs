@@ -20,6 +20,7 @@ pub mod log;
 pub mod null;
 pub mod serve;
 pub mod state;
+mod storage;
 pub mod time;
 
 use mlua::Lua;

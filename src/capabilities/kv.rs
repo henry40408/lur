@@ -5,10 +5,11 @@
 use std::cell::Cell;
 
 use mlua::{Error, Lua, Table, Value};
-use sqlx::{Row, TypeInfo, ValueRef};
+use sqlx::Row;
 
 use super::db::{self, SqliteShared};
 use crate::capabilities::argcheck;
+use crate::capabilities::storage::sqlite::{retry_busy, value_to_bytes};
 use crate::runtime::RunError;
 
 thread_local! {
@@ -111,7 +112,7 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                 async move {
                     reject_kv_reentry("lur.kv.add")?;
                     let pool = db::ensure_pool(&cell, &path).await?;
-                    let res = db::retry_busy(|| async {
+                    let res = retry_busy(|| async {
                         sqlx::query(
                             "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
                              ON CONFLICT(key) DO NOTHING",
@@ -150,7 +151,7 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                         let applied = match (exp, neu) {
                             // expect absent, set new
                             (None, Some(v)) => {
-                                db::retry_busy(|| async {
+                                retry_busy(|| async {
                                     sqlx::query(
                                         "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
                                          ON CONFLICT(key) DO NOTHING",
@@ -176,7 +177,7 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                             }
                             // expect value, set new
                             (Some(e), Some(v)) => {
-                                db::retry_busy(|| async {
+                                retry_busy(|| async {
                                     sqlx::query(
                                         "UPDATE lur_kv SET value = ? WHERE key = ? AND value = ?",
                                     )
@@ -193,7 +194,7 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                             }
                             // expect value, delete
                             (Some(e), None) => {
-                                db::retry_busy(|| async {
+                                retry_busy(|| async {
                                     sqlx::query("DELETE FROM lur_kv WHERE key = ? AND value = ?")
                                         .bind(key.clone())
                                         .bind(e.clone())
@@ -353,7 +354,7 @@ async fn incr_by(
     delta: i64,
 ) -> mlua::Result<i64> {
     let pool = db::ensure_pool(cell, path).await?;
-    let row = db::retry_busy(|| async {
+    let row = retry_busy(|| async {
         sqlx::query(
             "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
              ON CONFLICT(key) DO UPDATE SET value = value + excluded.value \
@@ -375,36 +376,4 @@ async fn incr_by(
             "{voice}: existing value is not an integer"
         ))),
     }
-}
-
-/// Decode column 0 of a single-column row into bytes, returning `None` for
-/// NULL. INTEGER and REAL values are rendered as their decimal string; TEXT/BLOB
-/// come back as raw bytes. Never panics on a type mismatch.
-///
-/// A later task (`kv.update`) reuses this helper for the same type dispatch.
-fn value_to_bytes(row: &sqlx::sqlite::SqliteRow) -> mlua::Result<Option<Vec<u8>>> {
-    let raw = row
-        .try_get_raw(0)
-        .map_err(|e| Error::runtime(format!("lur.kv: {e}")))?;
-    if raw.is_null() {
-        return Ok(None);
-    }
-    // Always hand back bytes: counters (INTEGER) and REAL render as their
-    // decimal string; TEXT/BLOB are the raw bytes. Never a Vec<u8> type-mismatch
-    // panic.
-    let bytes: Vec<u8> = match raw.type_info().name() {
-        "INTEGER" => decode::<i64>(row)?.to_string().into_bytes(),
-        "REAL" => decode::<f64>(row)?.to_string().into_bytes(),
-        _ => decode::<Vec<u8>>(row)?,
-    };
-    Ok(Some(bytes))
-}
-
-/// Decode column 0 of a single-column row, lur-voiced on failure.
-fn decode<'r, T>(row: &'r sqlx::sqlite::SqliteRow) -> mlua::Result<T>
-where
-    T: sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite>,
-{
-    row.try_get::<T, usize>(0)
-        .map_err(|e| Error::runtime(format!("lur.kv: decoding value: {e}")))
 }
