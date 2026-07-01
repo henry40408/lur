@@ -142,7 +142,7 @@ lur serve <app.lua> [FLAGS]            # server
 | `--memory` | SIZE | `256m` | Per-VM memory cap; `0` means unlimited. |
 | `--max-http-body` | SIZE | `16m` | Cap on a buffered `lur.http` response body. |
 | `--max-concurrency` | N | unbounded | Cap on concurrent `lur.async.*` tasks per VM. |
-| `--db` | PATH | | SQLite file backing `lur.db` / `lur.kv`. |
+| `--db` | PATH or URL | | SQLite file, or a `postgres://`/`postgresql://` connection string, backing `lur.db` / `lur.kv` (the scheme selects the backend at first use). |
 | `--config` | FILE | | Load a specific config file. Conflicts with `--no-config`. |
 | `--no-config` | — | | Ignore all config — pure shipped strict, zero grants. |
 
@@ -241,22 +241,50 @@ Everything is exposed under the `lur` global. Functions raise a Lua error on fai
 - **`lur.env`** — `lur.env(name) → string | nil`. Returns `nil` for both "denied" and
   "unset" so it can't be used as an oracle.
 
-### Storage (requires `--db <path>`)
+### Storage (requires `--db`)
+
+`--db` accepts either a SQLite file path or a `postgres://` / `postgresql://` connection
+string; the scheme picks the backend at first use. Each engine is spoken natively — `lur`
+adds no SQL-portability layer, so placeholders and types follow the backend you chose.
 
 - **`lur.db`** — `exec(sql, ...params) → { rows_affected, last_insert_id }`,
   `query(sql, ...params) → array of row tables` (keyed by column name), and
   `tx(fn)` which runs `fn(tx)` on a pinned connection, committing on return and rolling
-  back on error. Write transactions use `BEGIN IMMEDIATE`; write-lock contention is
+  back on error. SQLite write transactions use `BEGIN IMMEDIATE`; write-lock contention is
   handled by a 200 ms `busy_timeout` plus bounded retry-with-jitter (up to 5 attempts) on
   single-statement writes and lock acquisition, so concurrent writers wait successfully
-  instead of raising a spurious "database is locked". Use `?` placeholders; tables must be
-  JSON-encoded first.
+  instead of raising a spurious "database is locked". Use native placeholders per
+  backend — `?` on SQLite, `$1, $2, …` on Postgres (no translation between the two);
+  tables must be JSON-encoded first.
 - **`lur.kv`** — `get(key) → bytes | nil`, `set(key, bytes)`, `delete(key)` plus atomic
   ops: `add(key, value)` (set-if-absent; returns bool), `cas(key, expected, new)` (compare-
   and-set; `nil` expected = must-be-absent, `nil` new = delete; returns bool),
   `incr(key, n?)` / `decr(key, n?)` (integer counters; default step 1; counters read back
   via `get` as their decimal string), and `update(key, fn)` (read-modify-write; return `nil`
-  from `fn` to delete). All backed by the shared SQLite pool.
+  from `fn` to delete). All backed by the shared pool for whichever backend `--db` selects.
+- **Postgres row types** — only core scalar types map to Lua: integer (`int2`/`int4`/
+  `int8`), number (`float4`/`float8`), string (`text`/`varchar`/`bytea`, …). A non-core
+  column (e.g. `numeric`, `timestamptz`, `jsonb`, `uuid`, `bool`, arrays) raises
+  `lur.db: unsupported column type '<T>' in column '<name>'; CAST it to text (e.g.
+  <name>::text)` — cast it in the query rather than have `lur` guess a representation.
+- **`last_insert_id` is SQLite-only** — Postgres has no `last_insert_rowid()`, so
+  `db.exec(...).last_insert_id` is always `0` there; use
+  `db.query("INSERT INTO t (...) VALUES (...) RETURNING id")` to get generated keys back.
+- **TLS** — append `?sslmode=require` (or another `sslmode` value) to the Postgres
+  connection string; it passes straight through to the driver.
+- **`db.tx` / `kv.update` are fallible** — on Postgres both run at `SERIALIZABLE` and may
+  raise a transient `40001` serialization conflict; on SQLite they may raise after
+  exhausting the busy retry. Either way `lur` does **not** auto-retry them — wrap the call
+  in `pcall` (or your own retry loop):
+
+  ```lua
+  local ok, err = pcall(function()
+    return lur.db.tx(function(tx) --[[ … ]] end)
+  end)
+  ```
+
+Running the Postgres integration tests locally needs a local Postgres:
+`docker compose up -d`.
 
 ### Concurrency
 

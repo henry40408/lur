@@ -41,7 +41,7 @@ CLI on top. The public modules are `capabilities`, `config`, `policy`, `runtime`
 | `src/config.rs` | TOML config file parsing and the profile/allowlist model. |
 | `src/units.rs` | `parse_size` (×1024) and `parse_duration` for CLI value parsers. |
 | `src/capabilities/` | One submodule per `lur.*` table; `mod.rs::install` orchestrates them. |
-| `src/capabilities/storage/` | The storage backend seam: `Backend` enum (SQLite today; Postgres reserved for Phase 2), the lazy-open `Shared` handle, `ExecResult`/`Transaction`, and `sqlite.rs` owning all SQLite SQL/binding/row-mapping/retry/tx/kv. |
+| `src/capabilities/storage/` | The storage backend seam: `Backend`/`Transaction` enums (`Sqlite` and `Postgres` variants), the lazy-open `Shared` handle, `ExecResult`, `sqlite.rs` owning all SQLite SQL/binding/row-mapping/retry/tx/kv, and `postgres.rs` owning all Postgres SQL/binding/row-mapping/isolation/tx/kv. |
 | `src/capabilities/db.rs` | Wires the `lur.db` table (`exec`/`query`/`tx`) to `storage::Backend`. Returns `storage::Shared` to `kv`. |
 | `src/capabilities/kv.rs` | Wires the `lur.kv` table to `storage::Backend` kv methods; owns the `IN_KV_UPDATE` reentrancy guard. |
 
@@ -231,6 +231,30 @@ grace period is aborted when the runtime drops.
 - **Invariant:** kv counters are integers; `kv.get` always returns bytes (decimal string
   for counters); write transactions (`db.tx`, `kv.update`) use `BEGIN IMMEDIATE`; integer
   step arguments (`kv.incr`/`kv.decr`, `state.incr`/`state.decr`) reject fractional values.
+- **`Postgres`** ([`capabilities/storage/postgres.rs`](src/capabilities/storage/postgres.rs))
+  is the second `Backend`/`Transaction` variant, added behind the Phase 1 seam without
+  changing `db.rs`/`kv.rs` call sites or any SQLite behavior. `--db`'s scheme
+  (`postgres://`/`postgresql://` vs. a bare path) is what `StorageTarget::resolve` uses
+  to pick which backend `Shared::ensure` opens on first use. `PgBackend` owns the `sqlx`
+  `PgPool`, `$n` positional binding, row→Lua mapping (core scalar types only — a
+  non-core column raises a cast-to-text error), and the kv schema.
+- **Isolation model:** single-statement ops (`db.exec`, `kv.get`/`set`/`add`/`cas`/
+  `incr`/`decr`) run at Postgres's default `READ COMMITTED` — atomic per statement, so
+  they never need a retry. `db.tx` and `kv.update` instead open a `SERIALIZABLE`
+  transaction on a pinned connection for full anomaly protection against any concurrent
+  writer, at the documented cost that a conflicting transaction aborts with SQLSTATE
+  `40001` — surfaced to Lua (usually at `COMMIT`) rather than retried, since retrying a
+  body that already ran side effects could duplicate them. The `retry_busy`/
+  `busy_timeout` layer (`storage/sqlite.rs`) stays SQLite-only.
+- **Operator-trusted connection:** the Postgres URL comes from the operator via `--db`,
+  never from script input, so it is exempt from the script-facing network allowlist and
+  the SSRF guard — the same trust boundary that exempts the SQLite file path from
+  `lur.fs`'s allowlist.
+- **`kind`-discriminated kv schema:** `lur_kv(key TEXT PRIMARY KEY, kind SMALLINT,
+  bytes BYTEA, num BIGINT)` maps the backend-neutral value model 1:1 — `kind = 0` is
+  opaque bytes (stored in `bytes`), `kind = 1` is an integer counter (stored in `num`,
+  read back via `get` as its decimal string), mirroring the same model SQLite represents
+  with typed columns.
 - **`lur.state`** ([`capabilities/state.rs`](src/capabilities/state.rs)) is a host-side,
   process-wide `StateStore` shared by every VM in the pool (via `RuntimeConfig::state`),
   holding **primitives only**. Every key is version-stamped (bumped on every write,
