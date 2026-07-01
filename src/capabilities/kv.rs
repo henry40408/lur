@@ -111,13 +111,16 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                 async move {
                     reject_kv_reentry("lur.kv.add")?;
                     let pool = db::ensure_pool(&cell, &path).await?;
-                    let res = sqlx::query(
-                        "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
-                         ON CONFLICT(key) DO NOTHING",
-                    )
-                    .bind(key)
-                    .bind(value.as_bytes().to_vec())
-                    .execute(&pool)
+                    let res = db::retry_busy(|| async {
+                        sqlx::query(
+                            "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
+                             ON CONFLICT(key) DO NOTHING",
+                        )
+                        .bind(key.clone())
+                        .bind(value.as_bytes().to_vec())
+                        .execute(&pool)
+                        .await
+                    })
                     .await
                     .map_err(|e| Error::runtime(format!("lur.kv.add: {e}")))?;
                     Ok(res.rows_affected() == 1)
@@ -147,13 +150,16 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                         let applied = match (exp, neu) {
                             // expect absent, set new
                             (None, Some(v)) => {
-                                sqlx::query(
-                                    "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
-                                     ON CONFLICT(key) DO NOTHING",
-                                )
-                                .bind(key)
-                                .bind(v)
-                                .execute(&pool)
+                                db::retry_busy(|| async {
+                                    sqlx::query(
+                                        "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
+                                         ON CONFLICT(key) DO NOTHING",
+                                    )
+                                    .bind(key.clone())
+                                    .bind(v.clone())
+                                    .execute(&pool)
+                                    .await
+                                })
                                 .await
                                 .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
                                 .rows_affected()
@@ -170,13 +176,16 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                             }
                             // expect value, set new
                             (Some(e), Some(v)) => {
-                                sqlx::query(
-                                    "UPDATE lur_kv SET value = ? WHERE key = ? AND value = ?",
-                                )
-                                .bind(v)
-                                .bind(key)
-                                .bind(e)
-                                .execute(&pool)
+                                db::retry_busy(|| async {
+                                    sqlx::query(
+                                        "UPDATE lur_kv SET value = ? WHERE key = ? AND value = ?",
+                                    )
+                                    .bind(v.clone())
+                                    .bind(key.clone())
+                                    .bind(e.clone())
+                                    .execute(&pool)
+                                    .await
+                                })
                                 .await
                                 .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
                                 .rows_affected()
@@ -184,13 +193,16 @@ pub fn install(lua: &Lua, lur: &Table, shared: &SqliteShared) -> Result<(), RunE
                             }
                             // expect value, delete
                             (Some(e), None) => {
-                                sqlx::query("DELETE FROM lur_kv WHERE key = ? AND value = ?")
-                                    .bind(key)
-                                    .bind(e)
-                                    .execute(&pool)
-                                    .await
-                                    .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
-                                    .rows_affected()
+                                db::retry_busy(|| async {
+                                    sqlx::query("DELETE FROM lur_kv WHERE key = ? AND value = ?")
+                                        .bind(key.clone())
+                                        .bind(e.clone())
+                                        .execute(&pool)
+                                        .await
+                                })
+                                .await
+                                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
+                                .rows_affected()
                                     == 1
                             }
                         };
@@ -341,15 +353,18 @@ async fn incr_by(
     delta: i64,
 ) -> mlua::Result<i64> {
     let pool = db::ensure_pool(cell, path).await?;
-    let row = sqlx::query(
-        "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
-         ON CONFLICT(key) DO UPDATE SET value = value + excluded.value \
-         WHERE typeof(lur_kv.value) = 'integer' \
-         RETURNING value",
-    )
-    .bind(key)
-    .bind(delta)
-    .fetch_optional(&pool)
+    let row = db::retry_busy(|| async {
+        sqlx::query(
+            "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
+             ON CONFLICT(key) DO UPDATE SET value = value + excluded.value \
+             WHERE typeof(lur_kv.value) = 'integer' \
+             RETURNING value",
+        )
+        .bind(key.clone())
+        .bind(delta)
+        .fetch_optional(&pool)
+        .await
+    })
     .await
     .map_err(|e| Error::runtime(format!("{voice}: {e}")))?;
     match row {

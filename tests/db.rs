@@ -115,16 +115,13 @@ fn tx_rolls_back_on_error() {
 fn kv_incr_is_atomic_under_concurrent_writers() {
     // The atomicity claim: kv.incr is a single guarded upsert, so concurrent
     // writers (each its own Runtime + pool, all pointing at one db file) under
-    // WAL + busy_timeout must not lose an update. Each thread runs a tight incr
-    // loop; the final counter must equal threads * per_thread exactly.
+    // WAL must not lose an update. Each thread runs a tight incr loop; the final
+    // counter must equal threads * per_thread exactly.
     //
-    // Two writers, deliberately: WAL serializes them (one writes, the other
-    // waits out the lock via busy_timeout and retries) without a lost update.
-    // Three-plus writers hammering one key can thundering-herd into busy_timeout
-    // exhaustion on a slow/over-subscribed CI runner — a SQLite contention
-    // characteristic, not an atomicity defect; two writers exercise the
-    // serialize-and-retry path that the claim is actually about.
-    const THREADS: i64 = 2;
+    // Four writers hammering one key: retry-with-jitter on the upsert absorbs the
+    // SQLITE_BUSY thundering-herd that a bare 200 ms busy_timeout would surface,
+    // so every increment lands and none is lost.
+    const THREADS: i64 = 4;
     const PER_THREAD: i64 = 200;
 
     let dir = tempfile::tempdir().unwrap();
