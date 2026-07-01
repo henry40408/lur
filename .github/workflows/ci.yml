@@ -56,6 +56,25 @@ jobs:
 
   coverage:
     runs-on: ubuntu-latest
+    # Runs the full suite (incl. tests/pg.rs) under instrumentation, so it needs
+    # the same Postgres service as the `test` job — without it the CI-hard-fail
+    # path in the pg tests fires (CI is set on every job, but Postgres would be
+    # absent).
+    services:
+      postgres:
+        image: postgres@sha256:dc17045ccfd343b49600570ea734b9c4991cf1c3f3302e67df51e3b402dd55c4
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      LUR_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
+      CI: "1"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable, 2026-03-27
