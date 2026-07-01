@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782868788050,
+  "lastUpdate": 1782877487285,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1301,6 +1301,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 206449,
             "range": "± 1548",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "31d220266aad6011134187a24d1e6e690ad8f57d",
+          "message": "refactor(storage): extract backend seam (PostgreSQL support, Phase 1) (#57)\n\n* docs(spec): storage backend seam (Phase 1 of PostgreSQL support)\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs(plan): storage backend seam (PostgreSQL Phase 1) implementation plan\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* refactor(storage): move SQLite leaf helpers into storage/sqlite.rs\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* refactor(storage): add Backend seam and migrate lur.db onto it\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* fix(storage): bind kv.update value as BLOB via dedicated kv_update backend method\n\nFixes a TEXT-vs-BLOB storage-class regression from the generic bind path that broke lur.kv.cas on keys written via kv.update.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* refactor(storage): migrate lur.kv onto Backend methods; drop transitional pool accessor\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs(storage): document the backend seam in ARCHITECTURE\n\nPerf gate: cargo bench --bench runtime after Tasks 1-3 vs. the pre-refactor\nbaseline shows all three benchmarks flat/within noise (vm_cold_start +1.3-1.8%,\ntrivial_script +0.3-0.85%, compute_loop_hook_overhead -1.2-0%) — well under the\n5% regression threshold, so no blocking regression.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* fix(storage): scope kv.update reentrancy guard to the transform only\n\nThe IN_KV_UPDATE guard was spanning kv.update's whole transaction (begin/read/write/commit awaits), not just the user transform, so a sibling lur.async kv/db call polled while an update was parked on DB I/O was spuriously rejected as re-entry.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs(spec): correct kv.update guard-scope equivalence premise\n\nThe earlier equivalence argument covered same-stack nesting but overlooked\nlur.async concurrent interleaving; require the narrow guard window instead.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-01T11:43:26+08:00",
+          "tree_id": "18fdf1f66aa49435a02642212166fd8a80d48358",
+          "url": "https://github.com/henry40408/lur/commit/31d220266aad6011134187a24d1e6e690ad8f57d"
+        },
+        "date": 1782877486868,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 262209,
+            "range": "± 6046",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5178,
+            "range": "± 178",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208100,
+            "range": "± 3198",
             "unit": "ns/iter"
           }
         ]
