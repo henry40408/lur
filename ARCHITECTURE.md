@@ -41,8 +41,9 @@ CLI on top. The public modules are `capabilities`, `config`, `policy`, `runtime`
 | `src/config.rs` | TOML config file parsing and the profile/allowlist model. |
 | `src/units.rs` | `parse_size` (×1024) and `parse_duration` for CLI value parsers. |
 | `src/capabilities/` | One submodule per `lur.*` table; `mod.rs::install` orchestrates them. |
-| `src/capabilities/db.rs` | Owns the shared SQLite pool (`SqliteShared`), `begin_immediate`, `busy_timeout`, the `retry_busy` write-contention helper, and `lur.db` (`exec`/`query`/`tx`). Hands `SqliteShared` to `kv`. |
-| `src/capabilities/kv.rs` | Owns `lur.kv`: type-aware `get`, `set`/`delete`, and atomic ops (`add`/`cas`/`incr`/`decr`/`update`) over the shared pool. |
+| `src/capabilities/storage/` | The storage backend seam: `Backend` enum (SQLite today; Postgres reserved for Phase 2), the lazy-open `Shared` handle, `ExecResult`/`Transaction`, and `sqlite.rs` owning all SQLite SQL/binding/row-mapping/retry/tx/kv. |
+| `src/capabilities/db.rs` | Wires the `lur.db` table (`exec`/`query`/`tx`) to `storage::Backend`. Returns `storage::Shared` to `kv`. |
+| `src/capabilities/kv.rs` | Wires the `lur.kv` table to `storage::Backend` kv methods; owns the `IN_KV_UPDATE` reentrancy guard. |
 
 ## The shared core: `build_lua`
 
@@ -205,6 +206,11 @@ grace period is aborted when the runtime drops.
 
 ## State & storage
 
+- Storage goes through a backend seam (`capabilities/storage`): `db.rs`/`kv.rs` call the
+  backend-neutral `Backend` enum, and `storage/sqlite.rs` owns every SQLite specific — the
+  `retry_busy`/`busy_timeout`/`BEGIN IMMEDIATE` handling described here included. The kv
+  logical value model (opaque bytes vs. integer counter) is backend-neutral and defined at
+  the seam.
 - **`lur.db`** ([`capabilities/db.rs`](src/capabilities/db.rs)) owns the lazily-opened
   `sqlx` SQLite pool (WAL mode, file auto-created) and exposes it as `SqliteShared`.
   `begin_immediate` opens write transactions with `BEGIN IMMEDIATE`; write-lock contention
