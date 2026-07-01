@@ -351,20 +351,23 @@ impl PgBackend {
         key: String,
         func: Function,
     ) -> mlua::Result<Value> {
-        let mut conn = self
+        let conn = self
             .pool
             .acquire()
             .await
             .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
+        let mut tx = PinnedTx::new(conn);
         sqlx::query("BEGIN ISOLATION LEVEL SERIALIZABLE")
-            .execute(&mut *conn)
+            .execute(&mut **tx.conn())
             .await
             .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
 
+        // Run the full read → transform → write sequence. If the enclosing
+        // future is cancelled during `func`, `tx` drops and rolls back.
         let result: mlua::Result<Value> = async {
             let cur: Value = match sqlx::query("SELECT kind, bytes, num FROM lur_kv WHERE key = $1")
                 .bind(&key)
-                .fetch_optional(&mut *conn)
+                .fetch_optional(&mut **tx.conn())
                 .await
                 .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?
             {
@@ -378,7 +381,7 @@ impl PgBackend {
                 Value::Nil => {
                     sqlx::query("DELETE FROM lur_kv WHERE key = $1")
                         .bind(&key)
-                        .execute(&mut *conn)
+                        .execute(&mut **tx.conn())
                         .await
                         .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
                 }
@@ -389,7 +392,7 @@ impl PgBackend {
                     )
                     .bind(&key)
                     .bind(s.as_bytes().to_vec())
-                    .execute(&mut *conn)
+                    .execute(&mut **tx.conn())
                     .await
                     .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
                 }
@@ -401,7 +404,7 @@ impl PgBackend {
                 }
             }
             sqlx::query("COMMIT")
-                .execute(&mut *conn)
+                .execute(&mut **tx.conn())
                 .await
                 .map_err(|e| Error::runtime(format!("lur.kv.update: commit: {e}")))?;
             Ok(new)
@@ -409,11 +412,67 @@ impl PgBackend {
         .await;
 
         match result {
-            Ok(v) => Ok(v),
+            Ok(v) => {
+                tx.disarm();
+                Ok(v)
+            }
             Err(e) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                let _ = sqlx::query("ROLLBACK").execute(&mut **tx.conn()).await;
+                tx.disarm();
                 Err(e)
             }
+        }
+    }
+}
+
+/// Best-effort rollback of a pinned connection whose transaction is still open
+/// because the enclosing future was cancelled before COMMIT/ROLLBACK. The
+/// rollback is detached onto the runtime so the connection returns to the pool
+/// clean instead of idle-in-transaction (which on Postgres would hold a
+/// SERIALIZABLE snapshot + row locks on the shared database). With no runtime
+/// (not reached in practice) the connection is closed, which also releases them.
+fn spawn_rollback(conn: PoolConnection<Postgres>) {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn(async move {
+                let mut conn = conn;
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+            });
+        }
+        Err(_) => {
+            drop(conn.detach());
+        }
+    }
+}
+
+/// Owns a pinned connection with a manually-opened transaction. Dropping it
+/// while the transaction is still open (e.g. a `kv.update` future cancelled
+/// mid-transform) best-effort rolls back via `spawn_rollback`. `disarm` takes
+/// the connection back after an explicit COMMIT/ROLLBACK so `Drop` is a no-op.
+struct PinnedTx {
+    conn: Option<PoolConnection<Postgres>>,
+}
+
+impl PinnedTx {
+    fn new(conn: PoolConnection<Postgres>) -> Self {
+        Self { conn: Some(conn) }
+    }
+
+    /// Exclusive access to the pinned connection (present until `disarm`).
+    fn conn(&mut self) -> &mut PoolConnection<Postgres> {
+        self.conn.as_mut().expect("connection present until disarm")
+    }
+
+    /// Disarm the rollback-on-drop guard after an explicit COMMIT/ROLLBACK.
+    fn disarm(mut self) {
+        self.conn = None;
+    }
+}
+
+impl Drop for PinnedTx {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            spawn_rollback(conn);
         }
     }
 }
@@ -483,5 +542,116 @@ impl PgTransaction {
         if let Some(mut conn) = guard.take() {
             let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
         }
+    }
+}
+
+impl Drop for PgTransaction {
+    /// If the transaction was never committed/rolled back — its future was
+    /// cancelled mid-body — best-effort roll it back so the pinned connection
+    /// does not return to the pool idle-in-transaction, holding a SERIALIZABLE
+    /// snapshot + row locks on the shared operator database.
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.get_mut().take() {
+            spawn_rollback(conn);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Uniquely-named scratch table per test so a leaked/parallel transaction
+    // never collides on a shared name.
+    fn unique_table() -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        format!("lur_cancel_{}", N.fetch_add(1, Ordering::Relaxed))
+    }
+
+    // A single-connection PG pool, or None when Postgres is unreachable. Locally
+    // an unreachable server SKIPS; under CI it is a hard failure (CI provisions
+    // the service). max_connections=1 forces the post-cancellation query onto
+    // the same connection the cancelled transaction used.
+    async fn pg_max1() -> Option<PgBackend> {
+        use std::time::Duration;
+        let url = std::env::var("LUR_TEST_PG_URL")
+            .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/postgres".to_string());
+        let Ok(opts) = PgConnectOptions::from_str(&url) else {
+            return None;
+        };
+        #[allow(clippy::single_match_else)]
+        let pool = match PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(2))
+            .connect_with(opts)
+            .await
+        {
+            Ok(p) => p,
+            Err(_) => {
+                if std::env::var("CI").is_ok() {
+                    panic!("CI: Postgres unreachable but CI must provision it");
+                }
+                eprintln!(
+                    "skipping PG test: Postgres unreachable (start it: docker compose up -d)"
+                );
+                return None;
+            }
+        };
+        Some(PgBackend { pool })
+    }
+
+    // Dropping an unfinished PgTransaction (as cancellation does) must roll it
+    // back so the pinned connection is not returned to the pool holding a
+    // SERIALIZABLE snapshot + row locks. Detected via row visibility on a
+    // single-connection pool: the written row must be gone afterward.
+    #[test]
+    fn pg_dropped_tx_rolls_back() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let Some(backend) = pg_max1().await else {
+                return;
+            };
+            let lua = Lua::new();
+            let t = unique_table();
+
+            // Idempotent across reruns (a failed pre-fix run may leave the table).
+            backend
+                .exec(&lua, format!("DROP TABLE IF EXISTS {t}"), vec![])
+                .await
+                .unwrap();
+            backend
+                .exec(&lua, format!("CREATE TABLE {t} (x INT)"), vec![])
+                .await
+                .unwrap();
+
+            let tx = backend.begin().await.unwrap();
+            tx.exec(&lua, format!("INSERT INTO {t} (x) VALUES (1)"), vec![])
+                .await
+                .unwrap();
+            drop(tx); // simulate a future cancelled mid-transaction
+
+            // On the fixed code the detached rollback frees the connection before
+            // this query can acquire it, and the row is gone. On the unfixed code
+            // the connection returns to the pool inside the open transaction, so
+            // the query runs inside it and still sees the uncommitted row.
+            let rows = backend
+                .query(&lua, format!("SELECT x FROM {t}"), vec![])
+                .await
+                .unwrap();
+            assert_eq!(
+                rows.raw_len(),
+                0,
+                "row from the cancelled tx must be rolled back"
+            );
+
+            backend
+                .exec(&lua, format!("DROP TABLE {t}"), vec![])
+                .await
+                .unwrap();
+        });
     }
 }

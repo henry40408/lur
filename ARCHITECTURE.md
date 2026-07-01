@@ -246,6 +246,17 @@ grace period is aborted when the runtime drops.
   `40001` — surfaced to Lua (usually at `COMMIT`) rather than retried, since retrying a
   body that already ran side effects could duplicate them. The `retry_busy`/
   `busy_timeout` layer (`storage/sqlite.rs`) stays SQLite-only.
+- **Cancellation-safe pinned transactions:** `db.tx` and `kv.update` run the
+  user body/transform on a pinned connection inside a manually-opened
+  transaction (`BEGIN IMMEDIATE` on SQLite, `BEGIN ISOLATION LEVEL SERIALIZABLE`
+  on Postgres), which `sqlx` does not auto-roll-back. If the wall-clock timeout
+  drops that future mid-transform, the connection-owning guard
+  (`SqliteTransaction`/`PgTransaction` and the `PinnedTx` used by `kv_update`)
+  rolls back on `Drop` via a detached task, so the connection never returns to
+  the pool mid-transaction — on Postgres it would otherwise sit
+  idle-in-transaction holding a SERIALIZABLE snapshot + row locks on the shared
+  database. An explicit COMMIT/ROLLBACK disarms the guard, so the normal path
+  costs nothing.
 - **Operator-trusted connection:** the Postgres URL comes from the operator via `--db`,
   never from script input, so it is exempt from the script-facing network allowlist and
   the SSRF guard — the same trust boundary that exempts the SQLite file path from
