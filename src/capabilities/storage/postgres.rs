@@ -182,11 +182,6 @@ impl PgBackend {
         Ok(out)
     }
 
-    /// Open a `SERIALIZABLE` write transaction on a pinned connection. Serializable
-    /// (SSI) protects `db.tx` read-then-write logic against any concurrent writer,
-    /// at the cost that a conflict aborts with SQLSTATE 40001 — surfaced (usually
-    /// at COMMIT) as a lur-voiced error the caller handles. No retry (a body may
-    /// have external side effects).
     pub(crate) async fn kv_get(&self, lua: &Lua, key: String) -> mlua::Result<Value> {
         let row = sqlx::query("SELECT kind, bytes, num FROM lur_kv WHERE key = $1")
             .bind(key)
@@ -324,6 +319,11 @@ impl PgBackend {
         }
     }
 
+    /// Open a `SERIALIZABLE` write transaction on a pinned connection. Serializable
+    /// (SSI) protects `db.tx` read-then-write logic against any concurrent writer,
+    /// at the cost that a conflict aborts with SQLSTATE 40001 — surfaced (usually
+    /// at COMMIT) as a lur-voiced error the caller handles. No retry (a body may
+    /// have external side effects).
     pub(crate) async fn begin(&self) -> mlua::Result<PgTransaction> {
         let mut conn = self
             .pool
