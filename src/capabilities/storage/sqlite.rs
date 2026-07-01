@@ -422,21 +422,21 @@ impl SqliteBackend {
         key: String,
         func: Function,
     ) -> mlua::Result<Value> {
-        let mut conn = retry_busy(|| async {
+        let conn = retry_busy(|| async {
             let mut conn = self.pool.acquire().await?;
             sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
             Ok(conn)
         })
         .await
         .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
+        let mut tx = PinnedTx::new(conn);
 
-        // Run the full read → transform → write sequence, then commit/roll
-        // back below based on its outcome.
+        // Run the full read → transform → write sequence. If the enclosing
+        // future is cancelled during `func`, `tx` drops and rolls back.
         let result: mlua::Result<Value> = async {
-            // read current value as bytes|nil (type-aware, same as kv_get)
             let cur: Value = match sqlx::query("SELECT value FROM lur_kv WHERE key = ?")
                 .bind(&key)
-                .fetch_optional(&mut *conn)
+                .fetch_optional(&mut **tx.conn())
                 .await
                 .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?
             {
@@ -453,7 +453,7 @@ impl SqliteBackend {
                 Value::Nil => {
                     sqlx::query("DELETE FROM lur_kv WHERE key = ?")
                         .bind(&key)
-                        .execute(&mut *conn)
+                        .execute(&mut **tx.conn())
                         .await
                         .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
                 }
@@ -461,7 +461,7 @@ impl SqliteBackend {
                     sqlx::query("INSERT OR REPLACE INTO lur_kv (key, value) VALUES (?, ?)")
                         .bind(&key)
                         .bind(s.as_bytes().to_vec())
-                        .execute(&mut *conn)
+                        .execute(&mut **tx.conn())
                         .await
                         .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
                 }
@@ -473,21 +473,75 @@ impl SqliteBackend {
                 }
             }
             sqlx::query("COMMIT")
-                .execute(&mut *conn)
+                .execute(&mut **tx.conn())
                 .await
                 .map_err(|e| Error::runtime(format!("lur.kv.update: commit: {e}")))?;
             Ok(new)
         }
         .await;
 
-        // On any error from the sequence above, roll back the open
-        // transaction and return the original error unchanged.
         match result {
-            Ok(v) => Ok(v),
+            Ok(v) => {
+                tx.disarm();
+                Ok(v)
+            }
             Err(e) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                let _ = sqlx::query("ROLLBACK").execute(&mut **tx.conn()).await;
+                tx.disarm();
                 Err(e)
             }
+        }
+    }
+}
+
+/// Best-effort rollback of a pinned connection whose transaction is still open
+/// because the enclosing future was cancelled before COMMIT/ROLLBACK. The
+/// rollback is detached onto the runtime so the connection returns to the pool
+/// clean instead of inside an open `BEGIN IMMEDIATE`. With no runtime (not
+/// reached in practice — the storage APIs always run inside one) the connection
+/// is closed instead, which also releases the write lock.
+fn spawn_rollback(conn: PoolConnection<Sqlite>) {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn(async move {
+                let mut conn = conn;
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+            });
+        }
+        Err(_) => {
+            drop(conn.detach());
+        }
+    }
+}
+
+/// Owns a pinned connection with a manually-opened transaction. Dropping it
+/// while the transaction is still open (e.g. a `kv.update` future cancelled
+/// mid-transform) best-effort rolls back via `spawn_rollback`. `disarm` takes
+/// the connection back after an explicit COMMIT/ROLLBACK so `Drop` is a no-op.
+struct PinnedTx {
+    conn: Option<PoolConnection<Sqlite>>,
+}
+
+impl PinnedTx {
+    fn new(conn: PoolConnection<Sqlite>) -> Self {
+        Self { conn: Some(conn) }
+    }
+
+    /// Exclusive access to the pinned connection (present until `disarm`).
+    fn conn(&mut self) -> &mut PoolConnection<Sqlite> {
+        self.conn.as_mut().expect("connection present until disarm")
+    }
+
+    /// Disarm the rollback-on-drop guard after an explicit COMMIT/ROLLBACK.
+    fn disarm(mut self) {
+        self.conn = None;
+    }
+}
+
+impl Drop for PinnedTx {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            spawn_rollback(conn);
         }
     }
 }
@@ -559,6 +613,17 @@ impl SqliteTransaction {
     }
 }
 
+impl Drop for SqliteTransaction {
+    /// If the transaction was never committed/rolled back — its future was
+    /// cancelled mid-body — best-effort roll it back so the pinned connection
+    /// does not return to the pool inside an open `BEGIN IMMEDIATE`.
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.get_mut().take() {
+            spawn_rollback(conn);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -612,6 +677,123 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(!is_busy(&syntax), "syntax error wrongly classified busy");
+        });
+    }
+
+    // A single-connection pool so the second acquire is forced onto the SAME
+    // connection the cancelled transaction used — the only way to observe a
+    // connection returned to the pool mid-transaction.
+    async fn max1_backend(dir: &std::path::Path) -> SqliteBackend {
+        let opts = SqliteConnectOptions::new()
+            .filename(dir.join("cancel.db"))
+            .create_if_missing(true)
+            .busy_timeout(std::time::Duration::from_millis(200))
+            .journal_mode(SqliteJournalMode::Wal);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE IF NOT EXISTS lur_kv (key TEXT PRIMARY KEY, value BLOB)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        SqliteBackend { pool }
+    }
+
+    // Dropping an unfinished SqliteTransaction (as cancellation does) must roll
+    // it back: the write is undone and — critically — the sole pooled connection
+    // is usable for a fresh transaction rather than stuck in an open BEGIN.
+    #[test]
+    fn sqlite_dropped_tx_rolls_back() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let backend = max1_backend(dir.path()).await;
+            let lua = Lua::new();
+
+            let tx = backend.begin().await.unwrap();
+            tx.exec(
+                &lua,
+                "INSERT INTO lur_kv (key, value) VALUES ('k', 'v')".to_string(),
+                vec![],
+            )
+            .await
+            .unwrap();
+            drop(tx); // simulate a future cancelled mid-transaction
+
+            // With max_connections=1 this begin can only acquire the sole
+            // connection after the detached rollback has released it — natural
+            // synchronization, no sleep. On the unfixed code the connection
+            // returns to the pool inside an open BEGIN and this begin errors.
+            let tx2 = backend
+                .begin()
+                .await
+                .expect("second begin must succeed after the dropped tx rolled back");
+            let rows = tx2
+                .query(
+                    &lua,
+                    "SELECT value FROM lur_kv WHERE key = 'k'".to_string(),
+                    vec![],
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                rows.raw_len(),
+                0,
+                "row from the cancelled tx must be rolled back"
+            );
+            tx2.rollback().await;
+        });
+    }
+
+    // A kv.update whose transform is cancelled mid-flight must roll back its
+    // pinned connection, leaving it reusable (a fresh begin succeeds).
+    #[test]
+    fn sqlite_cancelled_kv_update_rolls_back() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let backend = max1_backend(dir.path()).await;
+            let lua = Lua::new();
+
+            // Transform signals when entered, then parks forever, so we cancel
+            // the update exactly mid-transform.
+            let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+            let entered2 = entered.clone();
+            let parking = lua
+                .create_async_function(move |_, _cur: Value| {
+                    let entered2 = entered2.clone();
+                    async move {
+                        entered2.notify_one();
+                        std::future::pending::<mlua::Result<Value>>().await
+                    }
+                })
+                .unwrap();
+
+            let mut fut = Box::pin(backend.kv_update(&lua, "k".to_string(), parking));
+            tokio::select! {
+                _ = &mut fut => panic!("kv_update should park in the transform"),
+                _ = entered.notified() => {}
+            }
+            drop(fut); // cancel mid-transform → PinnedTx::drop rolls back
+
+            // kv_get acquires the sole connection, so it blocks until the
+            // detached rollback frees it; on the unfixed code the fresh begin
+            // below errors (connection stuck in BEGIN IMMEDIATE).
+            let got = backend.kv_get(&lua, "k".to_string()).await.unwrap();
+            assert_eq!(got, Value::Nil, "cancelled update must not commit");
+            let tx = backend
+                .begin()
+                .await
+                .expect("connection must be reusable after a cancelled update");
+            tx.rollback().await;
         });
     }
 }
