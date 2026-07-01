@@ -175,14 +175,13 @@ where
 pub(crate) async fn begin_immediate(
     pool: &SqlitePool,
 ) -> mlua::Result<sqlx::pool::PoolConnection<sqlx::Sqlite>> {
-    let mut conn = pool
-        .acquire()
-        .await
-        .map_err(|e| Error::runtime(format!("lur.db.tx: acquire: {e}")))?;
-    sqlx::query("BEGIN IMMEDIATE")
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
+    let conn = retry_busy(|| async {
+        let mut conn = pool.acquire().await?;
+        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+        Ok(conn)
+    })
+    .await
+    .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
     Ok(conn)
 }
 

@@ -369,3 +369,54 @@ fn db_exec_survives_concurrent_writers() {
     ))
     .expect("all inserts landed");
 }
+
+#[test]
+fn db_tx_survives_concurrent_writers() {
+    // Each tx takes the write lock via BEGIN IMMEDIATE; many concurrent writers
+    // must not surface a busy error. begin_immediate's retry covers this because
+    // a busy failure happens before the user body runs.
+    const THREADS: i64 = 4;
+    const PER_THREAD: i64 = 60;
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = RuntimeConfig {
+        db_path: Some(dir.path().join("tx.db")),
+        ..Default::default()
+    };
+
+    Runtime::with_config(config.clone())
+        .expect("runtime builds")
+        .run(
+            "lur.db.exec('CREATE TABLE ctr (k TEXT PRIMARY KEY, n INTEGER)') \
+             lur.db.exec('INSERT INTO ctr VALUES (?, 0)', 'c')",
+        )
+        .expect("seed counter");
+
+    let handles: Vec<_> = (0..THREADS)
+        .map(|_| {
+            let cfg = config.clone();
+            std::thread::spawn(move || {
+                let rt = Runtime::with_config(cfg).expect("runtime builds");
+                rt.run(&format!(
+                    "for _ = 1, {PER_THREAD} do \
+                       lur.db.tx(function(tx) \
+                         tx.exec('UPDATE ctr SET n = n + 1 WHERE k = ?', 'c') \
+                       end) \
+                     end"
+                ))
+                .expect("concurrent transactions commit without a busy error");
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().expect("worker thread joined");
+    }
+
+    let rt = Runtime::with_config(config).expect("runtime builds");
+    rt.run(&format!(
+        "local r = lur.db.query('SELECT n FROM ctr WHERE k = ?', 'c'); \
+         assert(r[1].n == {}, 'lost a tx update: ' .. tostring(r[1].n))",
+        THREADS * PER_THREAD
+    ))
+    .expect("all transactions committed");
+}
