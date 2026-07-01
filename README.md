@@ -246,8 +246,11 @@ Everything is exposed under the `lur` global. Functions raise a Lua error on fai
 - **`lur.db`** — `exec(sql, ...params) → { rows_affected, last_insert_id }`,
   `query(sql, ...params) → array of row tables` (keyed by column name), and
   `tx(fn)` which runs `fn(tx)` on a pinned connection, committing on return and rolling
-  back on error. Write transactions use `BEGIN IMMEDIATE` and wait out lock contention via
-  a 5 s `busy_timeout`. Use `?` placeholders; tables must be JSON-encoded first.
+  back on error. Write transactions use `BEGIN IMMEDIATE`; write-lock contention is
+  handled by a 200 ms `busy_timeout` plus bounded retry-with-jitter (up to 5 attempts) on
+  single-statement writes and lock acquisition, so concurrent writers wait successfully
+  instead of raising a spurious "database is locked". Use `?` placeholders; tables must be
+  JSON-encoded first.
 - **`lur.kv`** — `get(key) → bytes | nil`, `set(key, bytes)`, `delete(key)` plus atomic
   ops: `add(key, value)` (set-if-absent; returns bool), `cas(key, expected, new)` (compare-
   and-set; `nil` expected = must-be-absent, `nil` new = delete; returns bool),

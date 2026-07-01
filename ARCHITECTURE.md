@@ -41,7 +41,7 @@ CLI on top. The public modules are `capabilities`, `config`, `policy`, `runtime`
 | `src/config.rs` | TOML config file parsing and the profile/allowlist model. |
 | `src/units.rs` | `parse_size` (×1024) and `parse_duration` for CLI value parsers. |
 | `src/capabilities/` | One submodule per `lur.*` table; `mod.rs::install` orchestrates them. |
-| `src/capabilities/db.rs` | Owns the shared SQLite pool (`SqliteShared`), `begin_immediate`/`busy_timeout`, and `lur.db` (`exec`/`query`/`tx`). Hands `SqliteShared` to `kv`. |
+| `src/capabilities/db.rs` | Owns the shared SQLite pool (`SqliteShared`), `begin_immediate`, `busy_timeout`, the `retry_busy` write-contention helper, and `lur.db` (`exec`/`query`/`tx`). Hands `SqliteShared` to `kv`. |
 | `src/capabilities/kv.rs` | Owns `lur.kv`: type-aware `get`, `set`/`delete`, and atomic ops (`add`/`cas`/`incr`/`decr`/`update`) over the shared pool. |
 
 ## The shared core: `build_lua`
@@ -207,8 +207,12 @@ grace period is aborted when the runtime drops.
 
 - **`lur.db`** ([`capabilities/db.rs`](src/capabilities/db.rs)) owns the lazily-opened
   `sqlx` SQLite pool (WAL mode, file auto-created) and exposes it as `SqliteShared`.
-  `begin_immediate` opens write transactions with `BEGIN IMMEDIATE`; a 5 s `busy_timeout`
-  on the pool handles lock contention. Dynamic SQL is wrapped in `sqlx::AssertSqlSafe` at
+  `begin_immediate` opens write transactions with `BEGIN IMMEDIATE`; write-lock contention
+  is handled by a 200 ms `busy_timeout` plus `retry_busy`, a bounded (5-attempt) full-jitter
+  backoff wrapping single-statement writes (`db.exec`, `kv.add`/`cas`/`incr`/`decr`) and
+  lock acquisition (`begin_immediate`, covering `db.tx`/`kv.update`) — retried only where no
+  user code has run or the retried body is pure, so a retry never duplicates a side effect.
+  Dynamic SQL is wrapped in `sqlx::AssertSqlSafe` at
   the call sites that build statements from user input. `db.rs` hands `SqliteShared` to `kv`.
 - **`lur.kv`** ([`capabilities/kv.rs`](src/capabilities/kv.rs)) is a key/value store over
   the shared pool. Atomic ops (`add`, `cas`, `incr`, `decr`) are single SQL statements;
