@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782844082464,
+  "lastUpdate": 1782868788050,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1259,6 +1259,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208231,
             "range": "± 8971",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "400b98b60c2cf081a7b19b8657e061c94cb2abc7",
+          "message": "feat(storage): retry-with-jitter for SQLite write-lock contention (#56)\n\n* docs(spec): DB write retry-with-jitter design\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs(plan): DB write retry-with-jitter implementation plan\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* feat(storage): retry-with-jitter for db.exec busy contention\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* feat(storage): retry begin_immediate lock acquisition (db.tx, kv.update)\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* feat(storage): retry-with-jitter for kv add/cas/incr/decr; bump concurrency guard to 4 writers\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* docs(storage): describe db retry-with-jitter and 200ms busy_timeout\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* test(storage): run is_busy syntax-error check on a held connection\n\nThe pool (max 2) is fully checked out by the two lock-holding connections, so\nexecuting the non-busy syntax query against the pool blocked on connection\nacquisition for the full 30 s timeout and asserted against a PoolTimedOut error\nrather than a genuine syntax error. Run it on the already-held connection: the\ntest now exercises a real non-busy DB error and finishes in milliseconds.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-01T09:18:30+08:00",
+          "tree_id": "5c71c7a989d61b4c2b3edb241e8fdd4b554da809",
+          "url": "https://github.com/henry40408/lur/commit/400b98b60c2cf081a7b19b8657e061c94cb2abc7"
+        },
+        "date": 1782868787653,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 263195,
+            "range": "± 2931",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5200,
+            "range": "± 308",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 206449,
+            "range": "± 1548",
             "unit": "ns/iter"
           }
         ]
