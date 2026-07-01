@@ -152,10 +152,21 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
                 async move {
                     reject_kv_reentry("lur.kv.update")?;
                     let backend = shared.ensure().await?;
-                    IN_KV_UPDATE.with(|f| f.set(true));
-                    let result = backend.kv_update(&lua, key, func).await;
-                    IN_KV_UPDATE.with(|f| f.set(false));
-                    result
+                    // Hold IN_KV_UPDATE only around the user transform, not
+                    // across the transaction's I/O awaits (begin/read/write/
+                    // commit), so sibling lur.async kv/db calls interleaved
+                    // while this update is parked on DB I/O are not spuriously
+                    // rejected as re-entry (matches pre-seam guard timing).
+                    let wrapped = lua.create_async_function(move |_, cur: Value| {
+                        let func = func.clone();
+                        async move {
+                            IN_KV_UPDATE.with(|f| f.set(true));
+                            let r = func.call_async::<Value>(cur).await;
+                            IN_KV_UPDATE.with(|f| f.set(false));
+                            r
+                        }
+                    })?;
+                    backend.kv_update(&lua, key, wrapped).await
                 }
             })
             .map_err(RunError::Init)?;

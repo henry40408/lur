@@ -438,3 +438,35 @@ fn kv_update_writes_bytes_that_cas_can_match() {
     )
     .expect("update-written value is cas-able");
 }
+
+#[test]
+fn kv_update_guard_does_not_reject_concurrent_siblings() {
+    // Regression: the IN_KV_UPDATE guard must be held only around the user
+    // transform, NOT across kv.update's transaction I/O awaits. Otherwise a
+    // sibling lur.kv call interleaved by lur.async while kv.update is parked on
+    // DB I/O is spuriously rejected as re-entry. One VM = one shared thread-local.
+    let dir = tempfile::tempdir().unwrap();
+    let config = RuntimeConfig {
+        db_path: Some(dir.path().join("g.db")),
+        ..Default::default()
+    };
+    let rt = Runtime::with_config(config).expect("runtime builds");
+    rt.run(
+        "lur.kv.set('shared', 'x')\n\
+         lur.kv.update('c', function(_) return '0' end)\n\
+         local tasks = {}\n\
+         for _ = 1, 200 do\n\
+           tasks[#tasks+1] = function()\n\
+             lur.kv.update('c', function(v) return tostring((tonumber(v) or 0) + 1) end)\n\
+           end\n\
+         end\n\
+         for _ = 1, 400 do\n\
+           tasks[#tasks+1] = function()\n\
+             assert(lur.kv.get('shared') == 'x', 'sibling get must not be rejected during update')\n\
+           end\n\
+         end\n\
+         lur.async.all(tasks)\n\
+         assert(lur.kv.get('c') == '200', 'all updates applied: got ' .. tostring(lur.kv.get('c')))",
+    )
+    .expect("concurrent kv.update + sibling kv.get must all succeed");
+}
