@@ -60,25 +60,21 @@ type-mapping decisions below.
 
 ## Backend selection
 
-`--db` stays a single flag. `build_config` (`src/main.rs`) resolves it once, failing fast on
-a malformed Postgres URL:
+`--db` stays a single flag, already typed `Option<PathBuf>`. The scheme is detected at
+open time by the string value:
 
 - value begins with `postgres://` or `postgresql://` → **Postgres** (the whole string is the
-  connection target);
+  connection target, `?sslmode=…` included);
 - otherwise → **SQLite** file path.
 
-`RuntimeConfig.db_path: Option<PathBuf>` becomes `RuntimeConfig.db: Option<StorageTarget>`:
-
-```rust
-pub enum StorageTarget {
-    Sqlite(PathBuf),
-    Postgres(String), // full connection string, incl. any ?sslmode=…
-}
-```
-
-`Shared::new` takes `Option<StorageTarget>`; `Shared::ensure` matches it to open the right
-backend on first use (unchanged lazy-open behavior). The "no database configured" error when
-`--db` is absent is unchanged.
+`RuntimeConfig.db_path: Option<PathBuf>` is **kept unchanged** (this preserves the constraint
+that no existing SQLite test or CLI plumbing is edited — a connection string round-trips fine
+through `PathBuf`, and clap already accepts it). A private `enum StorageTarget { Sqlite(PathBuf),
+Postgres(String) }` lives **inside `storage/mod.rs`**; `Shared::ensure` resolves the stored
+`PathBuf` to a `StorageTarget` by the scheme check above and opens the matching backend on
+first use. This keeps the existing lazy-open behavior: a malformed Postgres URL surfaces as a
+lur-voiced error on the first `lur.db`/`lur.kv` use, exactly as a bad SQLite path does today.
+The "no database configured" error when `--db` is absent is unchanged.
 
 ## Seam extension (`storage/mod.rs`)
 
@@ -134,23 +130,28 @@ Postgres writes `$n`; one targeting SQLite writes `?`. This follows the guiding 
 the user already knows their engine's syntax, and a translation layer would both introduce
 bugs and be ambiguous (`?` is a jsonb operator in Postgres).
 
-### Row → Lua type mapping
+### Row → Lua type mapping (R1: core types map; non-core → cast-to-text)
 
-Core types map directly; everything else falls back to Postgres's own text rendering; a
-supported column **never** raises:
+Only the core scalar types map directly. A non-core column raises a clear, actionable
+lur-voiced error telling the user to cast it in their `SELECT` — `lur` never invents a text
+representation for it:
 
-| Postgres type | Lua |
+| Postgres type (by `type_info().name()`) | Lua |
 |---|---|
-| `int2` / `int4` / `int8` | `integer` |
-| `float4` / `float8` | `number` |
-| `text` / `varchar` / `bpchar` / `bytea` | `string` (raw bytes) |
-| anything else (`numeric`, `timestamptz`, `uuid`, `jsonb`, arrays, `bool`, …) | `string` = the value's Postgres text representation |
+| `INT2` / `INT4` / `INT8` | `integer` |
+| `FLOAT4` / `FLOAT8` | `number` |
+| `TEXT` / `VARCHAR` / `BPCHAR` / `NAME` / `BYTEA` | `string` (raw bytes) |
+| anything else (`NUMERIC`, `TIMESTAMPTZ`, `UUID`, `JSONB`, arrays, `BOOL`, …) | **error**: `lur.db: unsupported column type '<T>' in column '<name>'; CAST it to text (e.g. col::text)` |
 
-`bool` maps to its text form (`'t'`/`'f'`), **not** a Lua boolean, to keep read behavior
-aligned with SQLite (which has no native bool and reads counters/flags back as
-`integer`/text). `numeric` renders as text so arbitrary precision is never silently lost to
-`i64`/`f64`. A user who wants structure decodes it themselves (`SELECT data::jsonb …` +
-`lur.json.decode`).
+This is a deliberate, implementation-grounded choice (`sqlx` returns Postgres results in the
+**binary** wire format, and has no API to render an arbitrary type as text, so a generic
+"stringify anything" is not available without a growing list of per-type decoders and new
+dependencies). It also fits the guiding principle better than a guess would: an explicit
+`::text` cast puts the representation under the user's control — e.g. `timestamptz`'s text form
+depends on the server `TimeZone`/`DateStyle`, which `lur` must not silently pick for them. A
+user who wants a core value casts to it (`col::text`, `col::int8`, `col::float8`); one who
+wants structure casts to text and decodes (`data::text` + `lur.json.decode`). `NULL` in any
+column maps to `lur.null` regardless of the column's declared type.
 
 ### Parameter binding — highest-risk area
 
@@ -279,8 +280,9 @@ Mechanism: `PgBackend::begin` and `PgBackend::kv_update` open the transaction at
   Postgres-specific coverage:
   - `db.tx` / `kv.update` raise on a `40001` serialization conflict (two concurrent
     conflicting serializable transactions), and the error is catchable via `pcall`;
-  - row type mapping (`numeric`/`timestamptz`/`jsonb` → text, core types → integer/number/
-    string, `bytea` → bytes);
+  - row type mapping: core types → integer/number/string, `bytea` → bytes; a non-core column
+    (`numeric`/`timestamptz`/`jsonb`) raises the cast-to-text error, and casting it
+    (`col::text`) then succeeds;
   - the `kind` schema: `incr` on a bytes key errors with the integer-guard message; a value
     written by `update`/`set` compares equal under `cas`;
   - `exec` `last_insert_id` is `0` and `RETURNING` yields generated keys via `query`.
