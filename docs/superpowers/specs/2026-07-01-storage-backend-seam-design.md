@@ -106,10 +106,26 @@ For `lur.kv` (no Lua callback; dialect SQL stays in the backend):
 - **`kv.update`**: the backend exposes a purpose-built
   `kv_update(&Lua, key, func: Function) -> Value` that owns the whole sequence — begin →
   type-aware read → call the Lua transform `func` → write/delete → commit / rollback — so
-  the kv dialect SQL never leaks into `kv.rs`. `kv.rs` keeps the `IN_KV_UPDATE`
-  reentrancy guard (`reject_kv_reentry`) set around this single call; because the transform
-  only runs inside `kv_update`, guarding the whole call is behaviorally equivalent to
-  today's narrower guard. This is the only seam method that must accept an `mlua::Function`.
+  the kv dialect SQL never leaks into `kv.rs`. This is the only seam method that must
+  accept an `mlua::Function`.
+
+  `kv.rs` keeps the `IN_KV_UPDATE` reentrancy guard (`reject_kv_reentry`), but it MUST be
+  held **only around the user transform `func`** — not across `kv_update`'s `BEGIN
+  IMMEDIATE` / read / write / commit await points. `IN_KV_UPDATE` is a thread-local shared
+  by every `lur.async` task on the one VM; if the guard spans the transaction's I/O awaits,
+  a sibling `lur.kv`/`lur.db` call that `lur.async` polls while `kv.update` is parked on
+  that I/O is spuriously rejected as re-entry — a real behavior change (verified: 0
+  rejections pre-seam vs. 23/400 when the guard is widened). The narrow window catches
+  same-stack nested re-entry from the transform (the only re-entry the guard is for) while
+  leaving concurrent interleaving untouched. Implementation: `kv.rs` wraps `func` in an
+  async Lua function that brackets `IN_KV_UPDATE` set/clear around the real callback and
+  passes the wrapper to `backend.kv_update`, so the backend never touches the guard.
+
+  > Correction: an earlier draft claimed guarding the whole `kv_update` call was
+  > "behaviorally equivalent … because the transform only runs inside `kv_update`". That
+  > premise covered same-stack nesting but overlooked `lur.async` concurrent interleaving,
+  > where the two scopes are NOT equivalent. The whole-branch review caught the resulting
+  > regression; the narrow-window requirement above is the corrected design.
 
 ## kv logical value model (backend-neutral) — load-bearing commitment
 
