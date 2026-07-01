@@ -8,7 +8,6 @@ use mlua::{Error, Function, Lua, Table, Value};
 use sqlx::Row;
 
 use crate::capabilities::argcheck;
-use crate::capabilities::null;
 use crate::capabilities::storage::Shared;
 use crate::capabilities::storage::sqlite::{retry_busy, value_to_bytes};
 use crate::runtime::RunError;
@@ -27,24 +26,6 @@ fn reject_kv_reentry(fname: &str) -> mlua::Result<()> {
         )));
     }
     Ok(())
-}
-
-/// Reconstruct the byte-string `lur.kv` value model from a `value` field read
-/// back through the backend-neutral `Transaction::query` row mapping (which
-/// classifies `SQLite` columns as `Integer`/`Number`/`String`). This mirrors
-/// `value_to_bytes`'s stringification of INTEGER/REAL so a value written and
-/// then read back through either path is byte-identical.
-fn field_to_kv_value(lua: &Lua, v: Value) -> mlua::Result<Value> {
-    match v {
-        Value::Integer(i) => Ok(Value::String(lua.create_string(i.to_string())?)),
-        Value::Number(n) => Ok(Value::String(lua.create_string(n.to_string())?)),
-        Value::String(_) => Ok(v),
-        other if null::is_null(&other) => Ok(Value::Nil),
-        other => Err(Error::runtime(format!(
-            "lur.kv.update: unexpected stored value type {}",
-            other.type_name()
-        ))),
-    }
 }
 
 /// Install `lur.kv` sharing `db`'s lazily-opened backend.
@@ -269,82 +250,10 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
                 async move {
                     reject_kv_reentry("lur.kv.update")?;
                     let backend = shared.ensure().await?;
-                    let tx = backend.begin().await?;
-
-                    // Run the full read → transform → write sequence, then
-                    // commit/roll back below based on its outcome.
-                    let result: mlua::Result<Value> = async {
-                        // read current value as bytes|nil (type-aware, same as get)
-                        let rows = tx
-                            .query(
-                                &lua,
-                                "SELECT value FROM lur_kv WHERE key = ?".to_string(),
-                                vec![Value::String(lua.create_string(&key)?)],
-                            )
-                            .await
-                            .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
-                        let cur: Value = if rows.raw_len() == 0 {
-                            Value::Nil
-                        } else {
-                            let row: Table = rows.raw_get(1)?;
-                            let v: Value = row.raw_get("value")?;
-                            field_to_kv_value(&lua, v)?
-                        };
-
-                        IN_KV_UPDATE.with(|f| f.set(true));
-                        let transform_result = func.call_async::<Value>(cur).await;
-                        IN_KV_UPDATE.with(|f| f.set(false));
-
-                        let new = transform_result?;
-
-                        match &new {
-                            Value::Nil => {
-                                tx.exec(
-                                    &lua,
-                                    "DELETE FROM lur_kv WHERE key = ?".to_string(),
-                                    vec![Value::String(lua.create_string(&key)?)],
-                                )
-                                .await
-                                .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
-                            }
-                            Value::String(s) => {
-                                tx.exec(
-                                    &lua,
-                                    "INSERT OR REPLACE INTO lur_kv (key, value) VALUES (?, ?)"
-                                        .to_string(),
-                                    vec![
-                                        Value::String(lua.create_string(&key)?),
-                                        Value::String(s.clone()),
-                                    ],
-                                )
-                                .await
-                                .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
-                            }
-                            other => {
-                                return Err(Error::runtime(format!(
-                                    "lur.kv.update: transform must return a string or nil, got {}",
-                                    other.type_name()
-                                )));
-                            }
-                        }
-                        Ok(new)
-                    }
-                    .await;
-
-                    // On any error from the sequence above, roll back the open
-                    // transaction and return the original error unchanged.
-                    match result {
-                        Ok(v) => {
-                            tx.commit().await.map_err(|e| {
-                                Error::runtime(format!("lur.kv.update: commit: {e}"))
-                            })?;
-                            Ok(v)
-                        }
-                        Err(e) => {
-                            tx.rollback().await;
-                            Err(e)
-                        }
-                    }
+                    IN_KV_UPDATE.with(|f| f.set(true));
+                    let result = backend.kv_update(&lua, key, func).await;
+                    IN_KV_UPDATE.with(|f| f.set(false));
+                    result
                 }
             })
             .map_err(RunError::Init)?;

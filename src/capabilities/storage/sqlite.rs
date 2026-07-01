@@ -5,7 +5,7 @@
 use std::future::Future;
 use std::path::Path;
 
-use mlua::{Error, Lua, Table, Value};
+use mlua::{Error, Function, Lua, Table, Value};
 use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{
     SqliteArguments, SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions,
@@ -261,6 +261,89 @@ impl SqliteBackend {
         Ok(SqliteTransaction {
             conn: tokio::sync::Mutex::new(Some(conn)),
         })
+    }
+
+    /// Read-modify-write orchestration for `lur.kv.update`: begins a
+    /// `BEGIN IMMEDIATE` write on a pinned connection, reads the current value
+    /// (type-aware, matching `kv_get`), calls `func`, then writes/deletes the
+    /// result before committing — rolling back and re-raising on any error.
+    /// The write binds the returned string as raw bytes (`Vec<u8>` → BLOB) so
+    /// a value written by `update` compares equal under `lur.kv.cas`, which
+    /// also binds BLOB; going through the generic `?`-bind path would store
+    /// it as TEXT instead, which `SQLite` never treats as equal to a BLOB.
+    pub(crate) async fn kv_update(
+        &self,
+        lua: &Lua,
+        key: String,
+        func: Function,
+    ) -> mlua::Result<Value> {
+        let mut conn = retry_busy(|| async {
+            let mut conn = self.pool.acquire().await?;
+            sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+            Ok(conn)
+        })
+        .await
+        .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
+
+        // Run the full read → transform → write sequence, then commit/roll
+        // back below based on its outcome.
+        let result: mlua::Result<Value> = async {
+            // read current value as bytes|nil (type-aware, same as kv_get)
+            let cur: Value = match sqlx::query("SELECT value FROM lur_kv WHERE key = ?")
+                .bind(&key)
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?
+            {
+                None => Value::Nil,
+                Some(r) => match value_to_bytes(&r)? {
+                    None => Value::Nil,
+                    Some(bytes) => Value::String(lua.create_string(bytes)?),
+                },
+            };
+
+            let new = func.call_async::<Value>(cur).await?;
+
+            match &new {
+                Value::Nil => {
+                    sqlx::query("DELETE FROM lur_kv WHERE key = ?")
+                        .bind(&key)
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
+                }
+                Value::String(s) => {
+                    sqlx::query("INSERT OR REPLACE INTO lur_kv (key, value) VALUES (?, ?)")
+                        .bind(&key)
+                        .bind(s.as_bytes().to_vec())
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
+                }
+                other => {
+                    return Err(Error::runtime(format!(
+                        "lur.kv.update: transform must return a string or nil, got {}",
+                        other.type_name()
+                    )));
+                }
+            }
+            sqlx::query("COMMIT")
+                .execute(&mut *conn)
+                .await
+                .map_err(|e| Error::runtime(format!("lur.kv.update: commit: {e}")))?;
+            Ok(new)
+        }
+        .await;
+
+        // On any error from the sequence above, roll back the open
+        // transaction and return the original error unchanged.
+        match result {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                Err(e)
+            }
+        }
     }
 }
 

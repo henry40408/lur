@@ -417,3 +417,24 @@ fn db_tx_survives_concurrent_writers() {
     ))
     .expect("all transactions committed");
 }
+
+#[test]
+fn kv_update_writes_bytes_that_cas_can_match() {
+    // Regression: kv.update must store its string value with the same storage
+    // class as set/add/cas (opaque bytes), so a value written via update is
+    // CAS-able. Routing the write through the generic bind path stored it as
+    // TEXT, which never equals a BLOB-bound operand in SQLite.
+    let dir = tempfile::tempdir().unwrap();
+    let config = RuntimeConfig {
+        db_path: Some(dir.path().join("u.db")),
+        ..Default::default()
+    };
+    let rt = Runtime::with_config(config).expect("runtime builds");
+    rt.run(
+        "lur.kv.update('k', function(_) return 'hello' end)\n\
+         assert(lur.kv.get('k') == 'hello', 'update value reads back')\n\
+         assert(lur.kv.cas('k', 'hello', 'world') == true, 'cas matches update-written value')\n\
+         assert(lur.kv.get('k') == 'world', 'cas applied')",
+    )
+    .expect("update-written value is cas-able");
+}

@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use mlua::{Error, Lua, Table, Value};
+use mlua::{Error, Function, Lua, Table, Value};
 use sqlx::sqlite::SqlitePool;
 
 pub(crate) mod sqlite;
@@ -60,6 +60,17 @@ impl Backend {
     pub(crate) fn as_sqlite_pool(&self) -> &SqlitePool {
         match self {
             Backend::Sqlite(b) => b.pool(),
+        }
+    }
+
+    pub(crate) async fn kv_update(
+        &self,
+        lua: &Lua,
+        key: String,
+        func: Function,
+    ) -> mlua::Result<Value> {
+        match self {
+            Backend::Sqlite(b) => b.kv_update(lua, key, func).await,
         }
     }
 }
