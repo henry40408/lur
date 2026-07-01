@@ -325,3 +325,47 @@ fn kv_incr_decr_counters() {
     )
     .expect("kv incr/decr");
 }
+
+#[test]
+fn db_exec_survives_concurrent_writers() {
+    // Many writers INSERTing into one table over separate pools must all succeed
+    // with no "database is locked" surfacing — the retry-with-jitter guarantee.
+    const THREADS: i64 = 4;
+    const PER_THREAD: i64 = 100;
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = RuntimeConfig {
+        db_path: Some(dir.path().join("w.db")),
+        ..Default::default()
+    };
+
+    // Create the table + WAL file up front so workers contend on writes only.
+    Runtime::with_config(config.clone())
+        .expect("runtime builds")
+        .run("lur.db.exec('CREATE TABLE hits (id INTEGER PRIMARY KEY AUTOINCREMENT)')")
+        .expect("create table");
+
+    let handles: Vec<_> = (0..THREADS)
+        .map(|_| {
+            let cfg = config.clone();
+            std::thread::spawn(move || {
+                let rt = Runtime::with_config(cfg).expect("runtime builds");
+                rt.run(&format!(
+                    "for _ = 1, {PER_THREAD} do lur.db.exec('INSERT INTO hits DEFAULT VALUES') end"
+                ))
+                .expect("concurrent inserts succeed without a busy error");
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().expect("worker thread joined");
+    }
+
+    let rt = Runtime::with_config(config).expect("runtime builds");
+    rt.run(&format!(
+        "local r = lur.db.query('SELECT COUNT(*) AS n FROM hits'); \
+         assert(r[1].n == {}, 'row count mismatch: ' .. tostring(r[1].n))",
+        THREADS * PER_THREAD
+    ))
+    .expect("all inserts landed");
+}
