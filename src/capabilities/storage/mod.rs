@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use mlua::{Error, Function, Lua, Table, Value};
-use sqlx::sqlite::SqlitePool;
 
 pub(crate) mod sqlite;
 
@@ -55,11 +54,49 @@ impl Backend {
         }
     }
 
-    /// Transitional (removed in Task 3): raw `SQLite` pool for the not-yet-migrated
-    /// kv code. Panics if a future non-SQLite backend reaches here.
-    pub(crate) fn as_sqlite_pool(&self) -> &SqlitePool {
+    pub(crate) async fn kv_get(&self, lua: &Lua, key: String) -> mlua::Result<Value> {
         match self {
-            Backend::Sqlite(b) => b.pool(),
+            Backend::Sqlite(b) => b.kv_get(lua, key).await,
+        }
+    }
+
+    pub(crate) async fn kv_set(&self, key: String, value: Vec<u8>) -> mlua::Result<()> {
+        match self {
+            Backend::Sqlite(b) => b.kv_set(key, value).await,
+        }
+    }
+
+    pub(crate) async fn kv_delete(&self, key: String) -> mlua::Result<()> {
+        match self {
+            Backend::Sqlite(b) => b.kv_delete(key).await,
+        }
+    }
+
+    pub(crate) async fn kv_add(&self, key: String, value: Vec<u8>) -> mlua::Result<bool> {
+        match self {
+            Backend::Sqlite(b) => b.kv_add(key, value).await,
+        }
+    }
+
+    pub(crate) async fn kv_cas(
+        &self,
+        key: String,
+        expected: Option<Vec<u8>>,
+        new: Option<Vec<u8>>,
+    ) -> mlua::Result<bool> {
+        match self {
+            Backend::Sqlite(b) => b.kv_cas(key, expected, new).await,
+        }
+    }
+
+    pub(crate) async fn kv_incr(
+        &self,
+        voice: &'static str,
+        key: String,
+        delta: i64,
+    ) -> mlua::Result<i64> {
+        match self {
+            Backend::Sqlite(b) => b.kv_incr(voice, key, delta).await,
         }
     }
 

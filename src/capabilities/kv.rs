@@ -5,11 +5,9 @@
 use std::cell::Cell;
 
 use mlua::{Error, Function, Lua, Table, Value};
-use sqlx::Row;
 
 use crate::capabilities::argcheck;
 use crate::capabilities::storage::Shared;
-use crate::capabilities::storage::sqlite::{retry_busy, value_to_bytes};
 use crate::runtime::RunError;
 
 thread_local! {
@@ -40,19 +38,7 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
                 async move {
                     reject_kv_reentry("lur.kv.get")?;
                     let backend = shared.ensure().await?;
-                    let pool = backend.as_sqlite_pool();
-                    let row = sqlx::query("SELECT value FROM lur_kv WHERE key = ?")
-                        .bind(key)
-                        .fetch_optional(pool)
-                        .await
-                        .map_err(|e| Error::runtime(format!("lur.kv.get: {e}")))?;
-                    match row {
-                        None => Ok(Value::Nil),
-                        Some(r) => match value_to_bytes(&r)? {
-                            None => Ok(Value::Nil),
-                            Some(bytes) => Ok(Value::String(lua.create_string(bytes)?)),
-                        },
-                    }
+                    backend.kv_get(&lua, key).await
                 }
             })
             .map_err(RunError::Init)?;
@@ -66,14 +52,7 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
                 async move {
                     reject_kv_reentry("lur.kv.set")?;
                     let backend = shared.ensure().await?;
-                    let pool = backend.as_sqlite_pool();
-                    sqlx::query("INSERT OR REPLACE INTO lur_kv (key, value) VALUES (?, ?)")
-                        .bind(key)
-                        .bind(value.as_bytes().to_vec())
-                        .execute(pool)
-                        .await
-                        .map_err(|e| Error::runtime(format!("lur.kv.set: {e}")))?;
-                    Ok(())
+                    backend.kv_set(key, value.as_bytes().to_vec()).await
                 }
             })
             .map_err(RunError::Init)?;
@@ -87,13 +66,7 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
                 async move {
                     reject_kv_reentry("lur.kv.delete")?;
                     let backend = shared.ensure().await?;
-                    let pool = backend.as_sqlite_pool();
-                    sqlx::query("DELETE FROM lur_kv WHERE key = ?")
-                        .bind(key)
-                        .execute(pool)
-                        .await
-                        .map_err(|e| Error::runtime(format!("lur.kv.delete: {e}")))?;
-                    Ok(())
+                    backend.kv_delete(key).await
                 }
             })
             .map_err(RunError::Init)?;
@@ -107,20 +80,7 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
                 async move {
                     reject_kv_reentry("lur.kv.add")?;
                     let backend = shared.ensure().await?;
-                    let pool = backend.as_sqlite_pool();
-                    let res = retry_busy(|| async {
-                        sqlx::query(
-                            "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
-                             ON CONFLICT(key) DO NOTHING",
-                        )
-                        .bind(key.clone())
-                        .bind(value.as_bytes().to_vec())
-                        .execute(pool)
-                        .await
-                    })
-                    .await
-                    .map_err(|e| Error::runtime(format!("lur.kv.add: {e}")))?;
-                    Ok(res.rows_affected() == 1)
+                    backend.kv_add(key, value.as_bytes().to_vec()).await
                 }
             })
             .map_err(RunError::Init)?;
@@ -140,69 +100,9 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
                     async move {
                         reject_kv_reentry("lur.kv.cas")?;
                         let backend = shared.ensure().await?;
-                        let pool = backend.as_sqlite_pool();
                         let exp = expected.map(|s| s.as_bytes().to_vec());
                         let neu = new.map(|s| s.as_bytes().to_vec());
-                        let applied = match (exp, neu) {
-                            // expect absent, set new
-                            (None, Some(v)) => {
-                                retry_busy(|| async {
-                                    sqlx::query(
-                                        "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
-                                         ON CONFLICT(key) DO NOTHING",
-                                    )
-                                    .bind(key.clone())
-                                    .bind(v.clone())
-                                    .execute(pool)
-                                    .await
-                                })
-                                .await
-                                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
-                                .rows_affected()
-                                    == 1
-                            }
-                            // expect absent, want absent: succeeds iff already absent
-                            (None, None) => {
-                                let r = sqlx::query("SELECT 1 FROM lur_kv WHERE key = ?")
-                                    .bind(key)
-                                    .fetch_optional(pool)
-                                    .await
-                                    .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?;
-                                r.is_none()
-                            }
-                            // expect value, set new
-                            (Some(e), Some(v)) => {
-                                retry_busy(|| async {
-                                    sqlx::query(
-                                        "UPDATE lur_kv SET value = ? WHERE key = ? AND value = ?",
-                                    )
-                                    .bind(v.clone())
-                                    .bind(key.clone())
-                                    .bind(e.clone())
-                                    .execute(pool)
-                                    .await
-                                })
-                                .await
-                                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
-                                .rows_affected()
-                                    == 1
-                            }
-                            // expect value, delete
-                            (Some(e), None) => {
-                                retry_busy(|| async {
-                                    sqlx::query("DELETE FROM lur_kv WHERE key = ? AND value = ?")
-                                        .bind(key.clone())
-                                        .bind(e.clone())
-                                        .execute(pool)
-                                        .await
-                                })
-                                .await
-                                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
-                                .rows_affected()
-                                    == 1
-                            }
-                        };
-                        Ok(applied)
+                        backend.kv_cas(key, exp, neu).await
                     }
                 },
             )
@@ -217,7 +117,8 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
                 async move {
                     reject_kv_reentry("lur.kv.incr")?;
                     let n = argcheck::integer_arg(n, "lur.kv.incr", 2)?;
-                    incr_by("lur.kv.incr", &shared, key, n.unwrap_or(1)).await
+                    let backend = shared.ensure().await?;
+                    backend.kv_incr("lur.kv.incr", key, n.unwrap_or(1)).await
                 }
             })
             .map_err(RunError::Init)?;
@@ -235,7 +136,8 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
                         .unwrap_or(1)
                         .checked_neg()
                         .ok_or_else(|| Error::runtime("lur.kv.decr: step too large"))?;
-                    incr_by("lur.kv.decr", &shared, key, delta).await
+                    let backend = shared.ensure().await?;
+                    backend.kv_incr("lur.kv.decr", key, delta).await
                 }
             })
             .map_err(RunError::Init)?;
@@ -262,34 +164,4 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
 
     lur.set("kv", kv).map_err(RunError::Init)?;
     Ok(())
-}
-
-/// Atomically add `delta` to an integer counter `key`, creating it at `delta`
-/// when absent. Returns the new value, or errors if the key holds a
-/// non-integer (the `WHERE typeof(value)='integer'` guard returns no row).
-async fn incr_by(voice: &str, shared: &Shared, key: String, delta: i64) -> mlua::Result<i64> {
-    let backend = shared.ensure().await?;
-    let pool = backend.as_sqlite_pool();
-    let row = retry_busy(|| async {
-        sqlx::query(
-            "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
-             ON CONFLICT(key) DO UPDATE SET value = value + excluded.value \
-             WHERE typeof(lur_kv.value) = 'integer' \
-             RETURNING value",
-        )
-        .bind(key.clone())
-        .bind(delta)
-        .fetch_optional(pool)
-        .await
-    })
-    .await
-    .map_err(|e| Error::runtime(format!("{voice}: {e}")))?;
-    match row {
-        Some(r) => r
-            .try_get::<i64, usize>(0)
-            .map_err(|e| Error::runtime(format!("{voice}: {e}"))),
-        None => Err(Error::runtime(format!(
-            "{voice}: existing value is not an integer"
-        ))),
-    }
 }

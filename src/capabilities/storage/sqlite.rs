@@ -204,11 +204,6 @@ impl SqliteBackend {
         Ok(Self { pool })
     }
 
-    /// Transitional (Task 3 removes it): raw pool access for kv until kv migrates.
-    pub(crate) fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
     pub(crate) async fn exec(
         &self,
         _lua: &Lua,
@@ -261,6 +256,156 @@ impl SqliteBackend {
         Ok(SqliteTransaction {
             conn: tokio::sync::Mutex::new(Some(conn)),
         })
+    }
+
+    pub(crate) async fn kv_get(&self, lua: &Lua, key: String) -> mlua::Result<Value> {
+        let row = sqlx::query("SELECT value FROM lur_kv WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| Error::runtime(format!("lur.kv.get: {e}")))?;
+        match row {
+            None => Ok(Value::Nil),
+            Some(r) => match value_to_bytes(&r)? {
+                None => Ok(Value::Nil),
+                Some(bytes) => Ok(Value::String(lua.create_string(bytes)?)),
+            },
+        }
+    }
+
+    pub(crate) async fn kv_set(&self, key: String, value: Vec<u8>) -> mlua::Result<()> {
+        sqlx::query("INSERT OR REPLACE INTO lur_kv (key, value) VALUES (?, ?)")
+            .bind(key)
+            .bind(value)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::runtime(format!("lur.kv.set: {e}")))?;
+        Ok(())
+    }
+
+    pub(crate) async fn kv_delete(&self, key: String) -> mlua::Result<()> {
+        sqlx::query("DELETE FROM lur_kv WHERE key = ?")
+            .bind(key)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::runtime(format!("lur.kv.delete: {e}")))?;
+        Ok(())
+    }
+
+    pub(crate) async fn kv_add(&self, key: String, value: Vec<u8>) -> mlua::Result<bool> {
+        let res = retry_busy(|| async {
+            sqlx::query(
+                "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
+                 ON CONFLICT(key) DO NOTHING",
+            )
+            .bind(key.clone())
+            .bind(value.clone())
+            .execute(&self.pool)
+            .await
+        })
+        .await
+        .map_err(|e| Error::runtime(format!("lur.kv.add: {e}")))?;
+        Ok(res.rows_affected() == 1)
+    }
+
+    pub(crate) async fn kv_cas(
+        &self,
+        key: String,
+        expected: Option<Vec<u8>>,
+        new: Option<Vec<u8>>,
+    ) -> mlua::Result<bool> {
+        let applied = match (expected, new) {
+            // expect absent, set new
+            (None, Some(v)) => {
+                retry_busy(|| async {
+                    sqlx::query(
+                        "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
+                         ON CONFLICT(key) DO NOTHING",
+                    )
+                    .bind(key.clone())
+                    .bind(v.clone())
+                    .execute(&self.pool)
+                    .await
+                })
+                .await
+                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
+                .rows_affected()
+                    == 1
+            }
+            // expect absent, want absent: succeeds iff already absent
+            (None, None) => {
+                let r = sqlx::query("SELECT 1 FROM lur_kv WHERE key = ?")
+                    .bind(key)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?;
+                r.is_none()
+            }
+            // expect value, set new
+            (Some(e), Some(v)) => {
+                retry_busy(|| async {
+                    sqlx::query("UPDATE lur_kv SET value = ? WHERE key = ? AND value = ?")
+                        .bind(v.clone())
+                        .bind(key.clone())
+                        .bind(e.clone())
+                        .execute(&self.pool)
+                        .await
+                })
+                .await
+                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
+                .rows_affected()
+                    == 1
+            }
+            // expect value, delete
+            (Some(e), None) => {
+                retry_busy(|| async {
+                    sqlx::query("DELETE FROM lur_kv WHERE key = ? AND value = ?")
+                        .bind(key.clone())
+                        .bind(e.clone())
+                        .execute(&self.pool)
+                        .await
+                })
+                .await
+                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
+                .rows_affected()
+                    == 1
+            }
+        };
+        Ok(applied)
+    }
+
+    /// Atomically add `delta` to an integer counter `key`, creating it at
+    /// `delta` when absent. Returns the new value, or errors if the key holds
+    /// a non-integer (the `WHERE typeof(value)='integer'` guard returns no
+    /// row).
+    pub(crate) async fn kv_incr(
+        &self,
+        voice: &'static str,
+        key: String,
+        delta: i64,
+    ) -> mlua::Result<i64> {
+        let row = retry_busy(|| async {
+            sqlx::query(
+                "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
+                 ON CONFLICT(key) DO UPDATE SET value = value + excluded.value \
+                 WHERE typeof(lur_kv.value) = 'integer' \
+                 RETURNING value",
+            )
+            .bind(key.clone())
+            .bind(delta)
+            .fetch_optional(&self.pool)
+            .await
+        })
+        .await
+        .map_err(|e| Error::runtime(format!("{voice}: {e}")))?;
+        match row {
+            Some(r) => r
+                .try_get::<i64, usize>(0)
+                .map_err(|e| Error::runtime(format!("{voice}: {e}"))),
+            None => Err(Error::runtime(format!(
+                "{voice}: existing value is not an integer"
+            ))),
+        }
     }
 
     /// Read-modify-write orchestration for `lur.kv.update`: begins a
