@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782877487285,
+  "lastUpdate": 1782925397220,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1343,6 +1343,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208100,
             "range": "± 3198",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "85f6f04297c535bb26b59d6f0631a6bb7d5f1203",
+          "message": "feat(storage): PostgreSQL backend (PG support Phase 2) (#58)\n\n* docs(storage): design spec for PostgreSQL backend (Phase 2)\n\nAdds the Postgres variant behind the Phase 1 storage seam. Key decisions:\nnative placeholders per backend (no translation), kind-discriminated kv\nschema mapping the neutral model 1:1, retry stays SQLite-only, and the\nload-bearing correctness model — single-statement ops at READ COMMITTED,\ndb.tx/kv.update at SERIALIZABLE and documented as fallible (40001 surfaces;\ncaller decides retry/pcall). rustls TLS via sslmode; docker-compose.yaml +\nCI service for tests.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* docs(storage): Phase 2 implementation plan + spec refinements\n\nPlan decomposes the PostgreSQL backend into vertical slices (db.exec/query →\ndb.tx → kv → kv.update → SERIALIZABLE fallibility → docs), each independently\ntestable against a docker-compose Postgres. Spec refined to match sqlx reality:\nrow mapping is R1 (core types map, non-core raise a cast-to-text error, since\nsqlx returns binary and cannot generically stringify), and RuntimeConfig.db_path\nstays Option<PathBuf> with scheme detection internal to storage (preserves the\nunchanged-existing-tests constraint).\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* build(storage): enable sqlx postgres + rustls, add PG compose & CI service\n\n* feat(storage): PostgreSQL backend db.exec/db.query behind the seam\n\n* feat(storage): db.tx over a SERIALIZABLE Postgres transaction\n\n* feat(storage): Postgres kv get/set/delete/add/cas/incr\n\n* docs(storage): restore begin() doc comment orphaned by kv insertion\n\n* feat(storage): Postgres kv.update (SERIALIZABLE read-modify-write)\n\nImplements PgBackend::kv_update: a BEGIN ISOLATION LEVEL SERIALIZABLE\ntransaction on a pinned connection that reads the current value\n(type-aware, via kv_row_to_bytes), calls the Lua transform, then\nwrites the returned string as kind=0 bytes (cas-comparable) or deletes\non nil, committing or rolling back and re-raising on any error. No\nretry — a 40001 conflict surfaces to the caller unchanged (SQLite-only\nretry stays as-is). Replaces the last \"not yet implemented\" arm in\nstorage/mod.rs.\n\nAlso adds .config/nextest.toml to serialize the `pg` test binary: the\nnew kv_update tests run SERIALIZABLE transactions against the shared\nlur_kv table, and PostgreSQL's predicate locking can produce false-\npositive 40001 conflicts when those interleave with the other kv_*\npg tests running concurrently. Confirmed via repeated runs: reliably\ngreen serialized, reliably flaky (~every run) at default parallelism.\n\n* test(storage): Postgres SERIALIZABLE db.tx is fallible and pcall-catchable\n\n* docs(storage): document the PostgreSQL backend and fallible tx contract\n\n* ci(storage): add Postgres service to the coverage job\n\nThe coverage job runs the full suite (incl. tests/pg.rs) under llvm-cov\ninstrumentation. CI is set on every GitHub Actions job, so the pg tests'\nCI-hard-fail-when-unreachable path fired there because only the  job\nhad a Postgres service. Mirror that service onto the coverage job so the pg\ntests run (and get covered) instead of hard-failing.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.8 <noreply@anthropic.com>",
+          "timestamp": "2026-07-02T01:01:35+08:00",
+          "tree_id": "055f4fe4579f94707857423ceb29cf2c16984078",
+          "url": "https://github.com/henry40408/lur/commit/85f6f04297c535bb26b59d6f0631a6bb7d5f1203"
+        },
+        "date": 1782925396770,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 294326,
+            "range": "± 6526",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5214,
+            "range": "± 55",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208278,
+            "range": "± 7573",
             "unit": "ns/iter"
           }
         ]
