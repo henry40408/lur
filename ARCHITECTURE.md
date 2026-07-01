@@ -41,8 +41,9 @@ CLI on top. The public modules are `capabilities`, `config`, `policy`, `runtime`
 | `src/config.rs` | TOML config file parsing and the profile/allowlist model. |
 | `src/units.rs` | `parse_size` (×1024) and `parse_duration` for CLI value parsers. |
 | `src/capabilities/` | One submodule per `lur.*` table; `mod.rs::install` orchestrates them. |
-| `src/capabilities/db.rs` | Owns the shared SQLite pool (`SqliteShared`), `begin_immediate`, `busy_timeout`, the `retry_busy` write-contention helper, and `lur.db` (`exec`/`query`/`tx`). Hands `SqliteShared` to `kv`. |
-| `src/capabilities/kv.rs` | Owns `lur.kv`: type-aware `get`, `set`/`delete`, and atomic ops (`add`/`cas`/`incr`/`decr`/`update`) over the shared pool. |
+| `src/capabilities/storage/` | The storage backend seam: `Backend` enum (SQLite today; Postgres reserved for Phase 2), the lazy-open `Shared` handle, `ExecResult`/`Transaction`, and `sqlite.rs` owning all SQLite SQL/binding/row-mapping/retry/tx/kv. |
+| `src/capabilities/db.rs` | Wires the `lur.db` table (`exec`/`query`/`tx`) to `storage::Backend`. Returns `storage::Shared` to `kv`. |
+| `src/capabilities/kv.rs` | Wires the `lur.kv` table to `storage::Backend` kv methods; owns the `IN_KV_UPDATE` reentrancy guard. |
 
 ## The shared core: `build_lua`
 
@@ -205,20 +206,28 @@ grace period is aborted when the runtime drops.
 
 ## State & storage
 
-- **`lur.db`** ([`capabilities/db.rs`](src/capabilities/db.rs)) owns the lazily-opened
-  `sqlx` SQLite pool (WAL mode, file auto-created) and exposes it as `SqliteShared`.
-  `begin_immediate` opens write transactions with `BEGIN IMMEDIATE`; write-lock contention
-  is handled by a 200 ms `busy_timeout` plus `retry_busy`, a bounded (5-attempt) full-jitter
-  backoff wrapping single-statement writes (`db.exec`, `kv.add`/`cas`/`incr`/`decr`) and
-  lock acquisition (`begin_immediate`, covering `db.tx`/`kv.update`) — retried only where no
-  user code has run or the retried body is pure, so a retry never duplicates a side effect.
-  Dynamic SQL is wrapped in `sqlx::AssertSqlSafe` at
-  the call sites that build statements from user input. `db.rs` hands `SqliteShared` to `kv`.
+- Storage goes through a backend seam (`capabilities/storage`): `db.rs`/`kv.rs` call the
+  backend-neutral `Backend` enum, and `storage/sqlite.rs` owns every SQLite specific — the
+  `retry_busy`/`busy_timeout`/`BEGIN IMMEDIATE` handling described here included. The kv
+  logical value model (opaque bytes vs. integer counter) is backend-neutral and defined at
+  the seam.
+- **`lur.db`** ([`capabilities/db.rs`](src/capabilities/db.rs)) wires the `lur.db` table
+  onto the backend-neutral seam; `storage/sqlite.rs`'s `SqliteBackend` owns the lazily-
+  opened `sqlx` SQLite pool (WAL mode, file auto-created), reached through the shared
+  `storage::Shared` handle. `SqliteBackend::begin` opens write transactions with
+  `BEGIN IMMEDIATE`; write-lock contention is handled by a 200 ms `busy_timeout` plus
+  `retry_busy`, a bounded (5-attempt) full-jitter backoff wrapping single-statement writes
+  (`db.exec`, `kv.add`/`cas`/`incr`/`decr`) and lock acquisition (`begin`, covering
+  `db.tx`/`kv.update`) — retried only where no user code has run or the retried body is
+  pure, so a retry never duplicates a side effect. Dynamic SQL is wrapped in
+  `sqlx::AssertSqlSafe` at the call sites that build statements from user input. `db.rs`
+  hands `storage::Shared` to `kv`.
 - **`lur.kv`** ([`capabilities/kv.rs`](src/capabilities/kv.rs)) is a key/value store over
   the shared pool. Atomic ops (`add`, `cas`, `incr`, `decr`) are single SQL statements;
-  `update` (read-modify-write) uses `begin_immediate`. `get` is type-aware and always
-  returns bytes; integer counters are stored as integers and read back as decimal strings.
-  Backed by an internal `lur_kv(key, value)` table.
+  `update` (read-modify-write) uses `SqliteBackend::kv_update`, which opens its own
+  `BEGIN IMMEDIATE` transaction. `get` is type-aware and always returns bytes; integer
+  counters are stored as integers and read back as decimal strings. Backed by an internal
+  `lur_kv(key, value)` table.
 - **Invariant:** kv counters are integers; `kv.get` always returns bytes (decimal string
   for counters); write transactions (`db.tx`, `kv.update`) use `BEGIN IMMEDIATE`; integer
   step arguments (`kv.incr`/`kv.decr`, `state.incr`/`state.decr`) reject fractional values.
