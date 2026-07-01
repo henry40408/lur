@@ -1,15 +1,18 @@
 //! Storage backend seam. `Backend` isolates all backend-specific code (SQL
 //! dialect, binding, row mapping, concurrency) so `db.rs`/`kv.rs` stay
-//! backend-neutral. `SQLite` is the only backend today; the `Postgres` variant
-//! lands in Phase 2.
+//! backend-neutral. `SQLite` and `Postgres` are the two backends; `--db`'s
+//! scheme (via `StorageTarget::resolve`) picks which one `Shared::ensure`
+//! opens.
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use mlua::{Error, Function, Lua, Table, Value};
 
+pub(crate) mod postgres;
 pub(crate) mod sqlite;
 
+use postgres::PgBackend;
 use sqlite::{SqliteBackend, SqliteTransaction};
 
 /// Result of a write statement.
@@ -18,11 +21,30 @@ pub(crate) struct ExecResult {
     pub last_insert_id: i64,
 }
 
-/// A storage backend. One variant today; `Postgres` is added in Phase 2, which
-/// only extends the match arms below — no `db.rs`/`kv.rs` call site changes.
+/// Which concrete backend a `--db` value selects, resolved by URL scheme.
+enum StorageTarget {
+    Sqlite(std::path::PathBuf),
+    Postgres(String),
+}
+
+impl StorageTarget {
+    fn resolve(path: &std::path::Path) -> Self {
+        match path.to_str() {
+            Some(s) if s.starts_with("postgres://") || s.starts_with("postgresql://") => {
+                StorageTarget::Postgres(s.to_owned())
+            }
+            _ => StorageTarget::Sqlite(path.to_path_buf()),
+        }
+    }
+}
+
+/// A storage backend. `Sqlite` is the original backend; `Postgres` lands in
+/// Phase 2, which only extends the match arms below — no `db.rs`/`kv.rs` call
+/// site changes.
 #[derive(Clone)]
 pub(crate) enum Backend {
     Sqlite(SqliteBackend),
+    Postgres(PgBackend),
 }
 
 impl Backend {
@@ -34,6 +56,7 @@ impl Backend {
     ) -> mlua::Result<ExecResult> {
         match self {
             Backend::Sqlite(b) => b.exec(lua, sql, params).await,
+            Backend::Postgres(b) => b.exec(lua, sql, params).await,
         }
     }
 
@@ -45,36 +68,52 @@ impl Backend {
     ) -> mlua::Result<Table> {
         match self {
             Backend::Sqlite(b) => b.query(lua, sql, params).await,
+            Backend::Postgres(b) => b.query(lua, sql, params).await,
         }
     }
 
     pub(crate) async fn begin(&self) -> mlua::Result<Transaction> {
         match self {
             Backend::Sqlite(b) => Ok(Transaction::Sqlite(b.begin().await?)),
+            Backend::Postgres(_) => Err(Error::runtime(
+                "lur.db.tx: postgres backend not yet implemented",
+            )),
         }
     }
 
     pub(crate) async fn kv_get(&self, lua: &Lua, key: String) -> mlua::Result<Value> {
         match self {
             Backend::Sqlite(b) => b.kv_get(lua, key).await,
+            Backend::Postgres(_) => Err(Error::runtime(
+                "lur.kv: postgres backend not yet implemented",
+            )),
         }
     }
 
     pub(crate) async fn kv_set(&self, key: String, value: Vec<u8>) -> mlua::Result<()> {
         match self {
             Backend::Sqlite(b) => b.kv_set(key, value).await,
+            Backend::Postgres(_) => Err(Error::runtime(
+                "lur.kv: postgres backend not yet implemented",
+            )),
         }
     }
 
     pub(crate) async fn kv_delete(&self, key: String) -> mlua::Result<()> {
         match self {
             Backend::Sqlite(b) => b.kv_delete(key).await,
+            Backend::Postgres(_) => Err(Error::runtime(
+                "lur.kv: postgres backend not yet implemented",
+            )),
         }
     }
 
     pub(crate) async fn kv_add(&self, key: String, value: Vec<u8>) -> mlua::Result<bool> {
         match self {
             Backend::Sqlite(b) => b.kv_add(key, value).await,
+            Backend::Postgres(_) => Err(Error::runtime(
+                "lur.kv: postgres backend not yet implemented",
+            )),
         }
     }
 
@@ -86,6 +125,9 @@ impl Backend {
     ) -> mlua::Result<bool> {
         match self {
             Backend::Sqlite(b) => b.kv_cas(key, expected, new).await,
+            Backend::Postgres(_) => Err(Error::runtime(
+                "lur.kv: postgres backend not yet implemented",
+            )),
         }
     }
 
@@ -97,6 +139,9 @@ impl Backend {
     ) -> mlua::Result<i64> {
         match self {
             Backend::Sqlite(b) => b.kv_incr(voice, key, delta).await,
+            Backend::Postgres(_) => Err(Error::runtime(
+                "lur.kv: postgres backend not yet implemented",
+            )),
         }
     }
 
@@ -108,6 +153,9 @@ impl Backend {
     ) -> mlua::Result<Value> {
         match self {
             Backend::Sqlite(b) => b.kv_update(lua, key, func).await,
+            Backend::Postgres(_) => Err(Error::runtime(
+                "lur.kv: postgres backend not yet implemented",
+            )),
         }
     }
 }
@@ -178,7 +226,10 @@ impl Shared {
             self.path.as_ref().as_ref().ok_or_else(|| {
                 Error::runtime("lur.db: no database configured; pass --db <path>")
             })?;
-        let backend = Backend::Sqlite(SqliteBackend::open(path).await?);
+        let backend = match StorageTarget::resolve(path) {
+            StorageTarget::Sqlite(p) => Backend::Sqlite(SqliteBackend::open(&p).await?),
+            StorageTarget::Postgres(url) => Backend::Postgres(PgBackend::open(&url).await?),
+        };
         let _ = self.cell.set(backend);
         Ok(self.cell.get().expect("backend just set").clone())
     }
