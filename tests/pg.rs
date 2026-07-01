@@ -132,3 +132,43 @@ fn pg_tx_commits_and_rolls_back() {
     ))
     .expect("pg tx commit + rollback");
 }
+
+#[test]
+fn pg_kv_set_get_delete_add_cas() {
+    let Some(rt) = pg_runtime() else { return };
+    let k = unique("pgkv");
+    rt.run(&format!(
+        "assert(lur.kv.get('{k}') == nil, 'miss is nil')\n\
+         lur.kv.set('{k}', 'v1')\n\
+         assert(lur.kv.get('{k}') == 'v1', 'get after set')\n\
+         lur.kv.set('{k}', 'v2')\n\
+         assert(lur.kv.get('{k}') == 'v2', 'overwrite')\n\
+         assert(lur.kv.add('{k}', 'nope') == false, 'add on existing = false')\n\
+         assert(lur.kv.cas('{k}', 'wrong', 'v3') == false, 'cas mismatch = false')\n\
+         assert(lur.kv.cas('{k}', 'v2', 'v3') == true, 'cas match = true')\n\
+         assert(lur.kv.get('{k}') == 'v3', 'cas applied')\n\
+         lur.kv.delete('{k}')\n\
+         assert(lur.kv.get('{k}') == nil, 'gone after delete')\n\
+         assert(lur.kv.add('{k}', 'fresh') == true, 'add on absent = true')\n\
+         lur.kv.delete('{k}')"
+    ))
+    .expect("pg kv set/get/delete/add/cas");
+}
+
+#[test]
+fn pg_kv_incr_decr_and_integer_guard() {
+    let Some(rt) = pg_runtime() else { return };
+    let c = unique("pgctr");
+    let s = unique("pgstr");
+    rt.run(&format!(
+        "assert(lur.kv.incr('{c}') == 1, 'first incr = 1')\n\
+         assert(lur.kv.incr('{c}', 5) == 6, 'incr by 5')\n\
+         assert(lur.kv.decr('{c}', 2) == 4, 'decr by 2')\n\
+         assert(lur.kv.get('{c}') == '4', 'counter reads as decimal string')\n\
+         lur.kv.set('{s}', 'not-a-number')\n\
+         local ok, err = pcall(function() lur.kv.incr('{s}') end)\n\
+         assert(not ok and tostring(err):find('not an integer'), 'incr on non-int errors')\n\
+         lur.kv.delete('{c}'); lur.kv.delete('{s}')"
+    ))
+    .expect("pg kv incr/decr + integer guard");
+}

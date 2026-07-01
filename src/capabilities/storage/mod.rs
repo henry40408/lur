@@ -82,36 +82,28 @@ impl Backend {
     pub(crate) async fn kv_get(&self, lua: &Lua, key: String) -> mlua::Result<Value> {
         match self {
             Backend::Sqlite(b) => b.kv_get(lua, key).await,
-            Backend::Postgres(_) => Err(Error::runtime(
-                "lur.kv: postgres backend not yet implemented",
-            )),
+            Backend::Postgres(b) => b.kv_get(lua, key).await,
         }
     }
 
     pub(crate) async fn kv_set(&self, key: String, value: Vec<u8>) -> mlua::Result<()> {
         match self {
             Backend::Sqlite(b) => b.kv_set(key, value).await,
-            Backend::Postgres(_) => Err(Error::runtime(
-                "lur.kv: postgres backend not yet implemented",
-            )),
+            Backend::Postgres(b) => b.kv_set(key, value).await,
         }
     }
 
     pub(crate) async fn kv_delete(&self, key: String) -> mlua::Result<()> {
         match self {
             Backend::Sqlite(b) => b.kv_delete(key).await,
-            Backend::Postgres(_) => Err(Error::runtime(
-                "lur.kv: postgres backend not yet implemented",
-            )),
+            Backend::Postgres(b) => b.kv_delete(key).await,
         }
     }
 
     pub(crate) async fn kv_add(&self, key: String, value: Vec<u8>) -> mlua::Result<bool> {
         match self {
             Backend::Sqlite(b) => b.kv_add(key, value).await,
-            Backend::Postgres(_) => Err(Error::runtime(
-                "lur.kv: postgres backend not yet implemented",
-            )),
+            Backend::Postgres(b) => b.kv_add(key, value).await,
         }
     }
 
@@ -123,9 +115,7 @@ impl Backend {
     ) -> mlua::Result<bool> {
         match self {
             Backend::Sqlite(b) => b.kv_cas(key, expected, new).await,
-            Backend::Postgres(_) => Err(Error::runtime(
-                "lur.kv: postgres backend not yet implemented",
-            )),
+            Backend::Postgres(b) => b.kv_cas(key, expected, new).await,
         }
     }
 
@@ -137,9 +127,7 @@ impl Backend {
     ) -> mlua::Result<i64> {
         match self {
             Backend::Sqlite(b) => b.kv_incr(voice, key, delta).await,
-            Backend::Postgres(_) => Err(Error::runtime(
-                "lur.kv: postgres backend not yet implemented",
-            )),
+            Backend::Postgres(b) => b.kv_incr(voice, key, delta).await,
         }
     }
 

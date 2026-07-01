@@ -102,6 +102,26 @@ where
         .map_err(|e| Error::runtime(format!("lur.db: decoding column {i}: {e}")))
 }
 
+/// Decode a `SELECT kind, bytes, num` row into the neutral value bytes: a `kind=1`
+/// counter renders as its decimal string; `kind=0` yields the raw bytes (matching
+/// `SQLite`'s `value_to_bytes`).
+fn kv_row_to_bytes(row: &PgRow) -> mlua::Result<Vec<u8>> {
+    let kind: i16 = row
+        .try_get::<i16, usize>(0)
+        .map_err(|e| Error::runtime(format!("lur.kv: decoding kind: {e}")))?;
+    if kind == 1 {
+        let n: i64 = row
+            .try_get::<i64, usize>(2)
+            .map_err(|e| Error::runtime(format!("lur.kv: decoding counter: {e}")))?;
+        Ok(n.to_string().into_bytes())
+    } else {
+        let b: Option<Vec<u8>> = row
+            .try_get::<Option<Vec<u8>>, usize>(1)
+            .map_err(|e| Error::runtime(format!("lur.kv: decoding value: {e}")))?;
+        Ok(b.unwrap_or_default())
+    }
+}
+
 /// Postgres backend: owns the pool. Cloning is a cheap `sqlx` pool handle clone.
 #[derive(Clone)]
 pub(crate) struct PgBackend {
@@ -167,6 +187,143 @@ impl PgBackend {
     /// at the cost that a conflict aborts with SQLSTATE 40001 — surfaced (usually
     /// at COMMIT) as a lur-voiced error the caller handles. No retry (a body may
     /// have external side effects).
+    pub(crate) async fn kv_get(&self, lua: &Lua, key: String) -> mlua::Result<Value> {
+        let row = sqlx::query("SELECT kind, bytes, num FROM lur_kv WHERE key = $1")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| Error::runtime(format!("lur.kv.get: {e}")))?;
+        match row {
+            None => Ok(Value::Nil),
+            Some(r) => Ok(Value::String(lua.create_string(kv_row_to_bytes(&r)?)?)),
+        }
+    }
+
+    pub(crate) async fn kv_set(&self, key: String, value: Vec<u8>) -> mlua::Result<()> {
+        sqlx::query(
+            "INSERT INTO lur_kv (key, kind, bytes, num) VALUES ($1, 0, $2, NULL) \
+             ON CONFLICT (key) DO UPDATE SET kind = 0, bytes = excluded.bytes, num = NULL",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Error::runtime(format!("lur.kv.set: {e}")))?;
+        Ok(())
+    }
+
+    pub(crate) async fn kv_delete(&self, key: String) -> mlua::Result<()> {
+        sqlx::query("DELETE FROM lur_kv WHERE key = $1")
+            .bind(key)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::runtime(format!("lur.kv.delete: {e}")))?;
+        Ok(())
+    }
+
+    pub(crate) async fn kv_add(&self, key: String, value: Vec<u8>) -> mlua::Result<bool> {
+        let res = sqlx::query(
+            "INSERT INTO lur_kv (key, kind, bytes) VALUES ($1, 0, $2) \
+             ON CONFLICT (key) DO NOTHING",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Error::runtime(format!("lur.kv.add: {e}")))?;
+        Ok(res.rows_affected() == 1)
+    }
+
+    pub(crate) async fn kv_cas(
+        &self,
+        key: String,
+        expected: Option<Vec<u8>>,
+        new: Option<Vec<u8>>,
+    ) -> mlua::Result<bool> {
+        let applied = match (expected, new) {
+            // expect absent, set new: insert iff absent
+            (None, Some(v)) => {
+                sqlx::query(
+                    "INSERT INTO lur_kv (key, kind, bytes) VALUES ($1, 0, $2) \
+                     ON CONFLICT (key) DO NOTHING",
+                )
+                .bind(key)
+                .bind(v)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
+                .rows_affected()
+                    == 1
+            }
+            // expect absent, want absent: succeeds iff already absent
+            (None, None) => {
+                let r = sqlx::query("SELECT 1 FROM lur_kv WHERE key = $1")
+                    .bind(key)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?;
+                r.is_none()
+            }
+            // expect bytes value, set new
+            (Some(e), Some(v)) => {
+                sqlx::query(
+                    "UPDATE lur_kv SET kind = 0, bytes = $1, num = NULL \
+                     WHERE key = $2 AND kind = 0 AND bytes = $3",
+                )
+                .bind(v)
+                .bind(key)
+                .bind(e)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
+                .rows_affected()
+                    == 1
+            }
+            // expect bytes value, delete
+            (Some(e), None) => {
+                sqlx::query("DELETE FROM lur_kv WHERE key = $1 AND kind = 0 AND bytes = $2")
+                    .bind(key)
+                    .bind(e)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
+                    .rows_affected()
+                    == 1
+            }
+        };
+        Ok(applied)
+    }
+
+    /// Atomically add `delta` to an integer counter, creating it at `delta` when
+    /// absent. The `WHERE kind = 1` guard on the conflict update returns no row
+    /// when the key holds opaque bytes — the "not an integer" case.
+    pub(crate) async fn kv_incr(
+        &self,
+        voice: &'static str,
+        key: String,
+        delta: i64,
+    ) -> mlua::Result<i64> {
+        let row = sqlx::query(
+            "INSERT INTO lur_kv (key, kind, num) VALUES ($1, 1, $2) \
+             ON CONFLICT (key) DO UPDATE SET num = lur_kv.num + excluded.num \
+             WHERE lur_kv.kind = 1 \
+             RETURNING num",
+        )
+        .bind(key)
+        .bind(delta)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Error::runtime(format!("{voice}: {e}")))?;
+        match row {
+            Some(r) => r
+                .try_get::<i64, usize>(0)
+                .map_err(|e| Error::runtime(format!("{voice}: {e}"))),
+            None => Err(Error::runtime(format!(
+                "{voice}: existing value is not an integer"
+            ))),
+        }
+    }
+
     pub(crate) async fn begin(&self) -> mlua::Result<PgTransaction> {
         let mut conn = self
             .pool
