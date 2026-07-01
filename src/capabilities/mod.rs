@@ -49,8 +49,8 @@ pub fn install(
     fs::install(lua, &lur, config.policy.clone())?;
     http::install(lua, &lur, config.policy.clone(), config.max_http_body)?;
     env::install(lua, &lur, config.policy.clone())?;
-    let sqlite = db::install(lua, &lur, config.db_path.clone())?;
-    kv::install(lua, &lur, &sqlite)?;
+    let shared = db::install(lua, &lur, config.db_path.clone())?;
+    kv::install(lua, &lur, &shared)?;
     async_ops::install(lua, &lur, config.max_concurrency)?;
     args::install(lua, &lur, &config.args)?;
     serve::install(lua, &lur, serve_registry)?;
