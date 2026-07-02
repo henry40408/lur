@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782925397220,
+  "lastUpdate": 1782953985017,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1385,6 +1385,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208278,
             "range": "± 7573",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8b70cd75029c8bbabdd876cc55cb2af78d5e53e4",
+          "message": "fix: roll back cancelled db/kv transactions synchronously (#59)\n\n* docs(spec): transaction cancellation safety design\n\nFix two cancellation-during-transform resource leaks (backlog items 0\nand 0b): the IN_KV_UPDATE thread-local poison and the pinned connection\nleft mid-transaction. Design C: rollback-on-drop guard + synchronous\nRAII flag guard, preserving the existing isolation choices.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* docs(plan): transaction cancellation safety implementation plan\n\nThree tasks: (1) IN_KV_UPDATE RAII guard; (2) SQLite rollback-on-drop\nguard + kv_update refactor; (3) Postgres mirror + docs. Each with\ndeterministic single-connection regression tests.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* fix(kv): restore IN_KV_UPDATE via RAII guard on cancellation\n\nA kv.update transform cancelled mid-await left IN_KV_UPDATE stuck true,\npoisoning later kv/db calls on the pooled VM. Replace the manual\nset(true)/set(false) with an RAII guard whose Drop restores the prior\nvalue on every exit path (return, error, cancellation).\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* fix(storage): roll back pinned SQLite tx on cancellation\n\nA db.tx body or kv.update transform cancelled mid-flight dropped the\npinned connection inside an open BEGIN IMMEDIATE, returning it to the\npool mid-transaction. Add a rollback-on-drop guard (Drop for\nSqliteTransaction + a PinnedTx wrapper for kv_update) that best-effort\nrolls back via a detached task so the connection returns clean.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* fix(storage): roll back pinned Postgres tx on cancellation\n\nMirror the SQLite cancellation-safety fix for Postgres, where a\ncancelled db.tx/kv.update left the connection idle-in-transaction holding\na SERIALIZABLE snapshot + row locks on the shared operator DB. Add\nDrop for PgTransaction + a PinnedTx wrapper for kv_update that detaches a\nbest-effort ROLLBACK. Adds a deterministic single-connection regression\ntest (in the pg-serial nextest group) and documents the invariant.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n* fix(db): roll back run_tx transaction synchronously on cancellation\n\ndb.tx wrapped its Transaction in an Arc cloned into the exec/query Lua\nclosures, so a cancelled handler only dropped run_tx's local ref and the\nrollback was deferred to Luau GC — on Postgres holding SERIALIZABLE locks\non the shared DB until an idle VM's next GC. Hand the closures Weak refs so\nrun_tx holds the only strong Arc; cancellation drops it and fires\nTransaction::Drop (the detached ROLLBACK) synchronously, matching kv.update.\n\nAdd a run_tx-path regression test driving the real Arc/closure structure\nwith a single-connection pool.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.8 <noreply@anthropic.com>",
+          "timestamp": "2026-07-02T08:58:18+08:00",
+          "tree_id": "07bed2b89ec1a887476dce024d7e6ac7ec9c856a",
+          "url": "https://github.com/henry40408/lur/commit/8b70cd75029c8bbabdd876cc55cb2af78d5e53e4"
+        },
+        "date": 1782953984722,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 294696,
+            "range": "± 2473",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5187,
+            "range": "± 442",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 209252,
+            "range": "± 9020",
             "unit": "ns/iter"
           }
         ]
