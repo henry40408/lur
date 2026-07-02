@@ -223,3 +223,23 @@ impl Shared {
         Ok(self.cell.get().expect("backend just set").clone())
     }
 }
+
+#[cfg(test)]
+impl Shared {
+    /// Wrap an already-open backend for tests that need a specific pool config.
+    pub(crate) fn from_backend(backend: Backend) -> Self {
+        let cell = Arc::new(OnceLock::new());
+        let _ = cell.set(backend);
+        Self {
+            cell,
+            path: Arc::new(None),
+        }
+    }
+}
+
+/// A `Backend` over a single-connection `SQLite` pool, for cancellation tests
+/// that must force connection reuse. Lives here so `db.rs` can reach it.
+#[cfg(test)]
+pub(crate) async fn sqlite_max1_backend(dir: &std::path::Path) -> Backend {
+    Backend::Sqlite(sqlite::max1_backend(dir).await)
+}

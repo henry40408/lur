@@ -624,6 +624,30 @@ impl Drop for SqliteTransaction {
     }
 }
 
+// A single-connection pool so a second acquire is forced onto the SAME
+// connection a cancelled transaction used — the only way to observe a
+// connection returned to the pool mid-transaction. Shared by the sqlite and
+// db.rs cancellation tests.
+#[cfg(test)]
+pub(super) async fn max1_backend(dir: &std::path::Path) -> SqliteBackend {
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+    let opts = SqliteConnectOptions::new()
+        .filename(dir.join("cancel.db"))
+        .create_if_missing(true)
+        .busy_timeout(std::time::Duration::from_millis(200))
+        .journal_mode(SqliteJournalMode::Wal);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE IF NOT EXISTS lur_kv (key TEXT PRIMARY KEY, value BLOB)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    SqliteBackend { pool }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,27 +702,6 @@ mod tests {
                 .unwrap_err();
             assert!(!is_busy(&syntax), "syntax error wrongly classified busy");
         });
-    }
-
-    // A single-connection pool so the second acquire is forced onto the SAME
-    // connection the cancelled transaction used — the only way to observe a
-    // connection returned to the pool mid-transaction.
-    async fn max1_backend(dir: &std::path::Path) -> SqliteBackend {
-        let opts = SqliteConnectOptions::new()
-            .filename(dir.join("cancel.db"))
-            .create_if_missing(true)
-            .busy_timeout(std::time::Duration::from_millis(200))
-            .journal_mode(SqliteJournalMode::Wal);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
-            .await
-            .unwrap();
-        sqlx::query("CREATE TABLE IF NOT EXISTS lur_kv (key TEXT PRIMARY KEY, value BLOB)")
-            .execute(&pool)
-            .await
-            .unwrap();
-        SqliteBackend { pool }
     }
 
     // Dropping an unfinished SqliteTransaction (as cancellation does) must roll
