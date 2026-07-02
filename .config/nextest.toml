@@ -2,5 +2,5 @@
 max-threads = 1
 
 [[profile.default.overrides]]
-filter = "binary_id(lur::pg)"
+filter = "binary_id(lur::pg) or test(pg_dropped_tx_rolls_back)"
 test-group = "pg-serial"
