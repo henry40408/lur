@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782953985017,
+  "lastUpdate": 1783256120965,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1427,6 +1427,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 209252,
             "range": "± 9020",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "829536c90a16702f4ce318336630010f85b00432",
+          "message": "refactor: adopt tracing for serve-mode runtime events (#62)\n\nServe daemon runtime events (listening, connection error, shutdown\ndrain, handler error, cron timeout, cron error) now emit through\ntracing instead of eprintln!, gated by RUST_LOG (fallback\nerror,lur=info) and selectable via --log-format/LOG_FORMAT\n(full/compact/pretty/json). One-shot mode and user-facing CLI errors\nare unchanged and keep eprintln!.",
+          "timestamp": "2026-07-05T20:53:13+08:00",
+          "tree_id": "1acdff78c239156e865a8b4837d392f7714dd162",
+          "url": "https://github.com/henry40408/lur/commit/829536c90a16702f4ce318336630010f85b00432"
+        },
+        "date": 1783256120671,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 261666,
+            "range": "± 3749",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5179,
+            "range": "± 88",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 206171,
+            "range": "± 6958",
             "unit": "ns/iter"
           }
         ]
