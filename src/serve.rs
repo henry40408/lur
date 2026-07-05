@@ -25,6 +25,7 @@ use hyper_util::rt::TokioIo;
 use mlua::{Function, IntoLuaMulti, Lua, MultiValue, Value};
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, SemaphorePermit};
+use tracing::{error, info, warn};
 
 use crate::capabilities::serve::Registry;
 use crate::runtime::{Deadline, RunError, RuntimeConfig, build_lua};
@@ -342,7 +343,7 @@ impl Server {
         let driver = server.clone();
         driver.rt.block_on(async move {
             let listener = TcpListener::bind(addr).await?;
-            eprintln!("lur: listening on http://{addr}");
+            info!("listening on http://{addr}");
 
             // Fan the single shutdown future out to the accept loop and every
             // cron loop via a watch channel.
@@ -382,7 +383,7 @@ impl Server {
                                 async move { server.handle(req).await }
                             });
                             if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
-                                eprintln!("lur: connection error: {e}");
+                                warn!("connection error: {e}");
                             }
                         });
                     }
@@ -391,7 +392,7 @@ impl Server {
 
             // Drain: wait for in-flight connections and jobs to finish, bounded
             // by the grace period.
-            eprintln!("lur: shutting down, draining for up to {}ms", grace.as_millis());
+            info!("shutting down, draining for up to {}ms", grace.as_millis());
             let deadline = Instant::now() + grace;
             while Arc::strong_count(&active) > 1 && Instant::now() < deadline {
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -431,8 +432,8 @@ impl Server {
         let response = match self.dispatch_async(&raw).await {
             Ok(r) => r,
             Err(e) => {
-                eprintln!(
-                    "lur: handler error:\n{}",
+                error!(
+                    "handler error:\n{}",
                     crate::diagnostics::render(
                         &self.source,
                         &self.chunk_name,
@@ -495,11 +496,11 @@ impl Server {
         match call_handler(vm, handler, (), timeout).await {
             Ok(_) => {}
             Err(CallError::TimedOut) => {
-                eprintln!("error: cron[{}]: timed out", job.name);
+                warn!("cron[{}]: timed out", job.name);
             }
             Err(CallError::Lua(e)) => {
-                eprintln!(
-                    "error: cron[{}]:\n{}",
+                error!(
+                    "cron[{}]:\n{}",
                     job.name,
                     crate::diagnostics::render(
                         &self.source,
