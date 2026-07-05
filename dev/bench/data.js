@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783256120965,
+  "lastUpdate": 1783257660955,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1469,6 +1469,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 206171,
             "range": "± 6958",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b3a4d81d03716dae1f238d4052ac95c03604e749",
+          "message": "chore(deps): bump taiki-e/install-action in the actions group (#60)\n\nBumps the actions group with 1 update: [taiki-e/install-action](https://github.com/taiki-e/install-action).\n\n\nUpdates `taiki-e/install-action` from 2.82.1 to 2.82.5\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/8b3c737da4b541bf0fb5a3e0488ff20535badac9...bffeee26d4db9be238a4ea78d8826604ebcb594d)\n\n---\nupdated-dependencies:\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.82.5\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: actions\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-05T21:19:27+08:00",
+          "tree_id": "bd7d4f8fdd805089469b383bc07df5e03f85e571",
+          "url": "https://github.com/henry40408/lur/commit/b3a4d81d03716dae1f238d4052ac95c03604e749"
+        },
+        "date": 1783257660071,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 299558,
+            "range": "± 8748",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5341,
+            "range": "± 96",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207526,
+            "range": "± 3391",
             "unit": "ns/iter"
           }
         ]
