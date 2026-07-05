@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783257660955,
+  "lastUpdate": 1783258133623,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1511,6 +1511,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207526,
             "range": "± 3391",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ed93c137a51d03b47108e99dba3a8218167e6ec9",
+          "message": "chore(deps): bump the cargo group across 1 directory with 5 updates (#61)\n\n* chore(deps): bump the cargo group across 1 directory with 5 updates\n\nBumps the cargo group with 5 updates in the / directory:\n\n| Package | From | To |\n| --- | --- | --- |\n| [getrandom](https://github.com/rust-random/getrandom) | `0.2.17` | `0.4.3` |\n| [hmac](https://github.com/RustCrypto/MACs) | `0.12.1` | `0.13.0` |\n| [md-5](https://github.com/RustCrypto/hashes) | `0.10.6` | `0.11.0` |\n| [sha1](https://github.com/RustCrypto/hashes) | `0.10.6` | `0.11.0` |\n| [sha2](https://github.com/RustCrypto/hashes) | `0.10.9` | `0.11.0` |\n\n\n\nUpdates `getrandom` from 0.2.17 to 0.4.3\n- [Changelog](https://github.com/rust-random/getrandom/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/rust-random/getrandom/compare/v0.2.17...v0.4.3)\n\nUpdates `hmac` from 0.12.1 to 0.13.0\n- [Commits](https://github.com/RustCrypto/MACs/compare/hmac-v0.12.1...hmac-v0.13.0)\n\nUpdates `md-5` from 0.10.6 to 0.11.0\n- [Commits](https://github.com/RustCrypto/hashes/compare/md-5-v0.10.6...md2-v0.11.0)\n\nUpdates `sha1` from 0.10.6 to 0.11.0\n- [Commits](https://github.com/RustCrypto/hashes/compare/sha1-v0.10.6...sha1-v0.11.0)\n\nUpdates `sha2` from 0.10.9 to 0.11.0\n- [Commits](https://github.com/RustCrypto/hashes/compare/sha2-v0.10.9...sha2-v0.11.0)\n\n---\nupdated-dependencies:\n- dependency-name: getrandom\n  dependency-version: 0.4.3\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo\n- dependency-name: hmac\n  dependency-version: 0.13.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo\n- dependency-name: md-5\n  dependency-version: 0.11.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo\n- dependency-name: sha1\n  dependency-version: 0.11.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo\n- dependency-name: sha2\n  dependency-version: 0.11.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\n\n* fix(crypto): adapt to getrandom 0.4 and RustCrypto 0.11/0.13 APIs\n\nThe dependency bump renames getrandom::getrandom to getrandom::fill and\nmoves Mac::new_from_slice to the KeyInit trait. Update the call sites and\nimports so the crate compiles against the new versions.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nCo-authored-by: Heng-Yi Wu <2316687+henry40408@users.noreply.github.com>\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-05T21:27:11+08:00",
+          "tree_id": "bd7158af59cf2271ef82e54b4d188dbcc9346b2c",
+          "url": "https://github.com/henry40408/lur/commit/ed93c137a51d03b47108e99dba3a8218167e6ec9"
+        },
+        "date": 1783258133213,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 295638,
+            "range": "± 3207",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5194,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 206353,
+            "range": "± 3729",
             "unit": "ns/iter"
           }
         ]
