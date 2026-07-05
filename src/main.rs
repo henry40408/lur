@@ -13,6 +13,44 @@ use lur::runtime::{
 };
 use lur::serve::Server;
 use lur::units::{parse_duration, parse_size};
+use tracing_subscriber::{
+    EnvFilter, Layer as _, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt,
+};
+
+/// Log output format for `lur serve`.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+enum LogFormat {
+    #[default]
+    Full,
+    Compact,
+    Pretty,
+    Json,
+}
+
+/// Install the global `tracing` subscriber for server mode. One-shot mode does
+/// not call this and keeps plain `eprintln!` for user-facing errors.
+fn init_tracing(format: LogFormat) {
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("error,lur=info"));
+    let span_events = env_filter.max_level_hint().map_or(FmtSpan::CLOSE, |l| {
+        if l >= tracing::Level::DEBUG {
+            FmtSpan::CLOSE
+        } else {
+            FmtSpan::NONE
+        }
+    });
+    let use_ansi = std::env::var_os("NO_COLOR").is_none();
+    let layer = tracing_subscriber::fmt::layer()
+        .with_span_events(span_events)
+        .with_ansi(use_ansi);
+    let layer = match format {
+        LogFormat::Full => layer.with_filter(env_filter).boxed(),
+        LogFormat::Compact => layer.compact().with_filter(env_filter).boxed(),
+        LogFormat::Pretty => layer.pretty().with_filter(env_filter).boxed(),
+        LogFormat::Json => layer.json().with_filter(env_filter).boxed(),
+    };
+    tracing_subscriber::registry().with(layer).init();
+}
 
 /// Capability and limit flags shared by one-shot and server mode.
 #[derive(clap::Args)]
@@ -131,6 +169,10 @@ struct ServeCli {
     /// Grace period for draining in-flight work on SIGTERM/SIGINT (e.g. `10s`).
     #[arg(long = "shutdown-grace", value_name = "DUR", default_value = "10s", value_parser = parse_duration)]
     shutdown_grace: Duration,
+
+    /// Log output format
+    #[arg(long, env = "LOG_FORMAT", default_value = "full")]
+    log_format: LogFormat,
 
     #[command(flatten)]
     common: CommonFlags,
@@ -257,6 +299,8 @@ fn main() -> ExitCode {
 
 /// Load `app.lua` and serve it forever (server mode).
 fn run_serve(cli: ServeCli) -> ExitCode {
+    init_tracing(cli.log_format);
+
     let source = match std::fs::read_to_string(&cli.app) {
         Ok(s) => s,
         Err(e) => {
