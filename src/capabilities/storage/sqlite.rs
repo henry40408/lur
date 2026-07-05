@@ -45,7 +45,7 @@ fn jitter_delay(attempt: u32) -> std::time::Duration {
     // `attempt.min(6)` keeps the shift well clear of overflow; base·2^6 = 320 > cap.
     let ceil = (BASE_MS << attempt.min(6)).clamp(1, CAP_MS);
     let mut buf = [0u8; 8];
-    getrandom::getrandom(&mut buf).expect("OS CSPRNG unavailable");
+    getrandom::fill(&mut buf).expect("OS CSPRNG unavailable");
     let ms = u64::from_le_bytes(buf) % ceil;
     std::time::Duration::from_millis(ms)
 }
