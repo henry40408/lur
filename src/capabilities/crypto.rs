@@ -4,7 +4,7 @@
 //! raw bytes in, raw digest bytes out. `lur.crypto.hex` bridges a raw digest to
 //! the lowercase hex string most signatures are compared against.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use md5::Md5;
 use mlua::{Error, Lua, Table, Value};
 use sha1::Sha1;
@@ -140,7 +140,7 @@ fn install_random(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
                 )));
             }
             let mut buf = vec![0u8; n as usize];
-            getrandom::getrandom(&mut buf)
+            getrandom::fill(&mut buf)
                 .map_err(|e| Error::runtime(format!("lur.crypto.random_bytes: {e}")))?;
             lua.create_string(&buf)
         })
