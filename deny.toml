@@ -9,9 +9,14 @@ all-features = true
 [advisories]
 version = 2
 # Deny crates with a known security advisory (RUSTSEC) or that have been yanked.
-# `ignore` holds advisory IDs we've reviewed and consciously accept (none yet).
+# `ignore` holds advisory IDs we've reviewed and consciously accept.
 yanked = "deny"
-ignore = []
+ignore = [
+    # crossbeam-epoch 0.9.18 via criterion (dev/bench only). Fixed in >=0.9.20,
+    # published 2026-07-06 — inside our 7-day dependency cooldown as of this
+    # commit. Temporary ignore; remove once the update lands (tracking: #64).
+    "RUSTSEC-2026-0204",
+]
 
 [licenses]
 version = 2
