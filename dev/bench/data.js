@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783258133623,
+  "lastUpdate": 1783845290614,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1553,6 +1553,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 206353,
             "range": "± 3729",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3a556a888ee109e1e77e4e09f1ddfef3c5f0d54b",
+          "message": "chore(deps): bump the actions group with 5 updates (#63)\n\n* chore(deps): bump the actions group with 5 updates\n\nBumps the actions group with 5 updates:\n\n| Package | From | To |\n| --- | --- | --- |\n| [taiki-e/install-action](https://github.com/taiki-e/install-action) | `2.82.5` | `2.82.8` |\n| [docker/setup-buildx-action](https://github.com/docker/setup-buildx-action) | `4.1.0` | `4.2.0` |\n| [docker/login-action](https://github.com/docker/login-action) | `4.2.0` | `4.4.0` |\n| [docker/metadata-action](https://github.com/docker/metadata-action) | `6.1.0` | `6.2.0` |\n| [docker/build-push-action](https://github.com/docker/build-push-action) | `7.2.0` | `7.3.0` |\n\n\nUpdates `taiki-e/install-action` from 2.82.5 to 2.82.8\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/bffeee26d4db9be238a4ea78d8826604ebcb594d...c93ccc03e00cd0e08e494f5fd058a6c55a6a1907)\n\nUpdates `docker/setup-buildx-action` from 4.1.0 to 4.2.0\n- [Release notes](https://github.com/docker/setup-buildx-action/releases)\n- [Commits](https://github.com/docker/setup-buildx-action/compare/d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5...bb05f3f5519dd87d3ba754cc423b652a5edd6d2c)\n\nUpdates `docker/login-action` from 4.2.0 to 4.4.0\n- [Release notes](https://github.com/docker/login-action/releases)\n- [Commits](https://github.com/docker/login-action/compare/650006c6eb7dba73a995cc03b0b2d7f5ca915bee...af1e73f918a031802d376d3c8bbc3fe56130a9b0)\n\nUpdates `docker/metadata-action` from 6.1.0 to 6.2.0\n- [Release notes](https://github.com/docker/metadata-action/releases)\n- [Commits](https://github.com/docker/metadata-action/compare/80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9...dc802804100637a589fabce1cb79ff13a1411302)\n\nUpdates `docker/build-push-action` from 7.2.0 to 7.3.0\n- [Release notes](https://github.com/docker/build-push-action/releases)\n- [Commits](https://github.com/docker/build-push-action/compare/f9f3042f7e2789586610d6e8b85c8f03e5195baf...53b7df96c91f9c12dcc8a07bcb9ccacbed38856a)\n\n---\nupdated-dependencies:\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.82.8\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: actions\n- dependency-name: docker/setup-buildx-action\n  dependency-version: 4.2.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: actions\n- dependency-name: docker/login-action\n  dependency-version: 4.4.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: actions\n- dependency-name: docker/metadata-action\n  dependency-version: 6.2.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: actions\n- dependency-name: docker/build-push-action\n  dependency-version: 7.3.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: actions\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\n\n* chore(deny): temporarily ignore RUSTSEC-2026-0204\n\ncrossbeam-epoch 0.9.18 (dev/bench-only, via criterion) trips\nRUSTSEC-2026-0204. The fix (>=0.9.20) was published 2026-07-06, still\ninside the 7-day dependency cooldown, so ignore the advisory to unblock\nCI. Tracked for removal once the update lands.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nCo-authored-by: Heng-Yi Wu <2316687+henry40408@users.noreply.github.com>\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-12T16:30:54+08:00",
+          "tree_id": "b732972ddcd2a9f7b7a46f5075a6a66b59ba4803",
+          "url": "https://github.com/henry40408/lur/commit/3a556a888ee109e1e77e4e09f1ddfef3c5f0d54b"
+        },
+        "date": 1783845290313,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 261443,
+            "range": "± 3139",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4993,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207189,
+            "range": "± 3441",
             "unit": "ns/iter"
           }
         ]
