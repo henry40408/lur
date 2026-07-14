@@ -12,10 +12,14 @@ version = 2
 # `ignore` holds advisory IDs we've reviewed and consciously accept.
 yanked = "deny"
 ignore = [
-    # crossbeam-epoch 0.9.18 via criterion (dev/bench only). Fixed in >=0.9.20,
-    # published 2026-07-06 — inside our 7-day dependency cooldown as of this
-    # commit. Temporary ignore; remove once the update lands (tracking: #64).
-    "RUSTSEC-2026-0204",
+    # spin 0.9.8 (and its whole back-catalog) was yanked 2026-07-13 for a UB fix
+    # in `Once::{force_into_inner, try_into_inner, into_inner_unchecked}`. We pull
+    # spin in only transitively via flume, which uses `spin::Mutex` and never the
+    # affected `Once` APIs, so the UB is unreachable for us. The crate spec
+    # silences the `yanked = "deny"` check. Fix is spin 0.9.9 (published
+    # 2026-07-13, inside our 7-day cooldown); drop this once the cooldown clears.
+    # Tracked in issue #66.
+    "spin@0.9.8",
 ]
 
 [licenses]
