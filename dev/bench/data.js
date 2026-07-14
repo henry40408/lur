@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783845290614,
+  "lastUpdate": 1784016495183,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1595,6 +1595,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207189,
             "range": "± 3441",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2c28e97306952fd93a5a853cd302ffcbda93f4ac",
+          "message": "chore(deps): bump crossbeam-epoch past RUSTSEC-2026-0204 cooldown (#65)\n\n* chore(deps): bump crossbeam-epoch past RUSTSEC-2026-0204 cooldown\n\ncrossbeam-epoch 0.9.18 -> 0.9.20 (pulled transitively via criterion for\nbenches). The fix for RUSTSEC-2026-0204 landed in 0.9.20, published\n2026-07-06, which is now past our 7-day dependency cooldown.\n\nDrop the temporary RUSTSEC-2026-0204 entry from the deny.toml advisories\nignore list (and its explanatory comment) now that the advisory is\nresolved by the bump.\n\nCloses #64.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* chore(deny): ignore yanked spin@0.9.8 until cooldown clears\n\nspin 0.9.8's back-catalog was yanked 2026-07-13 for a UB fix in Once's\ninto_inner family. We only reach spin via Mutex (flume/multer), so the UB\nis unreachable; this silences the yanked = \"deny\" gate until spin 0.9.9\nages out of the 7-day cooldown. Tracked in #66.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-14T16:06:36+08:00",
+          "tree_id": "88b5dfc5303df938ea15b5054d61a5432adcafd5",
+          "url": "https://github.com/henry40408/lur/commit/2c28e97306952fd93a5a853cd302ffcbda93f4ac"
+        },
+        "date": 1784016494391,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 294955,
+            "range": "± 16419",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5100,
+            "range": "± 187",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 206408,
+            "range": "± 4894",
             "unit": "ns/iter"
           }
         ]
