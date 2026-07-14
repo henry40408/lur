@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784016495183,
+  "lastUpdate": 1784043512941,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1637,6 +1637,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 206408,
             "range": "± 4894",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c8b7469f4c69f473d743381352ba8249db05458e",
+          "message": "chore: default --bind to all interfaces (0.0.0.0:8080) (#67)\n\nChange the default listener address from 127.0.0.1:8080 to 0.0.0.0:8080\nso a reverse proxy in a separate container can reach the server\n(loopback is not reachable across container network namespaces),\naligning with the sibling services. The port is unchanged and --bind\nremains overridable. README is updated to match.\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-14T23:36:52+08:00",
+          "tree_id": "e36df156e07bfa4ec9984af0b888bfb12e5f1f80",
+          "url": "https://github.com/henry40408/lur/commit/c8b7469f4c69f473d743381352ba8249db05458e"
+        },
+        "date": 1784043512113,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 238617,
+            "range": "± 4141",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4507,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 441579,
+            "range": "± 4179",
             "unit": "ns/iter"
           }
         ]
