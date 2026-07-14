@@ -148,7 +148,7 @@ struct ServeCli {
     app: PathBuf,
 
     /// Address to bind the HTTP listener to.
-    #[arg(long, value_name = "ADDR", default_value = "127.0.0.1:8080")]
+    #[arg(long, value_name = "ADDR", default_value = "0.0.0.0:8080")]
     bind: SocketAddr,
 
     /// Number of pre-warmed VMs in the pool — the cap on concurrent requests.
