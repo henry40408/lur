@@ -51,4 +51,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # ---- runtime: minimal static image (CA certs + nonroot, no shell) -----------
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/lur /usr/local/bin/lur
+
+# `lur serve` binds the app default (loopback). In a container the listener must
+# bind all interfaces for a reverse proxy to reach it; set it via ENV so it stays
+# overridable at runtime with `-e BIND=...` or a compose `environment:` entry.
+ENV BIND=0.0.0.0:8080
+EXPOSE 8080
+
 ENTRYPOINT ["/usr/local/bin/lur"]

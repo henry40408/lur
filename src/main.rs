@@ -147,8 +147,15 @@ struct ServeCli {
     /// Path to the server application script.
     app: PathBuf,
 
-    /// Address to bind the HTTP listener to.
-    #[arg(long, value_name = "ADDR", default_value = "0.0.0.0:8080")]
+    /// Address to bind the HTTP listener to. Defaults to loopback so a
+    /// bare-metal run is not exposed on all interfaces without opting in; the
+    /// container image sets `BIND=0.0.0.0:8080` so a reverse proxy can reach it.
+    #[arg(
+        long,
+        value_name = "ADDR",
+        env = "BIND",
+        default_value = "127.0.0.1:8080"
+    )]
     bind: SocketAddr,
 
     /// Number of pre-warmed VMs in the pool — the cap on concurrent requests.
