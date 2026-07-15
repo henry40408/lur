@@ -95,7 +95,7 @@ end)
 ```
 
 ```sh
-lur serve app.lua --bind 0.0.0.0:8080
+lur serve app.lua
 ```
 
 ## The sandbox
@@ -156,7 +156,7 @@ lur serve <app.lua> [FLAGS]            # server
 
 | Flag | Value | Default | Description |
 | --- | --- | --- | --- |
-| `--bind` | ADDR | `0.0.0.0:8080` | Listener address. |
+| `--bind` | ADDR | `127.0.0.1:8080` | Listener address (env: `BIND`). Defaults to loopback so a bare-metal run is not exposed on all interfaces without opting in; the container image sets `BIND=0.0.0.0:8080` so a reverse proxy can reach it. |
 | `--pool-size` | N | CPU count | Pre-warmed VMs; caps concurrent requests. |
 | `--timeout` | DURATION | none | Per-request limit; on timeout the request gets `503`. |
 | `--max-body` | SIZE | none | Max request body; a larger request gets `413`. |
