@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784043512941,
+  "lastUpdate": 1784079821455,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1679,6 +1679,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 441579,
             "range": "± 4179",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "46f0d5c7340f77a57c1e35c7c9990849a89377dd",
+          "message": "fix: default serve --bind to loopback; read BIND env (#68)\n\n`lur serve` bound 0.0.0.0:8080 by compile-time default, so a bare-metal run\nwith nothing set listened on all interfaces — exposed without a firewall.\nDefault to loopback instead.\n\nAlso wire the --bind arg to the BIND env var (it was CLI-only), and set\nBIND=0.0.0.0:8080 in the container image so the server is reachable by a\nreverse proxy there while staying overridable via -e / compose environment.\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-15T09:41:48+08:00",
+          "tree_id": "67c44c9258be680431aa3db1a4e00e9cd3d9119b",
+          "url": "https://github.com/henry40408/lur/commit/46f0d5c7340f77a57c1e35c7c9990849a89377dd"
+        },
+        "date": 1784079820979,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 296119,
+            "range": "± 5619",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5183,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 213310,
+            "range": "± 13462",
             "unit": "ns/iter"
           }
         ]
