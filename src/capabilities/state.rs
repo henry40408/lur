@@ -174,7 +174,7 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
     let s = store.clone();
     let get = lua
         .create_function(move |lua, key: Value| {
-            let key: mlua::String = argcheck::arg(lua, key, "lur.state.get", 1, "string")?;
+            let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.get", 1, "string")?;
             reject_reentry()?;
             to_lua(lua, s.get(&key.as_bytes()))
         })
@@ -184,7 +184,7 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
     let s = store.clone();
     let set = lua
         .create_function(move |lua, (key, value): (Value, Value)| {
-            let key: mlua::String = argcheck::arg(lua, key, "lur.state.set", 1, "string")?;
+            let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.set", 1, "string")?;
             reject_reentry()?;
             s.set(key.as_bytes().to_vec(), from_lua(&value)?);
             Ok(())
@@ -195,7 +195,7 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
     let s = store.clone();
     let incr = lua
         .create_function(move |lua, (key, n): (Value, Value)| {
-            let key: mlua::String = argcheck::arg(lua, key, "lur.state.incr", 1, "string")?;
+            let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.incr", 1, "string")?;
             let n = argcheck::integer_arg(n, "lur.state.incr", 2)?;
             reject_reentry()?;
             s.incr(key.as_bytes().to_vec(), n.unwrap_or(1))
@@ -214,7 +214,7 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
     let s = store.clone();
     let decr = lua
         .create_function(move |lua, (key, n): (Value, Value)| {
-            let key: mlua::String = argcheck::arg(lua, key, "lur.state.decr", 1, "string")?;
+            let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.decr", 1, "string")?;
             let n = argcheck::integer_arg(n, "lur.state.decr", 2)?;
             reject_reentry()?;
             let delta = n.unwrap_or(1).checked_neg().ok_or_else(|| {
@@ -235,7 +235,7 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
     let s = store.clone();
     let update = lua
         .create_function(move |lua, (key, func): (Value, Value)| {
-            let key: mlua::String = argcheck::arg(lua, key, "lur.state.update", 1, "string")?;
+            let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.update", 1, "string")?;
             let func: mlua::Function = argcheck::arg(lua, func, "lur.state.update", 2, "function")?;
             reject_reentry()?;
             let key = key.as_bytes().to_vec();
@@ -261,7 +261,7 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
     let s = store.clone();
     let cas = lua
         .create_function(move |lua, (key, expected, new): (Value, Value, Value)| {
-            let key: mlua::String = argcheck::arg(lua, key, "lur.state.cas", 1, "string")?;
+            let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.cas", 1, "string")?;
             reject_reentry()?;
             let expected_prim = from_lua(&expected)?;
             let new_prim = from_lua(&new)?;
@@ -273,7 +273,7 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
     let s = store.clone();
     let add = lua
         .create_function(move |lua, (key, value): (Value, Value)| {
-            let key: mlua::String = argcheck::arg(lua, key, "lur.state.add", 1, "string")?;
+            let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.add", 1, "string")?;
             reject_reentry()?;
             let new_prim = from_lua(&value)?;
             Ok(s.cas_value(&key.as_bytes(), &None, new_prim))

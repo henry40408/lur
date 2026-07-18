@@ -52,7 +52,7 @@ fn install_clocks(lua: &Lua, time: &Table) -> Result<(), RunError> {
 fn install_parsers(lua: &Lua, time: &Table) -> Result<(), RunError> {
     let parse_rfc3339 = lua
         .create_function(|lua, s: Value| {
-            let s: mlua::String = argcheck::arg(lua, s, "lur.time.parse_rfc3339", 1, "string")?;
+            let s: mlua::LuaString = argcheck::arg(lua, s, "lur.time.parse_rfc3339", 1, "string")?;
             let s = s
                 .to_str()
                 .map_err(|e| Error::runtime(format!("lur.time.parse_rfc3339: {e}")))?;
@@ -66,7 +66,8 @@ fn install_parsers(lua: &Lua, time: &Table) -> Result<(), RunError> {
 
     let parse_http_date = lua
         .create_function(|lua, s: Value| {
-            let s: mlua::String = argcheck::arg(lua, s, "lur.time.parse_http_date", 1, "string")?;
+            let s: mlua::LuaString =
+                argcheck::arg(lua, s, "lur.time.parse_http_date", 1, "string")?;
             let s = s
                 .to_str()
                 .map_err(|e| Error::runtime(format!("lur.time.parse_http_date: {e}")))?;

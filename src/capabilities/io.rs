@@ -103,7 +103,7 @@ fn install_stdout(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 
     let write = lua
         .create_function(|lua, data: Value| {
-            let data: mlua::String = argcheck::arg(lua, data, "lur.stdout.write", 1, "string")?;
+            let data: mlua::LuaString = argcheck::arg(lua, data, "lur.stdout.write", 1, "string")?;
             std::io::stdout()
                 .lock()
                 .write_all(&data.as_bytes())

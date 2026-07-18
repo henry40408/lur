@@ -59,7 +59,7 @@ mod tests {
     #[test]
     fn good_value_converts() {
         let lua = Lua::new();
-        let s: mlua::String = arg(&lua, Value::Integer(5), "lur.x.y", 1, "string").unwrap();
+        let s: mlua::LuaString = arg(&lua, Value::Integer(5), "lur.x.y", 1, "string").unwrap();
         // mlua coerces a number to a string — behavior preserved.
         assert_eq!(s.to_str().unwrap(), "5");
     }
@@ -68,7 +68,7 @@ mod tests {
     fn wrong_type_raises_lur_voiced_message() {
         let lua = Lua::new();
         let tbl = Value::Table(lua.create_table().unwrap());
-        let err = arg::<mlua::String>(&lua, tbl, "lur.crypto.sha256", 1, "string").unwrap_err();
+        let err = arg::<mlua::LuaString>(&lua, tbl, "lur.crypto.sha256", 1, "string").unwrap_err();
         assert_eq!(
             err.to_string(),
             "runtime error: lur.crypto.sha256: argument #1 must be string, got table"

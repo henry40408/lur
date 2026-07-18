@@ -65,7 +65,7 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
     {
         let shared = shared.clone();
         let set = lua
-            .create_async_function(move |_, (key, value): (String, mlua::String)| {
+            .create_async_function(move |_, (key, value): (String, mlua::LuaString)| {
                 let shared = shared.clone();
                 async move {
                     reject_kv_reentry("lur.kv.set")?;
@@ -93,7 +93,7 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
     {
         let shared = shared.clone();
         let add = lua
-            .create_async_function(move |_, (key, value): (String, mlua::String)| {
+            .create_async_function(move |_, (key, value): (String, mlua::LuaString)| {
                 let shared = shared.clone();
                 async move {
                     reject_kv_reentry("lur.kv.add")?;
@@ -111,8 +111,8 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
                 move |_,
                       (key, expected, new): (
                     String,
-                    Option<mlua::String>,
-                    Option<mlua::String>,
+                    Option<mlua::LuaString>,
+                    Option<mlua::LuaString>,
                 )| {
                     let shared = shared.clone();
                     async move {

@@ -20,7 +20,7 @@ pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunErr
     let read_policy = Arc::clone(&policy);
     let read = lua
         .create_function(move |lua, path: Value| {
-            let path: mlua::String = argcheck::arg(lua, path, "lur.fs.read", 1, "string")?;
+            let path: mlua::LuaString = argcheck::arg(lua, path, "lur.fs.read", 1, "string")?;
             let requested = bytes_to_path(&path.as_bytes());
             let resolved = read_policy
                 .allows_read(&requested)
@@ -35,8 +35,8 @@ pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunErr
     let write_policy = Arc::clone(&policy);
     let write = lua
         .create_function(move |lua, (path, data): (Value, Value)| {
-            let path: mlua::String = argcheck::arg(lua, path, "lur.fs.write", 1, "string")?;
-            let data: mlua::String = argcheck::arg(lua, data, "lur.fs.write", 2, "string")?;
+            let path: mlua::LuaString = argcheck::arg(lua, path, "lur.fs.write", 1, "string")?;
+            let data: mlua::LuaString = argcheck::arg(lua, data, "lur.fs.write", 2, "string")?;
             let requested = bytes_to_path(&path.as_bytes());
             let resolved = write_policy
                 .allows_write(&requested)

@@ -64,7 +64,8 @@ pub(crate) fn cookie_pairs(header: &[u8]) -> Vec<(&[u8], &[u8])> {
 fn install_parse(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
     let parse = lua
         .create_function(|lua, header: Value| {
-            let header: mlua::String = argcheck::arg(lua, header, "lur.cookie.parse", 1, "string")?;
+            let header: mlua::LuaString =
+                argcheck::arg(lua, header, "lur.cookie.parse", 1, "string")?;
             let out = lua.create_table()?;
             let bytes = header.as_bytes();
             // Later duplicate overwrites earlier: plain table assignment.
@@ -155,8 +156,9 @@ fn canon_same_site(v: &[u8]) -> Result<&'static str, Error> {
 fn install_serialize(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
     let serialize = lua
         .create_function(|lua, (name, value, opts): (Value, Value, Option<Table>)| {
-            let name: mlua::String = argcheck::arg(lua, name, "lur.cookie.serialize", 1, "string")?;
-            let value: mlua::String =
+            let name: mlua::LuaString =
+                argcheck::arg(lua, name, "lur.cookie.serialize", 1, "string")?;
+            let value: mlua::LuaString =
                 argcheck::arg(lua, value, "lur.cookie.serialize", 2, "string")?;
             let name = name.as_bytes();
             let value = value.as_bytes();
@@ -169,13 +171,13 @@ fn install_serialize(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
             out.extend_from_slice(&value);
 
             if let Some(opts) = opts {
-                if let Some(domain) = opts.get::<Option<mlua::String>>("domain")? {
+                if let Some(domain) = opts.get::<Option<mlua::LuaString>>("domain")? {
                     let domain = domain.as_bytes();
                     reject_bad_bytes("domain", &domain)?;
                     out.extend_from_slice(b"; Domain=");
                     out.extend_from_slice(&domain);
                 }
-                if let Some(path) = opts.get::<Option<mlua::String>>("path")? {
+                if let Some(path) = opts.get::<Option<mlua::LuaString>>("path")? {
                     let path = path.as_bytes();
                     reject_bad_bytes("path", &path)?;
                     out.extend_from_slice(b"; Path=");
@@ -200,14 +202,14 @@ fn install_serialize(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
                     };
                     out.extend_from_slice(format!("; Max-Age={n}").as_bytes());
                 }
-                if let Some(expires) = opts.get::<Option<mlua::String>>("expires")? {
+                if let Some(expires) = opts.get::<Option<mlua::LuaString>>("expires")? {
                     let expires = expires.as_bytes();
                     reject_bad_bytes("expires", &expires)?;
                     out.extend_from_slice(b"; Expires=");
                     out.extend_from_slice(&expires);
                 }
 
-                let same_site = match opts.get::<Option<mlua::String>>("same_site")? {
+                let same_site = match opts.get::<Option<mlua::LuaString>>("same_site")? {
                     Some(s) => Some(canon_same_site(&s.as_bytes())?),
                     None => None,
                 };
