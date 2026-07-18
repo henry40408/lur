@@ -952,7 +952,7 @@ fn response_from(values: MultiValue) -> Result<Response, RunError> {
         .map_err(RunError::Script)?
         .unwrap_or(200) as u16;
     let body = table
-        .get::<Option<mlua::String>>("body")
+        .get::<Option<mlua::LuaString>>("body")
         .map_err(RunError::Script)?
         .map(|s| s.as_bytes().to_vec())
         .unwrap_or_default();

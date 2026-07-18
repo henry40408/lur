@@ -195,7 +195,7 @@ fn apply_opts(
     opts: &Table,
 ) -> mlua::Result<reqwest::RequestBuilder> {
     if let Some(headers) = opts.get::<Option<Table>>("headers")? {
-        for pair in headers.pairs::<String, mlua::String>() {
+        for pair in headers.pairs::<String, mlua::LuaString>() {
             let (k, v) = pair?;
             req = req.header(k.as_str(), v.as_bytes().as_ref());
         }
@@ -209,7 +209,7 @@ fn apply_opts(
         req = req.query(&pairs);
     }
 
-    let body = opts.get::<Option<mlua::String>>("body")?;
+    let body = opts.get::<Option<mlua::LuaString>>("body")?;
     let json_val = opts.get::<Option<Value>>("json")?;
     match (body, json_val) {
         (Some(_), Some(_)) => {

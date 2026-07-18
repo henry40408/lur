@@ -25,7 +25,7 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 
     let decode = lua
         .create_function(|lua, text: Value| {
-            let text: mlua::String = argcheck::arg(lua, text, "lur.json.decode", 1, "string")?;
+            let text: mlua::LuaString = argcheck::arg(lua, text, "lur.json.decode", 1, "string")?;
             let parsed: Json = serde_json::from_slice(&text.as_bytes())
                 .map_err(|e| Error::runtime(e.to_string()))?;
             json_to_lua(lua, &parsed)

@@ -35,7 +35,7 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 /// One hashing function: raw bytes in, raw digest bytes out.
 fn hash_fn<D: Digest>(lua: &Lua, fname: &'static str) -> Result<mlua::Function, RunError> {
     lua.create_function(move |lua, data: Value| {
-        let data: mlua::String = argcheck::arg(lua, data, fname, 1, "string")?;
+        let data: mlua::LuaString = argcheck::arg(lua, data, fname, 1, "string")?;
         lua.create_string(D::digest(data.as_bytes()).as_slice())
     })
     .map_err(RunError::Init)
@@ -62,8 +62,10 @@ fn install_hashes(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
 fn install_hmac(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
     let hmac_sha256 = lua
         .create_function(|lua, (key, msg): (Value, Value)| {
-            let key: mlua::String = argcheck::arg(lua, key, "lur.crypto.hmac_sha256", 1, "string")?;
-            let msg: mlua::String = argcheck::arg(lua, msg, "lur.crypto.hmac_sha256", 2, "string")?;
+            let key: mlua::LuaString =
+                argcheck::arg(lua, key, "lur.crypto.hmac_sha256", 1, "string")?;
+            let msg: mlua::LuaString =
+                argcheck::arg(lua, msg, "lur.crypto.hmac_sha256", 2, "string")?;
             let mut mac = Hmac::<Sha256>::new_from_slice(&key.as_bytes())
                 .map_err(|e| Error::runtime(format!("lur.crypto.hmac_sha256: {e}")))?;
             mac.update(&msg.as_bytes());
@@ -76,8 +78,10 @@ fn install_hmac(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
 
     let hmac_sha512 = lua
         .create_function(|lua, (key, msg): (Value, Value)| {
-            let key: mlua::String = argcheck::arg(lua, key, "lur.crypto.hmac_sha512", 1, "string")?;
-            let msg: mlua::String = argcheck::arg(lua, msg, "lur.crypto.hmac_sha512", 2, "string")?;
+            let key: mlua::LuaString =
+                argcheck::arg(lua, key, "lur.crypto.hmac_sha512", 1, "string")?;
+            let msg: mlua::LuaString =
+                argcheck::arg(lua, msg, "lur.crypto.hmac_sha512", 2, "string")?;
             let mut mac = Hmac::<Sha512>::new_from_slice(&key.as_bytes())
                 .map_err(|e| Error::runtime(format!("lur.crypto.hmac_sha512: {e}")))?;
             mac.update(&msg.as_bytes());
@@ -90,8 +94,10 @@ fn install_hmac(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
 
     let hmac_sha1 = lua
         .create_function(|lua, (key, msg): (Value, Value)| {
-            let key: mlua::String = argcheck::arg(lua, key, "lur.crypto.hmac_sha1", 1, "string")?;
-            let msg: mlua::String = argcheck::arg(lua, msg, "lur.crypto.hmac_sha1", 2, "string")?;
+            let key: mlua::LuaString =
+                argcheck::arg(lua, key, "lur.crypto.hmac_sha1", 1, "string")?;
+            let msg: mlua::LuaString =
+                argcheck::arg(lua, msg, "lur.crypto.hmac_sha1", 2, "string")?;
             let mut mac = Hmac::<Sha1>::new_from_slice(&key.as_bytes())
                 .map_err(|e| Error::runtime(format!("lur.crypto.hmac_sha1: {e}")))?;
             mac.update(&msg.as_bytes());
@@ -107,8 +113,8 @@ fn install_hmac(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
 fn install_constant_eq(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
     let constant_eq = lua
         .create_function(|lua, (a, b): (Value, Value)| {
-            let a: mlua::String = argcheck::arg(lua, a, "lur.crypto.constant_eq", 1, "string")?;
-            let b: mlua::String = argcheck::arg(lua, b, "lur.crypto.constant_eq", 2, "string")?;
+            let a: mlua::LuaString = argcheck::arg(lua, a, "lur.crypto.constant_eq", 1, "string")?;
+            let b: mlua::LuaString = argcheck::arg(lua, b, "lur.crypto.constant_eq", 2, "string")?;
             let a = a.as_bytes();
             let b = b.as_bytes();
             // Length is not secret; bail before the constant-time content compare.
@@ -157,7 +163,7 @@ fn install_hex(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
 
     let encode = lua
         .create_function(|lua, data: Value| {
-            let data: mlua::String =
+            let data: mlua::LuaString =
                 argcheck::arg(lua, data, "lur.crypto.hex.encode", 1, "string")?;
             lua.create_string(hex::encode(data.as_bytes()))
         })
@@ -166,7 +172,7 @@ fn install_hex(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
 
     let decode = lua
         .create_function(|lua, text: Value| {
-            let text: mlua::String =
+            let text: mlua::LuaString =
                 argcheck::arg(lua, text, "lur.crypto.hex.decode", 1, "string")?;
             let bytes = hex::decode(text.as_bytes())
                 .map_err(|e| Error::runtime(format!("lur.crypto.hex.decode: {e}")))?;
