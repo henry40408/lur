@@ -580,23 +580,18 @@ mod tests {
         let Ok(opts) = PgConnectOptions::from_str(&url) else {
             return None;
         };
-        #[allow(clippy::single_match_else)]
-        let pool = match PgPoolOptions::new()
+        let Ok(pool) = PgPoolOptions::new()
             .max_connections(1)
             .acquire_timeout(Duration::from_secs(2))
             .connect_with(opts)
             .await
-        {
-            Ok(p) => p,
-            Err(_) => {
-                if std::env::var("CI").is_ok() {
-                    panic!("CI: Postgres unreachable but CI must provision it");
-                }
-                eprintln!(
-                    "skipping PG test: Postgres unreachable (start it: docker compose up -d)"
-                );
-                return None;
-            }
+        else {
+            assert!(
+                std::env::var("CI").is_err(),
+                "CI: Postgres unreachable but CI must provision it"
+            );
+            eprintln!("skipping PG test: Postgres unreachable (start it: docker compose up -d)");
+            return None;
         };
         Some(PgBackend { pool })
     }

@@ -14,9 +14,10 @@ fn pg_runtime() -> Option<Runtime> {
     // Cheap reachability probe: open a TCP connection to host:port.
     let reachable = reachable(&url);
     if !reachable {
-        if std::env::var("CI").is_ok() {
-            panic!("CI: Postgres at {url} is unreachable but CI must provision it");
-        }
+        assert!(
+            std::env::var("CI").is_err(),
+            "CI: Postgres at {url} is unreachable but CI must provision it"
+        );
         eprintln!("skipping PG test: {url} unreachable (start it: docker compose up -d)");
         return None;
     }

@@ -145,6 +145,10 @@ fn install_random(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
                     "lur.crypto.random_bytes: n must be <= {MAX_RANDOM_BYTES}"
                 )));
             }
+            #[allow(
+                clippy::cast_sign_loss,
+                reason = "n is checked `> 0` and `<= MAX_RANDOM_BYTES` above"
+            )]
             let mut buf = vec![0u8; n as usize];
             getrandom::fill(&mut buf)
                 .map_err(|e| Error::runtime(format!("lur.crypto.random_bytes: {e}")))?;

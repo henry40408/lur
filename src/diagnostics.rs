@@ -60,18 +60,19 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> S
 
     let p = Palette::new(color);
     let (g, e, r) = (p.gutter, p.err, p.reset);
+    use std::fmt::Write as _;
     let mut out = String::new();
-    out.push_str(&format!("{e}error:{r} {message}\n"));
+    let _ = writeln!(out, "{e}error:{r} {message}");
     let pos = match col {
         Some(c) => format!("{chunk_name}:{line}:{c}"),
         None => format!("{chunk_name}:{line}"),
     };
-    out.push_str(&format!(" {g}-->{r} {pos}\n"));
+    let _ = writeln!(out, " {g}-->{r} {pos}");
 
     let gutter = line.to_string();
     let pad = " ".repeat(gutter.len());
-    out.push_str(&format!("{g}{pad} |{r}\n"));
-    out.push_str(&format!("{g}{gutter} |{r} {src_line}\n"));
+    let _ = writeln!(out, "{g}{pad} |{r}");
+    let _ = writeln!(out, "{g}{gutter} |{r} {src_line}");
     // Caret: under `col` when known, else under the first non-whitespace char.
     // The pad mirrors the source prefix character-for-character — tabs stay tabs
     // so the caret lands at the same terminal tab stop; everything else becomes a
@@ -87,7 +88,7 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> S
         .chars()
         .map(|ch| if ch == '\t' { '\t' } else { ' ' })
         .collect();
-    out.push_str(&format!("{g}{pad} |{r} {caret_pad}{e}^{r}\n"));
+    let _ = writeln!(out, "{g}{pad} |{r} {caret_pad}{e}^{r}");
 
     if let Some(tb) = traceback {
         let kept: Vec<&str> = tb
