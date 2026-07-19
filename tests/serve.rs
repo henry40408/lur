@@ -83,6 +83,39 @@ fn status_defaults_to_200() {
 }
 
 #[test]
+fn negative_status_is_rejected_not_wrapped() {
+    // -1 would silently `as u16`-wrap to 65535 without validation.
+    let s = serve("lur.serve.http('GET', '/x', function(req) return { status = -1 } end)");
+    let err = s
+        .dispatch("GET", "/x", b"")
+        .expect_err("negative status must error");
+    assert!(
+        err.to_string().contains("invalid HTTP status"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn out_of_range_status_is_rejected_not_truncated() {
+    // 65736 would `as u16`-truncate to 200 (65736 - 65536) without validation.
+    let s = serve("lur.serve.http('GET', '/x', function(req) return { status = 65736 } end)");
+    let err = s
+        .dispatch("GET", "/x", b"")
+        .expect_err("out-of-range status must error");
+    assert!(
+        err.to_string().contains("invalid HTTP status"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn valid_custom_status_is_preserved() {
+    let s = serve("lur.serve.http('GET', '/x', function(req) return { status = 404 } end)");
+    let resp = s.dispatch("GET", "/x", b"").expect("dispatch ok");
+    assert_eq!(resp.status, 404);
+}
+
+#[test]
 fn handler_receives_method_path_and_body() {
     let s = serve(
         "lur.serve.http('POST', '/echo', function(req)\n\

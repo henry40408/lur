@@ -936,7 +936,8 @@ fn hex(c: u8) -> Option<u8> {
 }
 
 /// Turn a handler's return values into a [`Response`]: the first value must be a
-/// table; `status` defaults to 200 and `body` to empty.
+/// table; `status` defaults to 200 (and must be a valid HTTP status in
+/// `100..=599`) and `body` to empty.
 fn response_from(values: MultiValue) -> Result<Response, RunError> {
     let table = match values.into_iter().next() {
         Some(Value::Table(t)) => t,
@@ -947,10 +948,21 @@ fn response_from(values: MultiValue) -> Result<Response, RunError> {
         }
     };
 
-    let status = table
+    // Validate rather than `as u16`-truncate: an out-of-range `status` (negative
+    // or > u16, or outside the HTTP range) would otherwise silently wrap to a
+    // bogus code on the wire (e.g. -1 → 65535, 65736 → 200).
+    let status_raw = table
         .get::<Option<i64>>("status")
         .map_err(RunError::Script)?
-        .unwrap_or(200) as u16;
+        .unwrap_or(200);
+    let status = u16::try_from(status_raw)
+        .ok()
+        .filter(|s| (100..=599).contains(s))
+        .ok_or_else(|| {
+            RunError::Script(mlua::Error::RuntimeError(format!(
+                "handler returned invalid HTTP status {status_raw}; must be in 100..=599"
+            )))
+        })?;
     let body = table
         .get::<Option<mlua::LuaString>>("body")
         .map_err(RunError::Script)?

@@ -308,7 +308,8 @@ Registration happens once at load time; the registered handlers then serve traff
   contain `:name` segments (e.g. `/users/:id`) that bind into `req.params`; a more
   specific route (more static segments, then a concrete method over `ANY`) wins
   regardless of registration order. The `handler(req)` returns `{ status?, body? }`
-  (`status` defaults to `200`, `body` to empty).
+  (`status` defaults to `200` and must be a valid HTTP status in `100..=599`,
+  `body` to empty).
 - **`lur.serve.cron(spec, handler, opts?)`** — `spec` is a 6-field cron expression
   (`sec min hour dom mon dow`). `opts` may set `name`, `overlap` (default `false` =
   single-flight, skip a tick if the previous run is still going), and `timeout` (ms).
