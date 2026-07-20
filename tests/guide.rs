@@ -30,9 +30,10 @@ fn lua_blocks(md: &str) -> Vec<Block> {
             continue;
         }
         // Catch typos like ```Lua, ```lua title=x before they silently escape the suite.
-        if info != "lua" && info != "lua ignore" {
-            panic!("unrecognised lua fence info string {info:?} — use `lua` or `lua ignore`");
-        }
+        assert!(
+            !(info != "lua" && info != "lua ignore"),
+            "unrecognised lua fence info string {info:?} — use `lua` or `lua ignore`"
+        );
         let ignore = info == "lua ignore";
         let mut code = String::new();
         for body in lines.by_ref() {

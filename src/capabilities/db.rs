@@ -170,7 +170,7 @@ mod tests {
             let mut fut = Box::pin(run_tx(lua.clone(), &shared, func));
             tokio::select! {
                 _ = &mut fut => panic!("run_tx should park in the transform"),
-                _ = entered.notified() => {}
+                () = entered.notified() => {}
             }
             drop(fut); // cancel mid-transform → strong Arc drops → rollback fires
 

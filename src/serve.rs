@@ -377,6 +377,7 @@ impl Server {
                         let server = server.clone();
                         let guard = active.clone();
                         tokio::spawn(async move {
+                            #[allow(clippy::no_effect_underscore_binding, reason = "hold the active-connection guard alive for the whole task")]
                             let _guard = guard;
                             let service = service_fn(move |req| {
                                 let server = server.clone();
@@ -577,7 +578,7 @@ async fn cron_loop(
         let wait = (next - Utc::now()).to_std().unwrap_or(Duration::ZERO);
         // Wake on the next fire or on shutdown, whichever comes first.
         tokio::select! {
-            _ = tokio::time::sleep(wait) => {}
+            () = tokio::time::sleep(wait) => {}
             _ = shutdown.changed() => return,
         }
         if *shutdown.borrow() {
@@ -593,6 +594,10 @@ async fn cron_loop(
         let in_flight = in_flight.clone();
         let guard = active.clone();
         tokio::spawn(async move {
+            #[allow(
+                clippy::no_effect_underscore_binding,
+                reason = "hold the active-request guard alive for the whole task"
+            )]
             let _guard = guard;
             server.run_cron(&job).await;
             in_flight.store(false, Ordering::SeqCst);
@@ -939,13 +944,10 @@ fn hex(c: u8) -> Option<u8> {
 /// table; `status` defaults to 200 (and must be a valid HTTP status in
 /// `100..=599`) and `body` to empty.
 fn response_from(values: MultiValue) -> Result<Response, RunError> {
-    let table = match values.into_iter().next() {
-        Some(Value::Table(t)) => t,
-        _ => {
-            return Err(RunError::Script(mlua::Error::RuntimeError(
-                "handler must return a table { status, body, headers }".into(),
-            )));
-        }
+    let Some(Value::Table(table)) = values.into_iter().next() else {
+        return Err(RunError::Script(mlua::Error::RuntimeError(
+            "handler must return a table { status, body, headers }".into(),
+        )));
     };
 
     // Validate rather than `as u16`-truncate: an out-of-range `status` (negative

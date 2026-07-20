@@ -115,6 +115,10 @@ impl StateStore {
     /// `expected` (by value, not version). Avoids float-equality traps for
     /// strings and booleans; the caller accepts those semantics for numbers.
     /// `None` means "absent". Returns true if the swap was applied.
+    #[allow(
+        clippy::ref_option,
+        reason = "trait method; `&Option<Prim>` matches the CAS call convention across all state backends"
+    )]
     fn cas_value(&self, key: &[u8], expected: &Option<Prim>, new: Option<Prim>) -> bool {
         let (current, version) = self.snapshot(key);
         if &current != expected {

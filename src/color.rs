@@ -8,7 +8,7 @@ use std::io::IsTerminal;
 /// empty (the de-facto standard: a non-empty `NO_COLOR` disables color
 /// regardless of its value).
 pub fn color_from_env(no_color: Option<&OsStr>, stream_is_tty: bool) -> bool {
-    stream_is_tty && no_color.is_none_or(|v| v.is_empty())
+    stream_is_tty && no_color.is_none_or(std::ffi::OsStr::is_empty)
 }
 
 /// Whether diagnostics written to stderr should be colorized.

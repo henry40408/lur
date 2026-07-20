@@ -783,7 +783,7 @@ mod tests {
             let mut fut = Box::pin(backend.kv_update(&lua, "k".to_string(), parking));
             tokio::select! {
                 _ = &mut fut => panic!("kv_update should park in the transform"),
-                _ = entered.notified() => {}
+                () = entered.notified() => {}
             }
             drop(fut); // cancel mid-transform → PinnedTx::drop rolls back
 

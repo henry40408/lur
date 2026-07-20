@@ -187,7 +187,7 @@ struct ServeCli {
 
 /// Default VM-pool size: the number of CPUs available to the process.
 fn default_pool_size() -> usize {
-    std::thread::available_parallelism().map_or(1, |n| n.get())
+    std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
 }
 
 /// Load the user config layer: `--no-config` drops it, `--config` forces a
@@ -281,7 +281,7 @@ fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig,
         db_path: flags.db.clone(),
         pool_size: 1,
         per_event_timeout: None,
-        state: Default::default(),
+        state: std::sync::Arc::default(),
         shutdown_grace: Duration::from_millis(DEFAULT_SHUTDOWN_GRACE_MS),
         max_concurrency: flags.max_concurrency,
         chunk_name: None,
@@ -374,6 +374,10 @@ fn run_one_shot(cli: Cli) -> ExitCode {
 
     let timeout = cli.timeout;
     match rt.run_to_exit_code(&source, timeout) {
+        #[allow(
+            clippy::cast_sign_loss,
+            reason = "process exit codes are u8; truncation is the intended Unix semantics"
+        )]
         Ok(code) => ExitCode::from(code as u8),
         Err(RunError::Timeout) => {
             eprintln!("lur: script exceeded its time limit");

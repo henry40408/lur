@@ -22,9 +22,7 @@ fn wait_until_up(addr: &str) -> TcpStream {
         if let Ok(stream) = TcpStream::connect(addr) {
             return stream;
         }
-        if Instant::now() >= deadline {
-            panic!("server never came up at {addr}");
-        }
+        assert!(Instant::now() < deadline, "server never came up at {addr}");
         std::thread::sleep(Duration::from_millis(25));
     }
 }
