@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784395530912,
+  "lastUpdate": 1784506618879,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1763,6 +1763,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 209604,
             "range": "± 6302",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4655243922a839dd32f5f7567d477810b1fff0c2",
+          "message": "chore: converge clippy lint config onto lint groups (#72)\n\nReplace the frozen, itemised Embark lint list (pinned to the now-archived repo)\nwith a group-based config: `all` + `pedantic` as warn groups, the noisy /\nlow-signal pedantic lints opted back out, and the restriction + nursery lints\nkept itemised. Shorter, auto-tracks new pedantic lints, same signal.\n\n`cast_sign_loss` / `float_cmp` stay as warnings; the occurrences here were\naudited safe and annotated with `#[allow(..., reason = \"...\")]`. Other surfaced\nlints fixed in place: let-else conversions, `writeln!` instead of\n`push_str(&format!(..))`, `is_err()` instead of `!is_ok()`, explicit\n`Arc::default()`, and the machine-applicable pedantic autofixes.\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-20T08:15:37+08:00",
+          "tree_id": "f774caf1cb1483e48dddadb0e94823eb9097eaeb",
+          "url": "https://github.com/henry40408/lur/commit/4655243922a839dd32f5f7567d477810b1fff0c2"
+        },
+        "date": 1784506618042,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 209908,
+            "range": "± 1950",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4152,
+            "range": "± 105",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 165093,
+            "range": "± 2975",
             "unit": "ns/iter"
           }
         ]
