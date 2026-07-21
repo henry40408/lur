@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784674031287,
+  "lastUpdate": 1784675075125,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1847,6 +1847,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 451221,
             "range": "± 7130",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7779a9a65620d1d49925db9933babca6e6ba3b99",
+          "message": "test: retry the two SQLite concurrent-writer tests under nextest (#74)\n\n`db_exec_survives_concurrent_writers` and `db_tx_survives_concurrent_writers`\nassert that `retry_busy` masks every SQLITE_BUSY under contention. On a heavily\nloaded CI runner the cumulative stall can briefly exceed the busy_timeout +\njittered-retry budget and surface a genuine busy error, making them\ntiming-sensitive (both passed on rerun in #73's CI).\n\nAdd a targeted nextest override giving only these two tests `retries = 2`. Each\nrun uses a fresh tempdir DB with no cross-run side effects, so a retry is\nidempotent and cannot mask a real regression; every other test keeps the\ndefault zero retries and the \"no busy error\" assertions are unchanged.\n\nRefs #66\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-22T07:03:03+08:00",
+          "tree_id": "0a93dc059445670e3d4b795a4ebed5dbb276e211",
+          "url": "https://github.com/henry40408/lur/commit/7779a9a65620d1d49925db9933babca6e6ba3b99"
+        },
+        "date": 1784675074029,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 201004,
+            "range": "± 7366",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3952,
+            "range": "± 146",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 373877,
+            "range": "± 8564",
             "unit": "ns/iter"
           }
         ]
