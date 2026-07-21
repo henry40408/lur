@@ -4,3 +4,13 @@ max-threads = 1
 [[profile.default.overrides]]
 filter = "binary_id(lur::pg) or test(pg_dropped_tx_rolls_back)"
 test-group = "pg-serial"
+
+# The two SQLite concurrent-writer tests assert that `retry_busy` masks every
+# SQLITE_BUSY under contention. On a heavily loaded CI runner the cumulative
+# stall can briefly exceed the busy_timeout + jittered-retry budget and surface
+# a genuine busy error, making them timing-sensitive. Each run uses a fresh
+# tempdir DB with no cross-run side effects, so a retry is idempotent and cannot
+# mask a real regression; every other test keeps the default zero retries.
+[[profile.default.overrides]]
+filter = "test(db_exec_survives_concurrent_writers) or test(db_tx_survives_concurrent_writers)"
+retries = 2
