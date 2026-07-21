@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784506618879,
+  "lastUpdate": 1784674031287,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1805,6 +1805,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 165093,
             "range": "± 2975",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eaf352359a1477af7f895b25638d827f024fabd9",
+          "message": "fix: bump spin to 0.9.9 and drop yanked-ignore (#73)\n\nspin 0.9.8's back-catalog was yanked 2026-07-13 for a UB fix in the\n`Once::*into_inner*` APIs (unreachable for us — reached only transitively\nvia flume, which uses `spin::Mutex` only). The fix, spin 0.9.9, has now\ncleared the 7-day dependency cooldown.\n\n- `cargo update -p spin --precise 0.9.9` (satisfies flume's ^0.9; no sqlx bump)\n- Remove the `spin@0.9.8` entry from deny.toml's advisories ignore list\n- `cargo deny check advisories` passes without it\n\nCloses #66\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-22T06:45:26+08:00",
+          "tree_id": "9725edd5973cf94f8b9dc7639126aaa4474a3209",
+          "url": "https://github.com/henry40408/lur/commit/eaf352359a1477af7f895b25638d827f024fabd9"
+        },
+        "date": 1784674029693,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 241392,
+            "range": "± 7806",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4740,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 451221,
+            "range": "± 7130",
             "unit": "ns/iter"
           }
         ]
