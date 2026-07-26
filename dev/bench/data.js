@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785090205510,
+  "lastUpdate": 1785092678052,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2099,6 +2099,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 211766,
             "range": "± 5383",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a8f580c8b58b5b4a2a17456d9e469513135f8e2e",
+          "message": "ci: derive the rolling tag from the default branch (#82)\n\nThe rolling tag was the literal `main`. Every sibling project now spells\nthe same concept as `type=raw,value=<name>,enable={{is_default_branch}}`,\nwith the value slot holding `{{branch}}` where the tag follows the branch\nand a literal `nightly` where it does not. This repository already had the\nright directive shape; only the value was hard-coded.\n\nNo behaviour change today: `{{branch}}` on the default branch is `main`.\nIt stops being hard-coded, so renaming the default branch renames the\nrolling tag with it rather than silently publishing a stale `:main`.\n\n`enable={{is_default_branch}}` is unchanged, which matters here because\nthis workflow also has `workflow_dispatch`: dispatching from a feature\nbranch still publishes nothing, as before. Spelling the rule as\n`type=ref,event=branch` instead -- the other obvious way to make the tag\nfollow the branch -- would have started publishing `:that-branch` images.\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-27T03:02:29+08:00",
+          "tree_id": "8e8930c62adf2a1fe7ba2433a85e501e7b4f2b66",
+          "url": "https://github.com/henry40408/lur/commit/a8f580c8b58b5b4a2a17456d9e469513135f8e2e"
+        },
+        "date": 1785092676828,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 209657,
+            "range": "± 1734",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4128,
+            "range": "± 87",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 164118,
+            "range": "± 972",
             "unit": "ns/iter"
           }
         ]
