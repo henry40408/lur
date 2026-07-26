@@ -243,9 +243,12 @@ grace period is aborted when the runtime drops.
   they never need a retry. `db.tx` and `kv.update` instead open a `SERIALIZABLE`
   transaction on a pinned connection for full anomaly protection against any concurrent
   writer, at the documented cost that a conflicting transaction aborts with SQLSTATE
-  `40001` — surfaced to Lua (usually at `COMMIT`) rather than retried, since retrying a
-  body that already ran side effects could duplicate them. The `retry_busy`/
-  `busy_timeout` layer (`storage/sqlite.rs`) stays SQLite-only.
+  `40001` — surfaced to Lua with a stable, locale-independent message (matched by
+  SQLSTATE, not the driver's own localized prose; `storage/postgres.rs::map_pg_error`)
+  rather than retried, since retrying a body that already ran side effects could
+  duplicate them. The abort lands at the in-transaction statement about as often as at
+  `COMMIT` (measured roughly 50/50), so callers must not assume it only happens at
+  commit. The `retry_busy`/`busy_timeout` layer (`storage/sqlite.rs`) stays SQLite-only.
 - **Cancellation-safe pinned transactions:** `db.tx` and `kv.update` run the
   user body/transform on a pinned connection inside a manually-opened
   transaction (`BEGIN IMMEDIATE` on SQLite, `BEGIN ISOLATION LEVEL SERIALIZABLE`
