@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785048886860,
+  "lastUpdate": 1785087467842,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2015,6 +2015,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 209114,
             "range": "± 4379",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f09455769bb332e08fd98cba244427a66b9093f1",
+          "message": "chore(deps): add rust-toolchain ecosystem, normalise dependabot config (#78)\n\nrust-toolchain.toml pins the compiler, so nothing moves it by accident —\nwhich also means nothing moves it at all. Dependabot now proposes bumps\non the same weekly schedule and 7-day cooldown as every other ecosystem.\nNo group: there is only ever one entry.\n\nAlso normalises the file to the shape shared across the Rust repos:\ngroups named after their ecosystem, a fixed order, patterns expanded to\nblock form, no comments. Drops open-pull-requests-limit, which never\nbound — every ecosystem groups into a single PR.",
+          "timestamp": "2026-07-27T01:36:23+08:00",
+          "tree_id": "13f1a9b1f797bb428ca5d4c727ae11a78931996b",
+          "url": "https://github.com/henry40408/lur/commit/f09455769bb332e08fd98cba244427a66b9093f1"
+        },
+        "date": 1785087467047,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 271203,
+            "range": "± 4139",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5254,
+            "range": "± 73",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208358,
+            "range": "± 4239",
             "unit": "ns/iter"
           }
         ]
