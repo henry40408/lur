@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785033444410,
+  "lastUpdate": 1785048886860,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1973,6 +1973,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 162452,
             "range": "± 2591",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f53051b922ebbb5f356320783bb7c9f9236035c1",
+          "message": "chore(deps): bump the actions group with 2 updates (#75)\n\nBumps the actions group with 2 updates: [actions/checkout](https://github.com/actions/checkout) and [taiki-e/install-action](https://github.com/taiki-e/install-action).\n\n\nUpdates `actions/checkout` from 7.0.0 to 7.0.1\n- [Release notes](https://github.com/actions/checkout/releases)\n- [Changelog](https://github.com/actions/checkout/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/actions/checkout/compare/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0...3d3c42e5aac5ba805825da76410c181273ba90b1)\n\nUpdates `taiki-e/install-action` from 2.83.1 to 2.83.4\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/2ca9b94c269419b7b0c711c09d0b21c4e1d51145...07b4745e0c39a41822af610387492e3e53aa222b)\n\n---\nupdated-dependencies:\n- dependency-name: actions/checkout\n  dependency-version: 7.0.1\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: actions\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.83.4\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: actions\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-26T14:53:19+08:00",
+          "tree_id": "38b087653b540c3eb1921806ee98b9d5e8f83b56",
+          "url": "https://github.com/henry40408/lur/commit/f53051b922ebbb5f356320783bb7c9f9236035c1"
+        },
+        "date": 1785048886008,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 305265,
+            "range": "± 10129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5523,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 209114,
+            "range": "± 4379",
             "unit": "ns/iter"
           }
         ]
