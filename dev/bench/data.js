@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784675075125,
+  "lastUpdate": 1785031075848,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1889,6 +1889,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 373877,
             "range": "± 8564",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fdf8a016ad8ba1d9444d1103c3945e4c42bd3661",
+          "message": "chore(deps): bump the cargo group with 5 updates (#76)\n\nBumps the cargo group with 5 updates:\n\n| Package | From | To |\n| --- | --- | --- |\n| [clap](https://github.com/clap-rs/clap) | `4.6.1` | `4.6.2` |\n| [futures-util](https://github.com/rust-lang/futures-rs) | `0.3.32` | `0.3.33` |\n| [http-body-util](https://github.com/hyperium/http-body) | `0.1.3` | `0.1.4` |\n| [tokio](https://github.com/tokio-rs/tokio) | `1.52.3` | `1.53.0` |\n| [toml](https://github.com/toml-rs/toml) | `1.1.2+spec-1.1.0` | `1.1.3+spec-1.1.0` |\n\n\nUpdates `clap` from 4.6.1 to 4.6.2\n- [Release notes](https://github.com/clap-rs/clap/releases)\n- [Changelog](https://github.com/clap-rs/clap/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/clap-rs/clap/compare/clap_complete-v4.6.1...clap_complete-v4.6.2)\n\nUpdates `futures-util` from 0.3.32 to 0.3.33\n- [Release notes](https://github.com/rust-lang/futures-rs/releases)\n- [Changelog](https://github.com/rust-lang/futures-rs/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/rust-lang/futures-rs/compare/0.3.32...0.3.33)\n\nUpdates `http-body-util` from 0.1.3 to 0.1.4\n- [Release notes](https://github.com/hyperium/http-body/releases)\n- [Commits](https://github.com/hyperium/http-body/compare/http-body-util-v0.1.3...http-body-util-v0.1.4)\n\nUpdates `tokio` from 1.52.3 to 1.53.0\n- [Release notes](https://github.com/tokio-rs/tokio/releases)\n- [Commits](https://github.com/tokio-rs/tokio/compare/tokio-1.52.3...tokio-1.53.0)\n\nUpdates `toml` from 1.1.2+spec-1.1.0 to 1.1.3+spec-1.1.0\n- [Commits](https://github.com/toml-rs/toml/compare/toml-v1.1.2...toml-v1.1.3)\n\n---\nupdated-dependencies:\n- dependency-name: clap\n  dependency-version: 4.6.2\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: futures-util\n  dependency-version: 0.3.33\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: http-body-util\n  dependency-version: 0.1.4\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: tokio\n  dependency-version: 1.53.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo\n- dependency-name: toml\n  dependency-version: 1.1.3+spec-1.1.0\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-26T09:55:11+08:00",
+          "tree_id": "0537d0597339a15a3e5237554c8d39bb1a4b1a73",
+          "url": "https://github.com/henry40408/lur/commit/fdf8a016ad8ba1d9444d1103c3945e4c42bd3661"
+        },
+        "date": 1785031074057,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 302398,
+            "range": "± 2742",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5546,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 209016,
+            "range": "± 5874",
             "unit": "ns/iter"
           }
         ]
