@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785087467842,
+  "lastUpdate": 1785090205510,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2057,6 +2057,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208358,
             "range": "± 4239",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "54f6d63602b84484578d0e46da49014dd7686361",
+          "message": "ci: one run per ref at a time (#81)\n\nBoth workflows already cancelled superseded runs, but unconditionally. A\n`release: published` build runs on the tag ref, so a re-published release\nwould cancel a build that is publishing one specific version. Superseding\nis right for a branch, where the tag means \"latest\" by definition; it is\nwrong for a release.\n\nThe group key moves from the hand-written `ci-` / `docker-` prefixes to\n`${{ github.workflow }}`, which is already distinct per workflow. Same\ngrouping, one shared block across every repository.\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-27T02:19:48+08:00",
+          "tree_id": "73f6474e392ab2f99c9d4deaa9775109b8364ca1",
+          "url": "https://github.com/henry40408/lur/commit/54f6d63602b84484578d0e46da49014dd7686361"
+        },
+        "date": 1785090204651,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 306543,
+            "range": "± 12104",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5571,
+            "range": "± 84",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 211766,
+            "range": "± 5383",
             "unit": "ns/iter"
           }
         ]
