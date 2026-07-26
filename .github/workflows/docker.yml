@@ -38,10 +38,11 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # main → :main (rolling dev image); release → :X.Y.Z, :X.Y, and :latest
-          # (the latter added automatically for a semver tag via flavor latest=auto).
+          # default branch → :main (rolling dev image, named after the branch
+          # itself); release → :X.Y.Z, :X.Y, and :latest (the latter added
+          # automatically for a semver tag via flavor latest=auto).
           tags: |
-            type=raw,value=main,enable={{is_default_branch}}
+            type=raw,value={{branch}},enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
       # Resolve the `lur --version` stamp: the published tag for a release,
