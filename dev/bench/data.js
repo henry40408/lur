@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785031075848,
+  "lastUpdate": 1785033444410,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -1931,6 +1931,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 209016,
             "range": "± 5874",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4be2bb8267a32963ffe8fa353f81cd17ed0400fb",
+          "message": "fix: voice Postgres 40001 by SQLSTATE and force the SSI conflict test (#77)\n\nThe Postgres backend never inspected SQLSTATE, so a serialization failure\nreached Lua as the driver's own prose behind a context prefix:\n\n    lur.db.tx: commit: error returned from database: could not serialize\n    access due to read/write dependencies among transactions\n\nThat prose is localized by the server's `lc_messages`; the SQLSTATE is not.\nA caller wanting to retry therefore had to match localized English text,\nwhich the Phase-2 design had claimed was already a lur-voiced error.\n\nAdd `is_serialization_failure` / `map_pg_error` (modeled on `is_busy` in\nstorage/sqlite.rs) and apply them at the seven sites that can surface a\n40001: `db.tx` exec/query/commit and `kv.update` read/write/commit. A 40001\nnow gets a stable, locale-independent tail that is byte-identical at every\nsite; every other error keeps its previous text. No retry is added — the\nPostgres transactional APIs stay strictly fallible, and `retry_busy` stays\nSQLite-only. The four `BEGIN` sites are untouched, as a BEGIN cannot raise\n40001.\n\nWith a stable message to assert against, close backlog item 2b: the only\nconflict test was probabilistic, proving no-fatal-under-stress and data\nintegrity but never that a conflict actually fired. The new test forces a\nclassic write skew and rendezvouses both transactions on a `lur.state`\nbarrier between their SELECT and UPDATE, so SSI must abort one side.\n`lur.state` is process-local, synchronous, and outside the SERIALIZABLE\nread/write set, so it cannot pollute conflict detection; a deadline guard\nmakes a broken barrier fail rather than hang CI. The existing probabilistic\ntest is kept — the two are complementary. A negative test pins that a\nnon-40001 error is not voiced as a serialization failure.\n\nMeasured while validating: the abort site splits roughly 50/50 between\nCOMMIT and the in-transaction UPDATE (13/12 over 25 rounds), so asserting\nonly the commit path would flake about half the time, and the docs' \"usually\nat COMMIT\" was overstating it. Both docs are corrected.\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-07-26T10:36:04+08:00",
+          "tree_id": "222f60b3fd51d3c0dc01a8a716e928185cb7aaf4",
+          "url": "https://github.com/henry40408/lur/commit/4be2bb8267a32963ffe8fa353f81cd17ed0400fb"
+        },
+        "date": 1785033443561,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 207871,
+            "range": "± 1679",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4136,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 162452,
+            "range": "± 2591",
             "unit": "ns/iter"
           }
         ]
