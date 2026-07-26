@@ -2,7 +2,10 @@
 //! `$n` binding, row→Lua mapping (core types only; non-core must be cast to text),
 //! isolation, and the `kind`-discriminated kv schema. No retry layer — under
 //! `READ COMMITTED` single statements block rather than surfacing a busy error,
-//! and the `SERIALIZABLE` transactional APIs are documented as fallible.
+//! and the `SERIALIZABLE` transactional APIs are documented as fallible. A
+//! SQLSTATE 40001 serialization failure is voiced with a stable,
+//! locale-independent message (see `is_serialization_failure`/`map_pg_error`)
+//! instead of the driver's localized prose.
 
 use std::str::FromStr;
 
@@ -12,6 +15,30 @@ use sqlx::postgres::{PgArguments, PgConnectOptions, PgPool, PgPoolOptions, PgRow
 use sqlx::{Column, Postgres, Row, TypeInfo, ValueRef};
 
 use crate::capabilities::null;
+
+/// True when `e` is a Postgres serialization failure (SQLSTATE `40001`, raised
+/// by SSI when two concurrent `SERIALIZABLE` transactions cannot be ordered).
+/// Matched by code, not by message text: the message is localized by the
+/// server's `lc_messages`, but the SQLSTATE never is.
+fn is_serialization_failure(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .and_then(sqlx::error::DatabaseError::code)
+        .is_some_and(|code| code == "40001")
+}
+
+/// Map a storage error to an `mlua::Error`, prefixed with `ctx`. A serialization
+/// failure (SQLSTATE 40001) gets a stable, locale-independent tail so a `pcall`
+/// retry loop can match it reliably instead of matching localized server prose;
+/// every other error keeps today's exact `"{ctx}: {e}"` text.
+fn map_pg_error(ctx: &str, e: &sqlx::Error) -> Error {
+    if is_serialization_failure(e) {
+        Error::runtime(format!(
+            "{ctx}: serialization failure (SQLSTATE 40001): concurrent transaction conflict, retry the transaction"
+        ))
+    } else {
+        Error::runtime(format!("{ctx}: {e}"))
+    }
+}
 
 /// A dynamically-bound Postgres query.
 pub(crate) type PgQuery<'q> = sqlx::query::Query<'q, Postgres, PgArguments>;
@@ -321,9 +348,10 @@ impl PgBackend {
 
     /// Open a `SERIALIZABLE` write transaction on a pinned connection. Serializable
     /// (SSI) protects `db.tx` read-then-write logic against any concurrent writer,
-    /// at the cost that a conflict aborts with SQLSTATE 40001 — surfaced (usually
-    /// at COMMIT) as a lur-voiced error the caller handles. No retry (a body may
-    /// have external side effects).
+    /// at the cost that a conflict aborts with SQLSTATE 40001 — surfaced (at the
+    /// in-transaction statement or at COMMIT, roughly evenly) as a lur-voiced,
+    /// locale-independent error the caller handles. No retry (a body may have
+    /// external side effects).
     pub(crate) async fn begin(&self) -> mlua::Result<PgTransaction> {
         let mut conn = self
             .pool
@@ -342,9 +370,10 @@ impl PgBackend {
     /// Read-modify-write for `lur.kv.update`: a `SERIALIZABLE` transaction on a
     /// pinned connection — read (type-aware, matching `kv_get`), call `func`, then
     /// write/delete and commit; roll back and re-raise on any error. A conflicting
-    /// concurrent writer aborts this with SQLSTATE 40001 (surfaced, not retried).
-    /// The write stores the returned string as `kind=0` bytes so a value written by
-    /// `update` compares equal under `kv_cas` (which matches on `bytes`).
+    /// concurrent writer aborts this with SQLSTATE 40001, surfaced (not retried) as
+    /// a stable, locale-independent error via `map_pg_error`. The write stores the
+    /// returned string as `kind=0` bytes so a value written by `update` compares
+    /// equal under `kv_cas` (which matches on `bytes`).
     pub(crate) async fn kv_update(
         &self,
         lua: &Lua,
@@ -369,7 +398,7 @@ impl PgBackend {
                 .bind(&key)
                 .fetch_optional(&mut **tx.conn())
                 .await
-                .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?
+                .map_err(|e| map_pg_error("lur.kv.update", &e))?
             {
                 None => Value::Nil,
                 Some(r) => Value::String(lua.create_string(kv_row_to_bytes(&r)?)?),
@@ -383,7 +412,7 @@ impl PgBackend {
                         .bind(&key)
                         .execute(&mut **tx.conn())
                         .await
-                        .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
+                        .map_err(|e| map_pg_error("lur.kv.update", &e))?;
                 }
                 Value::String(s) => {
                     sqlx::query(
@@ -394,7 +423,7 @@ impl PgBackend {
                     .bind(s.as_bytes().to_vec())
                     .execute(&mut **tx.conn())
                     .await
-                    .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
+                    .map_err(|e| map_pg_error("lur.kv.update", &e))?;
                 }
                 other => {
                     return Err(Error::runtime(format!(
@@ -406,7 +435,7 @@ impl PgBackend {
             sqlx::query("COMMIT")
                 .execute(&mut **tx.conn())
                 .await
-                .map_err(|e| Error::runtime(format!("lur.kv.update: commit: {e}")))?;
+                .map_err(|e| map_pg_error("lur.kv.update: commit", &e))?;
             Ok(new)
         }
         .await;
@@ -498,7 +527,7 @@ impl PgTransaction {
         let res = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql.as_str())), &params)?
             .execute(&mut **conn)
             .await
-            .map_err(|e| Error::runtime(format!("lur.db.tx exec: {e}")))?;
+            .map_err(|e| map_pg_error("lur.db.tx exec", &e))?;
         Ok(super::ExecResult {
             rows_affected: res.rows_affected(),
             last_insert_id: 0,
@@ -518,7 +547,7 @@ impl PgTransaction {
         let rows = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql.as_str())), &params)?
             .fetch_all(&mut **conn)
             .await
-            .map_err(|e| Error::runtime(format!("lur.db.tx query: {e}")))?;
+            .map_err(|e| map_pg_error("lur.db.tx query", &e))?;
         let out = lua.create_table()?;
         for (i, row) in rows.iter().enumerate() {
             out.raw_set(i as i64 + 1, read_row(lua, row)?)?;
@@ -532,7 +561,7 @@ impl PgTransaction {
             && let Err(e) = sqlx::query("COMMIT").execute(&mut *conn).await
         {
             let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-            return Err(Error::runtime(format!("lur.db.tx: commit: {e}")));
+            return Err(map_pg_error("lur.db.tx: commit", &e));
         }
         Ok(())
     }

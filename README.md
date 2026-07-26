@@ -274,8 +274,11 @@ adds no SQL-portability layer, so placeholders and types follow the backend you 
   connection string; it passes straight through to the driver.
 - **`db.tx` / `kv.update` are fallible** — on Postgres both run at `SERIALIZABLE` and may
   raise a transient `40001` serialization conflict; on SQLite they may raise after
-  exhausting the busy retry. Either way `lur` does **not** auto-retry them — wrap the call
-  in `pcall` (or your own retry loop):
+  exhausting the busy retry. On Postgres the `40001` now surfaces as a stable,
+  locale-independent message identified by SQLSTATE rather than the driver's own
+  (server-`lc_messages`-localized) prose, so a retry loop can match it reliably. Either
+  way `lur` does **not** auto-retry them — wrap the call in `pcall` (or your own retry
+  loop):
 
   ```lua
   local ok, err = pcall(function()

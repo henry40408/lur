@@ -6,10 +6,14 @@ fn pg_test_url() -> String {
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/postgres".to_string())
 }
 
-/// A runtime pointed at Postgres, or `None` when the server is unreachable.
-/// Locally an unreachable server SKIPS the test (returns None); under CI it is a
-/// hard failure (panics), because CI provisions the service.
-fn pg_runtime() -> Option<Runtime> {
+/// A `RuntimeConfig` pointed at Postgres, or `None` when the server is
+/// unreachable. Locally an unreachable server SKIPS the test (returns None);
+/// under CI it is a hard failure (panics), because CI provisions the service.
+/// Building the config once and `.clone()`-ing it (rather than calling this
+/// per runtime) is required whenever two runtimes must share `lur.state`: the
+/// `Arc<StateStore>` behind it lives on the config, and `RuntimeConfig::default`
+/// mints a fresh store on every call.
+fn pg_config() -> Option<RuntimeConfig> {
     let url = pg_test_url();
     // Cheap reachability probe: open a TCP connection to host:port.
     let reachable = reachable(&url);
@@ -21,13 +25,16 @@ fn pg_runtime() -> Option<Runtime> {
         eprintln!("skipping PG test: {url} unreachable (start it: docker compose up -d)");
         return None;
     }
-    Some(
-        Runtime::with_config(RuntimeConfig {
-            db_path: Some(std::path::PathBuf::from(url)),
-            ..Default::default()
-        })
-        .expect("runtime builds"),
-    )
+    Some(RuntimeConfig {
+        db_path: Some(std::path::PathBuf::from(url)),
+        ..Default::default()
+    })
+}
+
+/// A runtime pointed at Postgres, or `None` when the server is unreachable.
+fn pg_runtime() -> Option<Runtime> {
+    let config = pg_config()?;
+    Some(Runtime::with_config(config).expect("runtime builds"))
 }
 
 /// Parse host:port out of a postgres URL and try a TCP connect with a short timeout.
@@ -48,6 +55,12 @@ fn reachable(url: &str) -> bool {
     addrs
         .any(|addr| std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok())
 }
+
+/// The locale-independent tail `postgres.rs::map_pg_error` appends for a
+/// SQLSTATE 40001 serialization failure. Identical at every call site
+/// (in-transaction statement or COMMIT), so a retry loop — and these tests —
+/// can match on it regardless of which site the abort lands at.
+const SERIALIZATION_FAILURE_TAIL: &str = "serialization failure (SQLSTATE 40001): concurrent transaction conflict, retry the transaction";
 
 /// A fresh, uniquely-named table per test so parallel tests don't collide on the
 /// shared database. Caller drops it via `DROP TABLE IF EXISTS`.
@@ -251,4 +264,125 @@ fn pg_serializable_tx_conflict_is_fallible_and_catchable() {
          lur.db.exec('DROP TABLE {t}')"
     ))
     .expect("healthy after concurrent serializable conflicts");
+}
+
+/// Deterministically forces an SSI write-skew conflict (classic crosswise
+/// read-then-write) and asserts the abort actually fires, is voiced with the
+/// stable 40001 tail, and leaves the table intact. Complementary to
+/// `pg_serializable_tx_conflict_is_fallible_and_catchable` above, which proves
+/// no-fatal-under-stress + data integrity across many rounds but never proves
+/// a conflict actually happened. Here a `lur.state` barrier (process-local,
+/// synchronous, outside the SERIALIZABLE read/write set) rendezvouses both
+/// transactions between their SELECT and UPDATE so SSI is guaranteed to see
+/// the rw-antidependency cycle both ways.
+///
+/// The abort site splits roughly 50/50 between COMMIT and the in-transaction
+/// UPDATE (measured over repeated runs), so the assertion below matches the
+/// stable 40001 tail rather than the context prefix or Postgres's own prose.
+#[test]
+fn pg_ssi_write_skew_aborts_one_side_with_stable_40001_message() {
+    let Some(config) = pg_config() else { return };
+    let seed = Runtime::with_config(config.clone()).expect("runtime builds");
+
+    let t = unique("pgwriteskew");
+    let barrier = unique("pgwriteskew_arrived");
+    let out1 = unique("pgwriteskew_out1");
+    let out2 = unique("pgwriteskew_out2");
+
+    seed.run(&format!(
+        "lur.db.exec('DROP TABLE IF EXISTS {t}')\n\
+         lur.db.exec('CREATE TABLE {t} (id INT PRIMARY KEY, v INT)')\n\
+         lur.db.exec('INSERT INTO {t} VALUES (1,0),(2,0)')"
+    ))
+    .expect("seed");
+
+    // Each thread reads the OTHER row and writes its OWN row, rendezvousing
+    // between the two so both reads are guaranteed to precede either write —
+    // exactly the write-skew shape SSI must detect and abort one side of.
+    let spawn = |read_id: i64, write_id: i64, table: String, barrier: String, out_key: String| {
+        let cfg = config.clone();
+        std::thread::spawn(move || {
+            let rt = Runtime::with_config(cfg).expect("runtime builds");
+            rt.run(&format!(
+                "local ok, err = pcall(function()\n\
+                   lur.db.tx(function(tx)\n\
+                     local cur = tx.query('SELECT v FROM {table} WHERE id = {read_id}')[1].v\n\
+                     lur.state.incr('{barrier}')\n\
+                     local deadline = lur.time.monotonic_ms() + 10000\n\
+                     while tonumber(lur.state.get('{barrier}')) < 2 do\n\
+                       if lur.time.monotonic_ms() > deadline then error('barrier timeout') end\n\
+                       lur.async.sleep(2)\n\
+                     end\n\
+                     tx.exec('UPDATE {table} SET v = ' .. (cur + 1) .. ' WHERE id = {write_id}')\n\
+                   end)\n\
+                 end)\n\
+                 lur.kv.set('{out_key}', ok and 'ok' or tostring(err))"
+            ))
+            .expect("script never propagates: outcome is stashed via lur.kv, not pcall's return");
+        })
+    };
+    let h1 = spawn(2, 1, t.clone(), barrier.clone(), out1.clone());
+    let h2 = spawn(1, 2, t.clone(), barrier.clone(), out2.clone());
+    h1.join().unwrap();
+    h2.join().unwrap();
+
+    seed.run(&format!(
+        "local o1 = lur.kv.get('{out1}')\n\
+         local o2 = lur.kv.get('{out2}')\n\
+         local ok_count = (o1 == 'ok' and 1 or 0) + (o2 == 'ok' and 1 or 0)\n\
+         assert(ok_count == 1, 'exactly one side must succeed, got o1=' .. tostring(o1) .. ' o2=' .. tostring(o2))\n\
+         local failure = (o1 == 'ok') and o2 or o1\n\
+         assert(failure ~= 'ok' and failure ~= nil, 'the other side must have failed')\n\
+         assert(\n\
+           failure:find('{SERIALIZATION_FAILURE_TAIL}', 1, true),\n\
+           'failure must carry the stable 40001 tail, got: ' .. failure\n\
+         )\n\
+         assert(#lur.db.query('SELECT id FROM {t}') == 2, 'table intact after the aborted side')\n\
+         lur.kv.delete('{out1}')\n\
+         lur.kv.delete('{out2}')\n\
+         lur.db.exec('DROP TABLE {t}')"
+    ))
+    .expect("exactly one write-skew side aborts with the stable 40001 message");
+}
+
+/// Guards against an over-broad refactor mapping every Postgres error to the
+/// serialization-failure message: a primary-key violation inside `db.tx`
+/// (SQLSTATE 23505, not 40001) must NOT be voiced as a serialization failure
+/// and must still carry the driver's own text.
+#[test]
+fn pg_tx_non_serialization_error_keeps_driver_text() {
+    let Some(rt) = pg_runtime() else { return };
+    let t = unique("pg_negerr");
+    rt.run(&format!(
+        "lur.db.exec('DROP TABLE IF EXISTS {t}')\n\
+         lur.db.exec('CREATE TABLE {t} (id INT PRIMARY KEY)')\n\
+         lur.db.exec('INSERT INTO {t} VALUES (1)')"
+    ))
+    .expect("seed");
+
+    let err = rt
+        .run(&format!(
+            "lur.db.tx(function(tx)\n\
+               tx.exec('INSERT INTO {t} VALUES (1)')\n\
+             end)"
+        ))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        !err.contains(SERIALIZATION_FAILURE_TAIL),
+        "a non-40001 error must not be voiced as a serialization failure: {err}"
+    );
+    // Assert the shape, not the driver's wording: the wording is itself
+    // localized by `lc_messages` — depending on it here would reintroduce
+    // exactly the fragility this voicing removes.
+    let (_, driver_text) = err
+        .split_once("lur.db.tx exec: ")
+        .unwrap_or_else(|| panic!("must keep the site's context prefix: {err}"));
+    assert!(
+        !driver_text.trim().is_empty(),
+        "must pass the driver's own text through after the prefix: {err}"
+    );
+
+    rt.run(&format!("lur.db.exec('DROP TABLE {t}')"))
+        .expect("cleanup");
 }
