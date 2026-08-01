@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785172013241,
+  "lastUpdate": 1785568716650,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2183,6 +2183,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 209430,
             "range": "± 4130",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "78ad395ae71755e40a50cf6163552ffa1c069d68",
+          "message": "chore: make rust-toolchain.toml the single source of the Rust version (#83)\n\nThe Rust version was declared in three places that drifted apart: the\nDockerfile base image tag, the dtolnay/rust-toolchain action pin in CI, and\nrust-toolchain.toml. The base image sat at `rust:1-bookworm` while the pin\nhad moved on, so every container build downloaded a second toolchain, and\nthe CI action installed a third that rustup then overrode.\n\nDrop the version from the base image and remove the CI action entirely.\nGitHub runners ship rustup, so the first cargo invocation materialises\nexactly what rust-toolchain.toml asks for — including the components, which\nthe removed `with:` blocks duplicated. cargo-llvm-cov installs\nllvm-tools-preview on its own; comics has run coverage that way for a while.\n\nThe toolchain install gets its own Docker layer keyed on rust-toolchain.toml\nso editing source no longer re-downloads the compiler.\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-08-01T15:14:36+08:00",
+          "tree_id": "8ad05698a2e226142c9881c2c6a18fa5ac716b04",
+          "url": "https://github.com/henry40408/lur/commit/78ad395ae71755e40a50cf6163552ffa1c069d68"
+        },
+        "date": 1785568715891,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 309147,
+            "range": "± 2362",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5674,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208461,
+            "range": "± 1839",
             "unit": "ns/iter"
           }
         ]
