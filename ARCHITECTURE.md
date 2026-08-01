@@ -217,9 +217,13 @@ grace period is aborted when the runtime drops.
   `storage::Shared` handle. `SqliteBackend::begin` opens write transactions with
   `BEGIN IMMEDIATE`; write-lock contention is handled by a 200 ms `busy_timeout` plus
   `retry_busy`, a bounded (5-attempt) full-jitter backoff wrapping single-statement writes
-  (`db.exec`, `kv.add`/`cas`/`incr`/`decr`) and lock acquisition (`begin`, covering
-  `db.tx`/`kv.update`) — retried only where no user code has run or the retried body is
-  pure, so a retry never duplicates a side effect. Dynamic SQL is wrapped in
+  (`db.exec`, `kv.add`/`cas`/`incr`/`decr`), lock acquisition (`begin`, covering
+  `db.tx`/`kv.update`) and opening itself (`open_pool`: connecting, plus the `lur_kv` DDL)
+  — retried only where no user code has run or the retried body is
+  pure, so a retry never duplicates a side effect. Opening counts as a write path because
+  the first connection can need an exclusive lock and the DDL needs the write lock; with
+  `busy_timeout` deliberately low, an unretried open is the one place contention still
+  surfaces as `database is locked`. Dynamic SQL is wrapped in
   `sqlx::AssertSqlSafe` at the call sites that build statements from user input. `db.rs`
   hands `storage::Shared` to `kv`.
 - **`lur.kv`** ([`capabilities/kv.rs`](src/capabilities/kv.rs)) is a key/value store over

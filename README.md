@@ -252,8 +252,8 @@ adds no SQL-portability layer, so placeholders and types follow the backend you 
   `tx(fn)` which runs `fn(tx)` on a pinned connection, committing on return and rolling
   back on error. SQLite write transactions use `BEGIN IMMEDIATE`; write-lock contention is
   handled by a 200 ms `busy_timeout` plus bounded retry-with-jitter (up to 5 attempts) on
-  single-statement writes and lock acquisition, so concurrent writers wait successfully
-  instead of raising a spurious "database is locked". Use native placeholders per
+  single-statement writes, lock acquisition and opening the database, so concurrent writers
+  wait successfully instead of raising a spurious "database is locked". Use native placeholders per
   backend — `?` on SQLite, `$1, $2, …` on Postgres (no translation between the two);
   tables must be JSON-encoded first.
 - **`lur.kv`** — `get(key) → bytes | nil`, `set(key, bytes)`, `delete(key)` plus atomic
