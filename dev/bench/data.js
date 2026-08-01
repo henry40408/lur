@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785616435990,
+  "lastUpdate": 1785616836373,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2309,6 +2309,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 210881,
             "range": "± 5637",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cd064ed65b839866aa864032441433f28dbd9b93",
+          "message": "chore(deps): bump the github-actions group across 1 directory with 2 updates (#84)\n\nBumps the github-actions group with 2 updates in the / directory: [taiki-e/install-action](https://github.com/taiki-e/install-action) and [docker/login-action](https://github.com/docker/login-action).\n\n\nUpdates `taiki-e/install-action` from 2.83.4 to 2.85.1\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/07b4745e0c39a41822af610387492e3e53aa222b...3d7d7cd5ac7f994c1892ae0c06165095b9139094)\n\nUpdates `docker/login-action` from 4.4.0 to 4.5.1\n- [Release notes](https://github.com/docker/login-action/releases)\n- [Commits](https://github.com/docker/login-action/compare/af1e73f918a031802d376d3c8bbc3fe56130a9b0...abd2ef45e78c5afb21d64d4ca52ee8550d9572c7)\n\n---\nupdated-dependencies:\n- dependency-name: docker/login-action\n  dependency-version: 4.5.1\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: github-actions\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.85.1\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: github-actions\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-02T04:39:19+08:00",
+          "tree_id": "df60cebc7b4b441b1d7085f019510518fbfadedd",
+          "url": "https://github.com/henry40408/lur/commit/cd064ed65b839866aa864032441433f28dbd9b93"
+        },
+        "date": 1785616835629,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 209627,
+            "range": "± 3446",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4067,
+            "range": "± 41",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 382820,
+            "range": "± 2689",
             "unit": "ns/iter"
           }
         ]
