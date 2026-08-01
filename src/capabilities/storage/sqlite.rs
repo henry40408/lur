@@ -107,16 +107,32 @@ where
 }
 
 /// Open the `SQLite` pool in WAL mode and ensure the internal `lur_kv` table.
+///
+/// Opening is a write path like any other and gets the same busy handling.
+/// Establishing the first connection can need an exclusive lock (the WAL-mode
+/// switch, and re-creating the -wal/-shm sidecars a previous last-connection
+/// close removed), and the `lur_kv` DDL needs the write lock whenever the table
+/// is genuinely absent. Since `busy_timeout` here is deliberately low (200 ms)
+/// on the premise that app-level retry absorbs contention, leaving these two
+/// unretried makes opening the one write path that can still surface
+/// `database is locked` under load.
 pub(crate) async fn open_pool(path: &Path) -> sqlx::Result<SqlitePool> {
     let opts = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
         .busy_timeout(std::time::Duration::from_millis(200))
         .journal_mode(SqliteJournalMode::Wal);
-    let pool = SqlitePoolOptions::new().connect_with(opts).await?;
-    sqlx::query("CREATE TABLE IF NOT EXISTS lur_kv (key TEXT PRIMARY KEY, value BLOB)")
-        .execute(&pool)
-        .await?;
+    let pool = retry_busy(|| {
+        let opts = opts.clone();
+        async move { SqlitePoolOptions::new().connect_with(opts).await }
+    })
+    .await?;
+    retry_busy(|| async {
+        sqlx::query("CREATE TABLE IF NOT EXISTS lur_kv (key TEXT PRIMARY KEY, value BLOB)")
+            .execute(&pool)
+            .await
+    })
+    .await?;
     Ok(pool)
 }
 
@@ -701,6 +717,57 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(!is_busy(&syntax), "syntax error wrongly classified busy");
+        });
+    }
+
+    // Opening must be as busy-tolerant as every other write path. On a database
+    // whose lur_kv table is still absent, open_pool has to run the CREATE TABLE
+    // DDL, which needs the write lock. Holding that lock for longer than the
+    // 200 ms busy_timeout makes an unretried open fail with SQLITE_BUSY; with
+    // retry_busy the open waits the holder out (the hold stays well inside the
+    // 5-attempt budget) and still creates the table.
+    #[test]
+    fn open_pool_waits_out_a_held_write_lock() {
+        const HOLD_MS: u64 = 500;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("held.db");
+
+            // A raw pool: it creates the file and switches on WAL, but leaves
+            // lur_kv absent so the open below must take the write lock for DDL.
+            let opts = SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true)
+                .busy_timeout(std::time::Duration::from_millis(200))
+                .journal_mode(SqliteJournalMode::Wal);
+            let holder = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(opts)
+                .await
+                .unwrap();
+            let mut conn = holder.acquire().await.unwrap();
+            sqlx::query("BEGIN IMMEDIATE")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+
+            let releaser = tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(HOLD_MS)).await;
+                sqlx::query("COMMIT").execute(&mut *conn).await.unwrap();
+            });
+
+            let pool = open_pool(&path)
+                .await
+                .expect("open waits out a held write lock instead of erroring busy");
+            releaser.await.unwrap();
+            sqlx::query("SELECT key FROM lur_kv")
+                .fetch_optional(&pool)
+                .await
+                .expect("lur_kv exists after the retried open");
         });
     }
 
