@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785568716650,
+  "lastUpdate": 1785614271446,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2225,6 +2225,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208461,
             "range": "± 1839",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "14b65af011c8d5bd9718cac47390fbbaebd60df4",
+          "message": "chore(deps): bump the cargo group with 5 updates (#85)\n\nBumps the cargo group with 5 updates:\n\n| Package | From | To |\n| --- | --- | --- |\n| [base64](https://github.com/marshallpierce/rust-base64) | `0.22.1` | `0.23.0` |\n| [clap](https://github.com/clap-rs/clap) | `4.6.2` | `4.6.4` |\n| [hyper](https://github.com/hyperium/hyper) | `1.10.1` | `1.11.0` |\n| [serde_json](https://github.com/serde-rs/json) | `1.0.150` | `1.0.151` |\n| [tokio](https://github.com/tokio-rs/tokio) | `1.53.0` | `1.53.1` |\n\n\nUpdates `base64` from 0.22.1 to 0.23.0\n- [Changelog](https://github.com/marshallpierce/rust-base64/blob/master/RELEASE-NOTES.md)\n- [Commits](https://github.com/marshallpierce/rust-base64/compare/v0.22.1...v0.23.0)\n\nUpdates `clap` from 4.6.2 to 4.6.4\n- [Release notes](https://github.com/clap-rs/clap/releases)\n- [Changelog](https://github.com/clap-rs/clap/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/clap-rs/clap/compare/clap_complete-v4.6.2...clap_complete-v4.6.4)\n\nUpdates `hyper` from 1.10.1 to 1.11.0\n- [Release notes](https://github.com/hyperium/hyper/releases)\n- [Changelog](https://github.com/hyperium/hyper/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/hyperium/hyper/compare/v1.10.1...v1.11.0)\n\nUpdates `serde_json` from 1.0.150 to 1.0.151\n- [Release notes](https://github.com/serde-rs/json/releases)\n- [Commits](https://github.com/serde-rs/json/compare/v1.0.150...v1.0.151)\n\nUpdates `tokio` from 1.53.0 to 1.53.1\n- [Release notes](https://github.com/tokio-rs/tokio/releases)\n- [Commits](https://github.com/tokio-rs/tokio/compare/tokio-1.53.0...tokio-1.53.1)\n\n---\nupdated-dependencies:\n- dependency-name: base64\n  dependency-version: 0.23.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo\n- dependency-name: clap\n  dependency-version: 4.6.4\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: hyper\n  dependency-version: 1.11.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo\n- dependency-name: serde_json\n  dependency-version: 1.0.151\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: tokio\n  dependency-version: 1.53.1\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-02T03:55:57+08:00",
+          "tree_id": "056c5b413549dc48c744483b663473c62ed2ed00",
+          "url": "https://github.com/henry40408/lur/commit/14b65af011c8d5bd9718cac47390fbbaebd60df4"
+        },
+        "date": 1785614271165,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 304611,
+            "range": "± 3905",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5560,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207558,
+            "range": "± 5842",
             "unit": "ns/iter"
           }
         ]
