@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785614271446,
+  "lastUpdate": 1785616435990,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2267,6 +2267,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207558,
             "range": "± 5842",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "02609efdc0f8efabae953a7cd4dd81f176a3e180",
+          "message": "fix(db): retry busy errors when opening the SQLite pool (#86)\n\nopen_pool was the only write path in the SQLite backend not wrapped in\nretry_busy. Establishing the first connection can need an exclusive lock\n(the WAL-mode switch, and re-creating the -wal/-shm sidecars removed when\nthe previous last connection closed), and the lur_kv DDL needs the write\nlock whenever the table is genuinely absent.\n\nSince busy_timeout is deliberately low (200 ms) on the premise that\napp-level retry-with-jitter absorbs contention, leaving open unretried\nmade it the one place lock contention still surfaced as \"database is\nlocked\" — which is what intermittently failed the concurrent-writer\ntests in CI, and what a second process opening the same database under\nload would hit.\n\nWrap both the connect and the DDL in the existing retry_busy helper. The\nnew unit test holds the write lock for longer than a single busy_timeout\non a database whose lur_kv is still absent, so it fails deterministically\nwithout the fix (code 5, \"database is locked\") and passes with it.\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-08-02T04:32:34+08:00",
+          "tree_id": "e640f49ca5eadcedd28f7dd479b2f9bb3daee54d",
+          "url": "https://github.com/henry40408/lur/commit/02609efdc0f8efabae953a7cd4dd81f176a3e180"
+        },
+        "date": 1785616435442,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 275234,
+            "range": "± 10265",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5375,
+            "range": "± 204",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 210881,
+            "range": "± 5637",
             "unit": "ns/iter"
           }
         ]
