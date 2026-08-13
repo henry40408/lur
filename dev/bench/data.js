@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785616836373,
+  "lastUpdate": 1786596660367,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2351,6 +2351,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 382820,
             "range": "± 2689",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "98ccaf2b40671f020c368087b5f443610d1c9191",
+          "message": "chore(deps): bump the github-actions group with 2 updates (#88)\n\nBumps the github-actions group with 2 updates: [taiki-e/install-action](https://github.com/taiki-e/install-action) and [docker/login-action](https://github.com/docker/login-action).\n\n\nUpdates `taiki-e/install-action` from 2.85.1 to 2.85.6\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/3d7d7cd5ac7f994c1892ae0c06165095b9139094...1beb33eee6d086258184383af9a538940be190ed)\n\nUpdates `docker/login-action` from 4.5.1 to 4.6.0\n- [Release notes](https://github.com/docker/login-action/releases)\n- [Commits](https://github.com/docker/login-action/compare/abd2ef45e78c5afb21d64d4ca52ee8550d9572c7...dbcb813823bdd20940b903addbd779551569679f)\n\n---\nupdated-dependencies:\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.85.6\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: github-actions\n- dependency-name: docker/login-action\n  dependency-version: 4.6.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: github-actions\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-13T12:48:12+08:00",
+          "tree_id": "f8fe4bda1a54c9eeefc16749b4fb7ee141ba9bab",
+          "url": "https://github.com/henry40408/lur/commit/98ccaf2b40671f020c368087b5f443610d1c9191"
+        },
+        "date": 1786596659583,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 175326,
+            "range": "± 14474",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3214,
+            "range": "± 126",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 299927,
+            "range": "± 6168",
             "unit": "ns/iter"
           }
         ]
