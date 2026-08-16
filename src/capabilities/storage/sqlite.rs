@@ -112,15 +112,24 @@ where
 /// Establishing the first connection can need an exclusive lock (the WAL-mode
 /// switch, and re-creating the -wal/-shm sidecars a previous last-connection
 /// close removed), and the `lur_kv` DDL needs the write lock whenever the table
-/// is genuinely absent. Since `busy_timeout` here is deliberately low (200 ms)
-/// on the premise that app-level retry absorbs contention, leaving these two
-/// unretried makes opening the one write path that can still surface
-/// `database is locked` under load.
+/// is genuinely absent — neither is covered by `busy_timeout` alone, so both
+/// go through `retry_busy`.
+///
+/// `busy_timeout` is 5 s (sqlx's default). It was briefly lowered to 200 ms on
+/// the premise that app-level jitter, not `SQLite`'s polling, should break the
+/// writer herd; measurement showed the opposite. `retry_busy` contributes at
+/// most ~71 ms of cumulative sleep (4 retries over a 5/10/20/40 ms full-jitter
+/// ramp), so a 200 ms timeout capped the whole wait budget at roughly 1 s —
+/// far too little for a loaded host, where it surfaced `database is locked`
+/// to Lua. The two layers are complementary rather than alternatives:
+/// `SQLite`'s handler waits out ordinary write-lock contention, `retry_busy`
+/// the locks it cannot wait on at all (the WAL-mode pragma on a fresh
+/// connection, and lock upgrades that fail fast to avoid deadlock).
 pub(crate) async fn open_pool(path: &Path) -> sqlx::Result<SqlitePool> {
     let opts = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
-        .busy_timeout(std::time::Duration::from_millis(200))
+        .busy_timeout(std::time::Duration::from_secs(5))
         .journal_mode(SqliteJournalMode::Wal);
     let pool = retry_busy(|| {
         let opts = opts.clone();
@@ -722,10 +731,11 @@ mod tests {
 
     // Opening must be as busy-tolerant as every other write path. On a database
     // whose lur_kv table is still absent, open_pool has to run the CREATE TABLE
-    // DDL, which needs the write lock. Holding that lock for longer than the
-    // 200 ms busy_timeout makes an unretried open fail with SQLITE_BUSY; with
-    // retry_busy the open waits the holder out (the hold stays well inside the
-    // 5-attempt budget) and still creates the table.
+    // DDL, which needs the write lock. This holds that lock across the open and
+    // asserts the open waits the holder out instead of erroring busy, and still
+    // creates the table. The hold is well inside the 5 s busy_timeout, so it is
+    // SQLite's handler that absorbs it; retry_busy backs up the locks that
+    // handler cannot wait on, which this test cannot force deterministically.
     #[test]
     fn open_pool_waits_out_a_held_write_lock() {
         const HOLD_MS: u64 = 500;

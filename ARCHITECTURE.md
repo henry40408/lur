@@ -215,15 +215,17 @@ grace period is aborted when the runtime drops.
   onto the backend-neutral seam; `storage/sqlite.rs`'s `SqliteBackend` owns the lazily-
   opened `sqlx` SQLite pool (WAL mode, file auto-created), reached through the shared
   `storage::Shared` handle. `SqliteBackend::begin` opens write transactions with
-  `BEGIN IMMEDIATE`; write-lock contention is handled by a 200 ms `busy_timeout` plus
+  `BEGIN IMMEDIATE`; write-lock contention is handled by a 5 s `busy_timeout` plus
   `retry_busy`, a bounded (5-attempt) full-jitter backoff wrapping single-statement writes
   (`db.exec`, `kv.add`/`cas`/`incr`/`decr`), lock acquisition (`begin`, covering
   `db.tx`/`kv.update`) and opening itself (`open_pool`: connecting, plus the `lur_kv` DDL)
   — retried only where no user code has run or the retried body is
-  pure, so a retry never duplicates a side effect. Opening counts as a write path because
-  the first connection can need an exclusive lock and the DDL needs the write lock; with
-  `busy_timeout` deliberately low, an unretried open is the one place contention still
-  surfaces as `database is locked`. Dynamic SQL is wrapped in
+  pure, so a retry never duplicates a side effect. The two layers are complementary, not
+  alternatives: `busy_timeout` waits out ordinary write-lock contention, while `retry_busy`
+  covers the locks SQLite's handler cannot wait on at all — the WAL-mode pragma on a fresh
+  connection, and lock upgrades that fail fast to avoid deadlock. Opening counts as a write
+  path for exactly that reason: the first connection can need an exclusive lock and the DDL
+  needs the write lock. Dynamic SQL is wrapped in
   `sqlx::AssertSqlSafe` at the call sites that build statements from user input. `db.rs`
   hands `storage::Shared` to `kv`.
 - **`lur.kv`** ([`capabilities/kv.rs`](src/capabilities/kv.rs)) is a key/value store over
