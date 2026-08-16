@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786884650699,
+  "lastUpdate": 1786889100744,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2435,6 +2435,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 161410,
             "range": "± 2659",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0c365b735c9e9e933e6008d5bc3e363127c180e6",
+          "message": "ci(perf): drop restored Criterion state before benching (#92)\n\nThe perf job fails on every run that gets a rust-cache hit. rust-cache\nprunes target/ but leaves target/criterion/<bench>/ standing without its\nbase/sample.json, so Criterion fails loading that baseline and splices\n\n  Criterion.rs ERROR: error: Failed to access file \".../base/sample.json\"\n\ninto the middle of the \"test <name> ... bench: <n> ns/iter\" line that\n--output-format bencher is supposed to emit. The tool:cargo parser then\nfinds nothing it recognises and github-action-benchmark fails the job with\n\"No benchmark result was found in output.txt\". It is a parse failure rather\nthan a regression alert, so fail-on-alert: false does not cover it, and the\nbenchmarks themselves ran fine.\n\nConfirmed by the cache state rather than inferred: main at a30859c logged\n\"No cache found.\" and passed; #91 and main at 98ddf1f both logged a full\ncache hit and failed identically. The first run to populate the\nv0-rust-perf-* key was main's 12:47 run today, which is why this surfaced\nnow and why it affects every PR and every main push from here on.\n\nRemoving the directory restores exactly the state of the run that passed.\nNothing is lost: the moving baseline this job reports against lives in\ngh-pages under dev/bench (data.js, entries[\"lur criterion\"]), never in\ntarget/criterion — Criterion's own baseline comparison is unused here,\nsince bencher output carries only the measurement.\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-08-16T22:03:38+08:00",
+          "tree_id": "71e9484f48f4f4e8ebd6591210c17e58042cfc92",
+          "url": "https://github.com/henry40408/lur/commit/0c365b735c9e9e933e6008d5bc3e363127c180e6"
+        },
+        "date": 1786889099987,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 303962,
+            "range": "± 8168",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5742,
+            "range": "± 109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208024,
+            "range": "± 1436",
             "unit": "ns/iter"
           }
         ]
