@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786889100744,
+  "lastUpdate": 1786889562566,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2477,6 +2477,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208024,
             "range": "± 1436",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b2fb99373c8befb42f8292ada9166cd5a4c46920",
+          "message": "chore(deps): bump the cargo group across 1 directory with 3 updates (#89)\n\nBumps the cargo group with 3 updates in the / directory: [base64](https://github.com/marshallpierce/rust-base64), [clap](https://github.com/clap-rs/clap) and [thiserror](https://github.com/dtolnay/thiserror).\n\n\nUpdates `base64` from 0.23.0 to 0.23.1\n- [Changelog](https://github.com/marshallpierce/rust-base64/blob/master/RELEASE-NOTES.md)\n- [Commits](https://github.com/marshallpierce/rust-base64/compare/v0.23.0...v0.23.1)\n\nUpdates `clap` from 4.6.5 to 4.6.6\n- [Release notes](https://github.com/clap-rs/clap/releases)\n- [Changelog](https://github.com/clap-rs/clap/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/clap-rs/clap/compare/clap_complete-v4.6.5...clap_complete-v4.6.6)\n\nUpdates `thiserror` from 2.0.19 to 2.0.20\n- [Release notes](https://github.com/dtolnay/thiserror/releases)\n- [Commits](https://github.com/dtolnay/thiserror/compare/2.0.19...2.0.20)\n\n---\nupdated-dependencies:\n- dependency-name: base64\n  dependency-version: 0.23.1\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: clap\n  dependency-version: 4.6.6\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: thiserror\n  dependency-version: 2.0.20\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-16T22:11:08+08:00",
+          "tree_id": "efd82ee4e543dfe353d556a7e1d3b7a4915703d0",
+          "url": "https://github.com/henry40408/lur/commit/b2fb99373c8befb42f8292ada9166cd5a4c46920"
+        },
+        "date": 1786889561805,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 175130,
+            "range": "± 10455",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3262,
+            "range": "± 251",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 300267,
+            "range": "± 15471",
             "unit": "ns/iter"
           }
         ]
