@@ -101,7 +101,20 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Run benchmarks
         # Criterion emits the libtest "bencher" format that tool:cargo parses.
-        run: cargo bench --bench runtime -- --output-format bencher | tee output.txt
+        #
+        # Drop any restored Criterion state first. rust-cache prunes target/ but
+        # leaves target/criterion/<bench>/ standing without its base/sample.json,
+        # and Criterion then fails loading that baseline *mid-line*, splicing
+        #   Criterion.rs ERROR: ... No such file or directory
+        # into the "test <name> ... bench: <n> ns/iter" line this format is meant
+        # to produce. That breaks the tool:cargo parser, which reports "No
+        # benchmark result was found" and fails the job — not an alert, so
+        # fail-on-alert: false does not cover it. Nothing is lost: the moving
+        # baseline this job compares against lives in gh-pages (see
+        # benchmark-data-dir-path below), never in target/criterion.
+        run: |
+          rm -rf target/criterion
+          cargo bench --bench runtime -- --output-format bencher | tee output.txt
       - name: Store result and report regressions
         uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
         with:
