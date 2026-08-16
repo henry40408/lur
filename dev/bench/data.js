@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786596660367,
+  "lastUpdate": 1786884650699,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2393,6 +2393,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 299927,
             "range": "± 6168",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a30859c8ef088cc1977eaa23257bb6527728b3a2",
+          "message": "chore(deps): bump the github-actions group with 2 updates (#90)\n\nBumps the github-actions group with 2 updates: [Swatinem/rust-cache](https://github.com/swatinem/rust-cache) and [taiki-e/install-action](https://github.com/taiki-e/install-action).\n\n\nUpdates `Swatinem/rust-cache` from 2.9.1 to 2.9.2\n- [Release notes](https://github.com/swatinem/rust-cache/releases)\n- [Changelog](https://github.com/Swatinem/rust-cache/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/swatinem/rust-cache/compare/c19371144df3bb44fab255c43d04cbc2ab54d1c4...6323deb102c322ba6fcbdcafc7e3dddab59af2b6)\n\nUpdates `taiki-e/install-action` from 2.85.6 to 2.85.10\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/1beb33eee6d086258184383af9a538940be190ed...6c6fd71fe4fb72c3697d269963d0e15df8adedad)\n\n---\nupdated-dependencies:\n- dependency-name: Swatinem/rust-cache\n  dependency-version: 2.9.2\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: github-actions\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.85.10\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: github-actions\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-16T20:47:39+08:00",
+          "tree_id": "ba2183fad7fb17909bf0714a05601150e63281ef",
+          "url": "https://github.com/henry40408/lur/commit/a30859c8ef088cc1977eaa23257bb6527728b3a2"
+        },
+        "date": 1786884649737,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 213137,
+            "range": "± 2326",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4226,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 161410,
+            "range": "± 2659",
             "unit": "ns/iter"
           }
         ]
