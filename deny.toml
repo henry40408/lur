@@ -11,7 +11,14 @@ version = 2
 # Deny crates with a known security advisory (RUSTSEC) or that have been yanked.
 # `ignore` holds advisory IDs we've reviewed and consciously accept.
 yanked = "deny"
-ignore = []
+ignore = [
+    # RUSTSEC-2026-0258: h2 accepts and queues empty DATA frames without limit,
+    # which can grow memory unboundedly or panic if the length overflows. Low
+    # severity, and h2 is reached only transitively via hyper. Fixed in h2
+    # 0.4.16, published 2026-08-17 — too new to adopt under the 7-day hold on
+    # fresh releases, which clears on 2026-08-24. Remove this then; see #94.
+    "RUSTSEC-2026-0258",
+]
 
 [licenses]
 version = 2
