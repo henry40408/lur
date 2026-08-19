@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786889562566,
+  "lastUpdate": 1787147378843,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2519,6 +2519,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 300267,
             "range": "± 15471",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9c29cfbeac2f149906a7447363e3c3f26713995c",
+          "message": "refactor: filter logs with Targets instead of EnvFilter (#93)\n\n* refactor: filter logs with Targets instead of EnvFilter\n\n`env-filter` is the only thing in this tree that pulls in a regex engine —\nthe feature gates both `matchers` and `regex-automata`, and nothing else\nhere needs either. `Targets` reads the same `lur=debug` out of the same\n`RUST_LOG`; what it gives up is filtering on spans and fields, and nothing\nhere writes either.\n\nMeasured on this machine (default release profile — this crate sets no\n`[profile.release]`, so no LTO and no strip): 16,632,176 -> 15,943,200\nbytes, 688,976 saved (-4.1%); __TEXT 12,304,384 -> 11,796,480 (-4.1%).\n`regex-automata` is gone from the runtime dependency tree entirely, and\nCargo.lock loses `matchers` with no version drift elsewhere.\n\nTwo behaviours are corrected while the function was being rewritten:\n\n- `log_internal_errors(true)`. `fmt::layer()` defaults this off where the\n  `fmt()` builder defaults it on; without it a subscriber that fails to\n  write fails silently.\n- `NO_COLOR` now follows no-color.org, under which a set-but-empty value is\n  not a setting. The previous `var_os(..).is_none()` disabled colour on a\n  bare `NO_COLOR=`.\n\nOne limitation is worth recording, because it is easy to assume the\nfallback covers it: a mistyped *target* (`RUST_LOG=lru=debug`) parses\ncleanly into a filter that matches nothing, so the log goes silent rather\nthan falling back. That is not new — `EnvFilter` was measured on the same\ninputs and behaves identically, reading a bare word as a target at TRACE.\nThe fallback still catches a mistyped *level* (`lur=nonsense`), which is\nthe case that actually errors.\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\n\n* chore(deps): ignore RUSTSEC-2026-0258 until h2 0.4.16 is eligible\n\nh2 accepts and queues empty DATA frames without limit, which can grow\nmemory unboundedly or panic if the length overflows. Low severity, and h2\nis not a direct dependency here — it arrives transitively through hyper.\n\nThe real fix is h2 0.4.16, but it was published 2026-08-17 and new releases\nare held for 7 days before being adopted, so it becomes eligible on\n2026-08-24. Ignoring the advisory until then keeps `cargo deny` meaningful\nabout everything else, rather than leaving one permanently red check that\ntrains everyone to skip past it.\n\nTracked in #94, which carries the steps to take the upgrade and delete\nthis entry.\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-08-19T21:48:04+08:00",
+          "tree_id": "2fd1546c2371c10af2f8871b4ec878c7768422e1",
+          "url": "https://github.com/henry40408/lur/commit/9c29cfbeac2f149906a7447363e3c3f26713995c"
+        },
+        "date": 1787147378210,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 280208,
+            "range": "± 5725",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5445,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208634,
+            "range": "± 4101",
             "unit": "ns/iter"
           }
         ]
