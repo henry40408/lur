@@ -131,12 +131,11 @@ mod tests {
     use std::time::Duration;
     use tokio::sync::Notify;
 
-    // A db.tx whose body writes a row then parks, cancelled mid-transform, must
-    // roll back synchronously: the sole pooled connection is released promptly
-    // (a fresh begin does not hang) and the written row is gone. Before the
-    // Weak-ref fix the two Arc clones held in the Lua exec/query closures kept
-    // the transaction alive until GC, so the connection stayed checked out and
-    // this second begin would block until the pool acquire timeout.
+    // A db.tx cancelled mid-transform must roll back synchronously: the sole
+    // pooled connection is released promptly (a fresh begin does not hang) and the
+    // written row is gone. Without the Weak refs, the Arc clones in the Lua
+    // exec/query closures keep the transaction alive until GC, so the connection
+    // stays checked out and the second begin blocks until the pool acquire timeout.
     #[test]
     fn db_tx_cancellation_rolls_back_synchronously() {
         let rt = tokio::runtime::Builder::new_current_thread()

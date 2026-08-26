@@ -263,7 +263,6 @@ impl PgBackend {
         new: Option<Vec<u8>>,
     ) -> mlua::Result<bool> {
         let applied = match (expected, new) {
-            // expect absent, set new: insert iff absent
             (None, Some(v)) => {
                 sqlx::query(
                     "INSERT INTO lur_kv (key, kind, bytes) VALUES ($1, 0, $2) \
@@ -277,7 +276,6 @@ impl PgBackend {
                 .rows_affected()
                     == 1
             }
-            // expect absent, want absent: succeeds iff already absent
             (None, None) => {
                 let r = sqlx::query("SELECT 1 FROM lur_kv WHERE key = $1")
                     .bind(key)
@@ -286,7 +284,6 @@ impl PgBackend {
                     .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?;
                 r.is_none()
             }
-            // expect bytes value, set new
             (Some(e), Some(v)) => {
                 sqlx::query(
                     "UPDATE lur_kv SET kind = 0, bytes = $1, num = NULL \
@@ -301,7 +298,6 @@ impl PgBackend {
                 .rows_affected()
                     == 1
             }
-            // expect bytes value, delete
             (Some(e), None) => {
                 sqlx::query("DELETE FROM lur_kv WHERE key = $1 AND kind = 0 AND bytes = $2")
                     .bind(key)
@@ -391,8 +387,7 @@ impl PgBackend {
             .await
             .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
 
-        // Run the full read → transform → write sequence. If the enclosing
-        // future is cancelled during `func`, `tx` drops and rolls back.
+        // Cancellation anywhere in here drops `tx`, which rolls back.
         let result: mlua::Result<Value> = async {
             let cur: Value = match sqlx::query("SELECT kind, bytes, num FROM lur_kv WHERE key = $1")
                 .bind(&key)
@@ -658,10 +653,9 @@ mod tests {
                 .unwrap();
             drop(tx); // simulate a future cancelled mid-transaction
 
-            // On the fixed code the detached rollback frees the connection before
-            // this query can acquire it, and the row is gone. On the unfixed code
-            // the connection returns to the pool inside the open transaction, so
-            // the query runs inside it and still sees the uncommitted row.
+            // The detached rollback frees the connection before this query can
+            // acquire it, so the row is gone. Unfixed, the connection returns to the
+            // pool inside the open transaction and the query still sees the row.
             let rows = backend
                 .query(&lua, format!("SELECT x FROM {t}"), vec![])
                 .await

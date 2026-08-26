@@ -68,7 +68,7 @@ fn install_parse(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
                 argcheck::arg(lua, header, "lur.cookie.parse", 1, "string")?;
             let out = lua.create_table()?;
             let bytes = header.as_bytes();
-            // Later duplicate overwrites earlier: plain table assignment.
+            // Later duplicate overwrites earlier.
             for (name, value) in cookie_pairs(&bytes) {
                 out.set(lua.create_string(name)?, lua.create_string(value)?)?;
             }

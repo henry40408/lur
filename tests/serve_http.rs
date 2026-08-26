@@ -219,9 +219,8 @@ fn oversize_body_is_rejected_with_413_over_http() {
 
 #[test]
 fn sigterm_drains_in_flight_request_then_exits_cleanly() {
-    // A handler that takes 400ms. We fire the request, SIGTERM the server while
-    // it is in flight, and require: (1) the in-flight request still completes,
-    // (2) the process then exits cleanly (0) rather than dying on the signal.
+    // SIGTERM arrives while a 400 ms handler is in flight: the request must still
+    // complete, and the process must then exit 0 rather than die on the signal.
     let (addr, mut reaper, _dir) = spawn_server(
         "lur.serve.http('GET', '/slow', function()\n\
          \tlur.async.sleep(400)\n\
@@ -237,7 +236,6 @@ fn sigterm_drains_in_flight_request_then_exits_cleanly() {
     std::thread::sleep(Duration::from_millis(120));
     send_sigterm(reaper.pid());
 
-    // The in-flight request must still get its full response.
     let mut resp = String::new();
     stream.read_to_string(&mut resp).unwrap();
     assert!(
@@ -245,7 +243,6 @@ fn sigterm_drains_in_flight_request_then_exits_cleanly() {
         "in-flight request should drain to completion: {resp:?}"
     );
 
-    // And the server should exit cleanly within the grace window.
     let status = reaper
         .wait_within(Duration::from_secs(5))
         .expect("server should exit after draining");

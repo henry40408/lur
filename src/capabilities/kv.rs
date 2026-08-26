@@ -170,11 +170,10 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
                 async move {
                     reject_kv_reentry("lur.kv.update")?;
                     let backend = shared.ensure().await?;
-                    // Hold IN_KV_UPDATE only around the user transform, not
-                    // across the transaction's I/O awaits (begin/read/write/
-                    // commit), so sibling lur.async kv/db calls interleaved
-                    // while this update is parked on DB I/O are not spuriously
-                    // rejected as re-entry (matches pre-seam guard timing).
+                    // Held only around the user transform, not the transaction's
+                    // own I/O awaits — otherwise a sibling lur.async kv/db call that
+                    // interleaves while this update parks on DB I/O is spuriously
+                    // rejected as re-entry.
                     let wrapped = lua.create_async_function(move |_, cur: Value| {
                         let func = func.clone();
                         async move {
@@ -200,9 +199,9 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    // A guard entered inside a future that is then cancelled mid-await must
-    // still restore IN_KV_UPDATE to false — otherwise the flag poisons every
-    // later kv/db call on the pooled VM (backlog item 0).
+    // A guard entered inside a future that is then cancelled mid-await must still
+    // restore IN_KV_UPDATE to false, or the flag poisons every later kv/db call on
+    // the pooled VM.
     #[test]
     fn kv_update_guard_restores_flag_on_cancellation() {
         let rt = tokio::runtime::Builder::new_current_thread()

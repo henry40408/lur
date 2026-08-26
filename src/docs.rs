@@ -40,7 +40,6 @@ fn highlight_lua(code: &str, color: bool) -> String {
     };
     while i < bytes.len() {
         let rest = &code[i..];
-        // Line comment (and long comment `--[[ ... ]]`).
         if rest.starts_with("--") {
             let end = if rest.starts_with("--[[") {
                 rest.find("]]").map_or(rest.len(), |p| p + 2)
@@ -51,14 +50,12 @@ fn highlight_lua(code: &str, color: bool) -> String {
             i += end;
             continue;
         }
-        // Long-bracket string `[[ ... ]]`.
         if rest.starts_with("[[") {
             let end = rest.find("]]").map_or(rest.len(), |p| p + 2);
             wrap(&mut out, STR_C, &rest[..end]);
             i += end;
             continue;
         }
-        // Quoted string (single or double), honoring `\` escapes.
         let c0 = bytes[i];
         if c0 == b'"' || c0 == b'\'' {
             let quote = c0;
@@ -79,7 +76,6 @@ fn highlight_lua(code: &str, color: bool) -> String {
             i = end;
             continue;
         }
-        // Number (decimal/float/hex).
         if c0.is_ascii_digit() {
             let mut j = i + 1;
             while j < bytes.len()
@@ -91,7 +87,6 @@ fn highlight_lua(code: &str, color: bool) -> String {
             i = j;
             continue;
         }
-        // Identifier / keyword (word boundary).
         if c0.is_ascii_alphabetic() || c0 == b'_' {
             let mut j = i + 1;
             while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
@@ -106,7 +101,6 @@ fn highlight_lua(code: &str, color: bool) -> String {
             i = j;
             continue;
         }
-        // Anything else: emit one char verbatim.
         let ch = rest.chars().next().unwrap();
         out.push(ch);
         i += ch.len_utf8();
@@ -191,8 +185,6 @@ pub fn render(markdown: &str, color: bool) -> String {
             }
             Event::Text(text) => {
                 if in_code {
-                    // Frame each code line with `│ ` at the section margin, and
-                    // syntax-highlight the line content.
                     for line in text.split_inclusive('\n') {
                         let body = line.strip_suffix('\n').unwrap_or(line);
                         out.push('\n');
@@ -235,10 +227,8 @@ mod tests {
     fn color_off_keeps_structure_without_escapes() {
         let out = render(MD, false);
         assert!(!out.contains('\x1b'), "no ANSI codes: {out:?}");
-        // Heading prefixes kept for H2+; H1 has no '#'.
         assert!(out.contains("## Section"), "h2 prefix: {out:?}");
         assert!(out.contains("### lur.json"), "h3 prefix: {out:?}");
-        // Code frame present; code text verbatim.
         assert!(out.contains("\u{2502} local x = 1"), "code frame: {out:?}");
         // Inline code and heading text survive as plain text.
         assert!(out.contains("Guide") && out.contains("lur.json"), "{out:?}");
@@ -249,12 +239,10 @@ mod tests {
         let out = render(MD, true);
         assert!(out.contains("\x1b[1;7m"), "h1 reverse bar: {out:?}");
         assert!(out.contains("\x1b[1;36m"), "h3 bold cyan: {out:?}");
-        // The code block body is highlighted (the `local` keyword is colored).
         assert!(
             out.contains("\x1b[1;36mlocal\x1b[0m"),
             "code highlighted: {out:?}"
         );
-        // The code frame bar is present.
         assert!(out.contains('\u{2502}'), "code frame: {out:?}");
     }
 

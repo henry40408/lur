@@ -43,7 +43,7 @@ pub(crate) fn arg<T: FromLua>(
 ) -> mlua::Result<T> {
     let got = value.type_name();
     #[allow(clippy::map_err_ignore)]
-    // original error discarded intentionally; we rewrite the message
+    // discarding the original is deliberate: the message is rewritten below
     T::from_lua(value, lua).map_err(|_e| {
         Error::runtime(format!(
             "{fname}: argument #{n} must be {expected}, got {got}"

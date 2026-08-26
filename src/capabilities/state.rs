@@ -305,7 +305,6 @@ mod tests {
 
         // A stale expected-version is rejected (someone else wrote).
         assert!(!store.compare_and_set(b"k", 0, Some(Prim::Num(9.0))));
-        // The current version applies and bumps.
         assert!(store.compare_and_set(b"k", 1, Some(Prim::Num(2.0))));
         assert_eq!(store.snapshot(b"k").1, 2);
     }
