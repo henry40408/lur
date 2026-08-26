@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787482071833,
+  "lastUpdate": 1787753930962,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2603,6 +2603,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207771,
             "range": "± 10395",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f6849e6f312426033f5fbaf5f6f8250c6b20a43b",
+          "message": "fix: update h2 to 0.4.16 (#98)",
+          "timestamp": "2026-08-26T22:15:26+08:00",
+          "tree_id": "6011a3b158c1b06c7c2aa442b7528acde6e92daa",
+          "url": "https://github.com/henry40408/lur/commit/f6849e6f312426033f5fbaf5f6f8250c6b20a43b"
+        },
+        "date": 1787753929796,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 177043,
+            "range": "± 6807",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3333,
+            "range": "± 41",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 311830,
+            "range": "± 5820",
             "unit": "ns/iter"
           }
         ]
