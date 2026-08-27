@@ -149,8 +149,7 @@ pub(crate) fn build_lua(
         },
     );
 
-    // Apply the memory cap last, after construction/sandbox/injection have
-    // done their own allocations.
+    // Last, so construction/sandbox/injection do not count against the cap.
     lua.set_memory_limit(config.memory_limit)
         .map_err(RunError::Init)?;
 
@@ -200,8 +199,6 @@ impl Runtime {
             chunk_name,
         })
     }
-
-    // ---------------------------------------------------------------------
 
     /// Run `source` to completion with no time limit.
     pub fn run(&self, source: &str) -> Result<(), RunError> {

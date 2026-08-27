@@ -113,14 +113,10 @@ fn tx_rolls_back_on_error() {
 
 #[test]
 fn kv_incr_is_atomic_under_concurrent_writers() {
-    // The atomicity claim: kv.incr is a single guarded upsert, so concurrent
-    // writers (each its own Runtime + pool, all pointing at one db file) under
-    // WAL must not lose an update. Each thread runs a tight incr loop; the final
-    // counter must equal threads * per_thread exactly.
-    //
-    // Four writers hammering one key: retry-with-jitter on the upsert absorbs the
-    // SQLITE_BUSY thundering-herd that a bare 200 ms busy_timeout would surface,
-    // so every increment lands and none is lost.
+    // kv.incr is a single guarded upsert, so concurrent writers (each its own
+    // Runtime + pool over one db file) under WAL must not lose an update: the final
+    // counter has to equal THREADS * PER_THREAD exactly. Retry-with-jitter on the
+    // upsert absorbs the SQLITE_BUSY herd a bare busy_timeout would surface.
     const THREADS: i64 = 4;
     const PER_THREAD: i64 = 200;
 
@@ -171,8 +167,6 @@ fn db_without_a_path_errors() {
 
 #[test]
 fn tx_uses_a_write_lock_and_still_commits_and_rolls_back() {
-    // Smoke test that the BEGIN IMMEDIATE rewrite preserves tx semantics:
-    // a committing tx persists, an erroring tx rolls back, on the same db.
     let dir = tempfile::tempdir().unwrap();
     let rt = db_runtime(dir.path().join("test.db"));
     rt.run(

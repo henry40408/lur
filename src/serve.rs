@@ -345,8 +345,7 @@ impl Server {
             let listener = TcpListener::bind(addr).await?;
             info!("listening on http://{addr}");
 
-            // Fan the single shutdown future out to the accept loop and every
-            // cron loop via a watch channel.
+            // Fan the single shutdown future out to the accept loop and every cron loop.
             let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
             tokio::spawn(async move {
                 shutdown.await;
@@ -357,7 +356,7 @@ impl Server {
             // run; draining waits until only this original handle remains.
             let active = Arc::new(());
 
-            // One scheduler task per cron job; they draw VMs from the same pool.
+            // Cron loops draw VMs from the same pool as request handlers.
             for job in &server.cron_jobs {
                 tokio::spawn(cron_loop(
                     server.clone(),
@@ -391,8 +390,6 @@ impl Server {
                 }
             }
 
-            // Drain: wait for in-flight connections and jobs to finish, bounded
-            // by the grace period.
             info!("shutting down, draining for up to {}ms", grace.as_millis());
             let deadline = Instant::now() + grace;
             while Arc::strong_count(&active) > 1 && Instant::now() < deadline {
@@ -471,9 +468,8 @@ impl Server {
             });
         };
 
-        // Borrow a VM exclusively for the whole call. Exclusive ownership is what
-        // makes the per-call environment swap safe (no other request runs on this
-        // VM until it is returned) — it replaces the single-VM serialize lock.
+        // Exclusive ownership for the whole call is what makes the per-call
+        // environment swap safe: no other request runs on this VM until it returns.
         let checked = self.pool.checkout().await;
         let vm = checked.vm();
         let handler = &vm.handlers[id];
@@ -576,7 +572,6 @@ async fn cron_loop(
             return; // no further fires (e.g. a one-shot past spec)
         };
         let wait = (next - Utc::now()).to_std().unwrap_or(Duration::ZERO);
-        // Wake on the next fire or on shutdown, whichever comes first.
         tokio::select! {
             () = tokio::time::sleep(wait) => {}
             _ = shutdown.changed() => return,
@@ -786,10 +781,9 @@ fn build_req(
     }
     table.set("headers", headers)?;
 
-    // Cookies: parse every `Cookie` header into one table (later value wins),
-    // sharing the lenient parser with `lur.cookie.parse`. Always a table — an
-    // absent or empty header yields an empty `req.cookies`, never `nil`. Cookie
-    // names are case-sensitive, so (unlike header names) they are not altered.
+    // Every `Cookie` header folds into one table, later value winning. Always a
+    // table — an absent or empty header yields an empty `req.cookies`, never `nil`.
+    // Cookie names are case-sensitive, so unlike header names they are not lowered.
     let cookies = lua.create_table()?;
     for (name, value) in &req.headers {
         if name.eq_ignore_ascii_case("cookie") {
@@ -800,11 +794,9 @@ fn build_req(
     }
     table.set("cookies", cookies)?;
 
-    // Body as a one-shot stream. `req.read([n])` mirrors `lur.stdin.read`;
-    // `req.body` (a property, served via `__index`) and `req.json()` materialize
-    // the whole body but become unavailable once a chunked `req.read(n)` has
-    // consumed part of it (spec §3). Shared cursor/flag behind a mutex because the
-    // `send` feature requires the closures to be `Send`.
+    // The body is a one-shot stream: `req.body` and `req.json()` materialize it
+    // whole, but go unavailable once a chunked `req.read(n)` has consumed part of
+    // it (spec §3). The mutex is what makes the closures `Send`.
     let state = Arc::new(Mutex::new(BodyStream {
         body: req.body.clone(),
         cursor: 0,
@@ -950,9 +942,8 @@ fn response_from(values: MultiValue) -> Result<Response, RunError> {
         )));
     };
 
-    // Validate rather than `as u16`-truncate: an out-of-range `status` (negative
-    // or > u16, or outside the HTTP range) would otherwise silently wrap to a
-    // bogus code on the wire (e.g. -1 → 65535, 65736 → 200).
+    // `as u16` would silently wrap an out-of-range status into a valid-looking
+    // code on the wire (-1 → 65535, 65736 → 200), so validate instead.
     let status_raw = table
         .get::<Option<i64>>("status")
         .map_err(RunError::Script)?

@@ -35,19 +35,15 @@ const DEFAULT_FILTER: &str = "error,lur=info";
 /// Install the global `tracing` subscriber for server mode. One-shot mode does
 /// not call this and keeps plain `eprintln!` for user-facing errors.
 fn init_tracing(format: LogFormat) {
-    // `Targets` and not `EnvFilter`. Both read the same `lur=debug` out of the
-    // same `RUST_LOG`, but `EnvFilter` matches its directives with a regex engine
-    // that nothing else in this binary needs. What `Targets` gives up is filtering
-    // on spans and fields, and nothing here writes either.
+    // `Targets` and not `EnvFilter`: both read the same `lur=debug` out of
+    // `RUST_LOG`, but `EnvFilter` matches its directives with a regex engine, and
+    // all it buys — filtering on spans and fields — nothing here writes.
     //
-    // A `RUST_LOG` whose *level* will not parse (`lur=nonsense`) falls back to
-    // the default rather than refusing to start, which is what
-    // `EnvFilter::try_from_default_env` did too: a typo should cost a log level,
-    // not a startup. A mistyped *target* is not caught by that and never can be —
-    // a bare word is a target name at TRACE, so `RUST_LOG=nonsense` parses
-    // cleanly into a filter nothing matches and the log goes silent. Measured
-    // against `EnvFilter` on the same input: byte-identical behaviour, so this
-    // is not something the move to `Targets` introduced.
+    // An unparsable *level* (`lur=nonsense`) falls back to the default rather than
+    // refusing to start: a typo should cost a log level, not a startup. A mistyped
+    // *target* cannot be caught at all — a bare word is a target name at TRACE, so
+    // `RUST_LOG=nonsense` parses cleanly into a filter nothing matches and the log
+    // goes silent. `EnvFilter` behaved identically on both counts.
     let filter: Targets = std::env::var("RUST_LOG")
         .ok()
         .and_then(|directives| directives.parse().ok())

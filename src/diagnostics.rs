@@ -42,7 +42,6 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> S
         None => (displayed, None),
     };
 
-    // Strip a leading "<kind> error: " label if present.
     let body = head
         .strip_prefix("runtime error: ")
         .or_else(|| head.strip_prefix("syntax error: "))
@@ -116,7 +115,6 @@ fn parse_location(body: &str, chunk_name: &str) -> Option<(usize, Option<usize>,
     let idx = body.find(&needle)?;
     let rest = &body[idx + needle.len()..];
 
-    // line digits
     let line_end = rest.find(|c: char| !c.is_ascii_digit())?;
     if line_end == 0 {
         return None;
@@ -127,7 +125,6 @@ fn parse_location(body: &str, chunk_name: &str) -> Option<(usize, Option<usize>,
     }
     let after_line = &rest[line_end..];
 
-    // optional :col
     let (col, after) = if let Some(tail) = after_line.strip_prefix(':') {
         let col_end = tail
             .find(|c: char| !c.is_ascii_digit())
@@ -243,8 +240,6 @@ mod tests {
     fn colorizes_snippet_when_enabled() {
         let displayed = "syntax error: app.lua:2:7: bad token";
         let out = render(SRC, "app.lua", displayed, true);
-        // Bold-red for the `error:` label and the caret, bold-blue for the gutter,
-        // and a reset somewhere.
         assert!(
             out.contains("\x1b[1;31m"),
             "expected bold-red codes: {out:?}"
@@ -258,7 +253,6 @@ mod tests {
         // the `-->` arrow, so assert the bare location string.
         assert!(out.contains("error:"), "{out:?}");
         assert!(out.contains("app.lua:2:7"), "{out:?}");
-        // Bold-red specifically wraps the caret.
         assert!(out.contains("\x1b[1;31m^\x1b[0m"), "caret colored: {out:?}");
     }
 

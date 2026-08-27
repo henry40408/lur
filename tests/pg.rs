@@ -15,7 +15,6 @@ fn pg_test_url() -> String {
 /// mints a fresh store on every call.
 fn pg_config() -> Option<RuntimeConfig> {
     let url = pg_test_url();
-    // Cheap reachability probe: open a TCP connection to host:port.
     let reachable = reachable(&url);
     if !reachable {
         assert!(
@@ -65,7 +64,7 @@ const SERIALIZATION_FAILURE_TAIL: &str = "serialization failure (SQLSTATE 40001)
 /// A fresh, uniquely-named table per test so parallel tests don't collide on the
 /// shared database. Caller drops it via `DROP TABLE IF EXISTS`.
 fn unique(prefix: &str) -> String {
-    // Vary by a monotonically increasing process-local counter (no Date/random).
+    // A process-local counter, so neither the clock nor an RNG is involved.
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
     format!("{prefix}_{}", N.fetch_add(1, Ordering::Relaxed))

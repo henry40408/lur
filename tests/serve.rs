@@ -404,8 +404,6 @@ fn cpu_bound_handler_exceeding_timeout_returns_503() {
 
 #[test]
 fn vm_recovers_after_a_timeout() {
-    // After a handler is aborted by the timeout, its VM returns to the pool and
-    // serves the next request normally.
     let s = serve_with_timeout(
         "lur.serve.http('GET', '/slow', function(req) lur.async.sleep(5000) return {} end)\n\
          lur.serve.http('GET', '/ok', function(req) return { body = 'fine' } end)",
@@ -463,11 +461,10 @@ fn req_cookies_merges_multiple_headers_later_wins() {
 
 #[test]
 fn handler_error_carries_location_for_diagnostics() {
-    // A handler that raises a Lua error is returned from dispatch as
-    // Err(RunError::Script(...)). The error must carry a parsable chunk+line
-    // location so that diagnostics::render (called in the hyper handle layer)
-    // can produce a rustc-style snippet. We verify the location is present; the
-    // render output itself is covered by diagnostics::tests.
+    // dispatch returns a raised Lua error as Err(RunError::Script(..)); it must
+    // carry a parsable chunk+line location or diagnostics::render, which the hyper
+    // layer calls, cannot build its snippet. The render output itself is covered by
+    // diagnostics::tests.
     let s = serve(
         "lur.serve.http('GET', '/boom', function(req)\n\
          \tlocal x = nil\n\

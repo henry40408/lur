@@ -185,8 +185,6 @@ fn bind_one<'q>(q: Query<'q>, v: &Value) -> mlua::Result<Query<'q>> {
 /// Decode column 0 of a single-column row into bytes, returning `None` for
 /// NULL. INTEGER and REAL values are rendered as their decimal string; TEXT/BLOB
 /// come back as raw bytes. Never panics on a type mismatch.
-///
-/// A later task (`kv.update`) reuses this helper for the same type dispatch.
 pub(crate) fn value_to_bytes(row: &sqlx::sqlite::SqliteRow) -> mlua::Result<Option<Vec<u8>>> {
     let raw = row
         .try_get_raw(0)
@@ -194,9 +192,6 @@ pub(crate) fn value_to_bytes(row: &sqlx::sqlite::SqliteRow) -> mlua::Result<Opti
     if raw.is_null() {
         return Ok(None);
     }
-    // Always hand back bytes: counters (INTEGER) and REAL render as their
-    // decimal string; TEXT/BLOB are the raw bytes. Never a Vec<u8> type-mismatch
-    // panic.
     let bytes: Vec<u8> = match raw.type_info().name() {
         "INTEGER" => decode::<i64>(row)?.to_string().into_bytes(),
         "REAL" => decode::<f64>(row)?.to_string().into_bytes(),
@@ -340,7 +335,6 @@ impl SqliteBackend {
         new: Option<Vec<u8>>,
     ) -> mlua::Result<bool> {
         let applied = match (expected, new) {
-            // expect absent, set new
             (None, Some(v)) => {
                 retry_busy(|| async {
                     sqlx::query(
@@ -357,7 +351,6 @@ impl SqliteBackend {
                 .rows_affected()
                     == 1
             }
-            // expect absent, want absent: succeeds iff already absent
             (None, None) => {
                 let r = sqlx::query("SELECT 1 FROM lur_kv WHERE key = ?")
                     .bind(key)
@@ -366,7 +359,6 @@ impl SqliteBackend {
                     .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?;
                 r.is_none()
             }
-            // expect value, set new
             (Some(e), Some(v)) => {
                 retry_busy(|| async {
                     sqlx::query("UPDATE lur_kv SET value = ? WHERE key = ? AND value = ?")
@@ -381,7 +373,6 @@ impl SqliteBackend {
                 .rows_affected()
                     == 1
             }
-            // expect value, delete
             (Some(e), None) => {
                 retry_busy(|| async {
                     sqlx::query("DELETE FROM lur_kv WHERE key = ? AND value = ?")
@@ -456,8 +447,7 @@ impl SqliteBackend {
         .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
         let mut tx = PinnedTx::new(conn);
 
-        // Run the full read → transform → write sequence. If the enclosing
-        // future is cancelled during `func`, `tx` drops and rolls back.
+        // Cancellation anywhere in here drops `tx`, which rolls back.
         let result: mlua::Result<Value> = async {
             let cur: Value = match sqlx::query("SELECT value FROM lur_kv WHERE key = ?")
                 .bind(&key)
@@ -729,13 +719,11 @@ mod tests {
         });
     }
 
-    // Opening must be as busy-tolerant as every other write path. On a database
-    // whose lur_kv table is still absent, open_pool has to run the CREATE TABLE
-    // DDL, which needs the write lock. This holds that lock across the open and
-    // asserts the open waits the holder out instead of erroring busy, and still
-    // creates the table. The hold is well inside the 5 s busy_timeout, so it is
-    // SQLite's handler that absorbs it; retry_busy backs up the locks that
-    // handler cannot wait on, which this test cannot force deterministically.
+    // open_pool runs the lur_kv DDL under the write lock, so it is a write path
+    // like any other and must wait a holder out rather than error busy. The hold
+    // sits inside the 5 s busy_timeout, so SQLite's own handler absorbs it;
+    // retry_busy covers only the locks that handler cannot wait on, which this
+    // test cannot force deterministically.
     #[test]
     fn open_pool_waits_out_a_held_write_lock() {
         const HOLD_MS: u64 = 500;
@@ -805,10 +793,10 @@ mod tests {
             .unwrap();
             drop(tx); // simulate a future cancelled mid-transaction
 
-            // With max_connections=1 this begin can only acquire the sole
-            // connection after the detached rollback has released it — natural
-            // synchronization, no sleep. On the unfixed code the connection
-            // returns to the pool inside an open BEGIN and this begin errors.
+            // With max_connections=1 this begin can only acquire the sole connection
+            // after the detached rollback released it — synchronization without a
+            // sleep. Unfixed, the connection returns to the pool inside an open BEGIN
+            // and this errors.
             let tx2 = backend
                 .begin()
                 .await
@@ -864,9 +852,8 @@ mod tests {
             }
             drop(fut); // cancel mid-transform → PinnedTx::drop rolls back
 
-            // kv_get acquires the sole connection, so it blocks until the
-            // detached rollback frees it; on the unfixed code the fresh begin
-            // below errors (connection stuck in BEGIN IMMEDIATE).
+            // kv_get needs the sole connection, so it blocks until the detached
+            // rollback frees it; unfixed, that connection is stuck in BEGIN IMMEDIATE.
             let got = backend.kv_get(&lua, "k".to_string()).await.unwrap();
             assert_eq!(got, Value::Nil, "cancelled update must not commit");
             let tx = backend
