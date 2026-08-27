@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787753930962,
+  "lastUpdate": 1787789975263,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2645,6 +2645,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 311830,
             "range": "± 5820",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8c2d77a74788b638d7a534f880ae57df56c0c622",
+          "message": "refactor: trim comments that restate the code (#99)\n\nDelete comments whose adjacent code already says the same thing (match-arm\nlabels over `match (expected, new)`, tokenizer branch labels in docs.rs,\nassert restatements in tests, a decorative separator) and tighten the\nremaining ones to the part that is genuinely non-obvious.\n\nAlso drop narration that only made sense while the change was being made:\n\"before the Weak-ref fix\", \"matches pre-seam guard timing\", \"backlog item 0\",\n\"a later task reuses this helper\".\n\nComments only — the diff contains no code lines. `//` comment lines drop\nfrom 367 to 310 across src/ and tests/.\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-08-27T08:17:26+08:00",
+          "tree_id": "3f32be62d0a7e1708b9ffd03d4799f3909e7d6ab",
+          "url": "https://github.com/henry40408/lur/commit/8c2d77a74788b638d7a534f880ae57df56c0c622"
+        },
+        "date": 1787789974626,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 304974,
+            "range": "± 6542",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5532,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207375,
+            "range": "± 1574",
             "unit": "ns/iter"
           }
         ]
