@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787932442727,
+  "lastUpdate": 1787933362366,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2729,6 +2729,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208059,
             "range": "± 2235",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "83f90ed097b72429fcdbcb647d723926ae35e544",
+          "message": "fix: unbreak main CI after the rust 1.98 toolchain bump (#100)\n\n* fix(docker): bump cargo-zigbuild to 0.23.0 for the rustc 1.98 linker arg\n\nrustc 1.98 emits -Wl,--fix-cortex-a53-843419 for aarch64 targets\n(rust-lang/rust#155453). zig's linker rejects the flag, so every arm64\nimage build has failed since the toolchain bump in #95. cargo-zigbuild\n0.23.0 filters the argument out before invoking zig.\n\n0.23.0 keeps the version-branching support for zig 0.14, so ZIG_VERSION\nstays pinned where it is.\n\n* chore(deny): temporarily accept yanked chacha20 0.10.0\n\nchacha20 0.10.0 and 0.10.1 were yanked upstream after #95 was checked,\nturning the deny job red on main. The unyanked 0.10.2 was published\n2026-08-27 and is still inside the 7-day publish cooldown, so pull it in\nfrom 2026-09-03 and drop this exception then.",
+          "timestamp": "2026-08-29T00:08:05+08:00",
+          "tree_id": "a6b3306e1117b0be640409bcb13807d4428eaf03",
+          "url": "https://github.com/henry40408/lur/commit/83f90ed097b72429fcdbcb647d723926ae35e544"
+        },
+        "date": 1787933361867,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 274375,
+            "range": "± 5304",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5493,
+            "range": "± 87",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207948,
+            "range": "± 2819",
             "unit": "ns/iter"
           }
         ]
