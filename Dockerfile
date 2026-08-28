@@ -17,7 +17,10 @@ RUN apt-get update \
 
 # Zig 0.14.1 avoids the libc++-19 bindgen requirement that 0.15+ introduces.
 ARG ZIG_VERSION=0.14.1
-ARG ZIGBUILD_VERSION=0.22.3
+# 0.23.0 is the first release that drops `-Wl,--fix-cortex-a53-843419`, which
+# rustc emits for aarch64 since 1.98 (rust-lang/rust#155453) and zig's linker
+# rejects. Anything older fails the arm64 leg outright.
+ARG ZIGBUILD_VERSION=0.23.0
 RUN cargo install cargo-zigbuild --version "${ZIGBUILD_VERSION}" --locked
 RUN set -eux; \
     case "$(uname -m)" in \
