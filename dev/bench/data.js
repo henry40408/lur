@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787789975263,
+  "lastUpdate": 1787932442727,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2687,6 +2687,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207375,
             "range": "± 1574",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "56750a34a7f6cb9542c66bcf2ec193d98a521032",
+          "message": "chore(deps): bump rust-toolchain from 1.97.1 to 1.98.0 (#95)\n\nBumps [rust-toolchain](https://github.com/rust-lang/rust) from 1.97.1 to 1.98.0.\n- [Release notes](https://github.com/rust-lang/rust/releases)\n- [Changelog](https://github.com/rust-lang/rust/blob/main/RELEASES.md)\n- [Commits](https://github.com/rust-lang/rust/compare/1.97.1...1.98.0)\n\n---\nupdated-dependencies:\n- dependency-name: rust-toolchain\n  dependency-version: 1.98.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-28T23:50:03+08:00",
+          "tree_id": "7ab55032ac07651630202539f7ce73e48f035c7c",
+          "url": "https://github.com/henry40408/lur/commit/56750a34a7f6cb9542c66bcf2ec193d98a521032"
+        },
+        "date": 1787932441753,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 307711,
+            "range": "± 2257",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5786,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208059,
+            "range": "± 2235",
             "unit": "ns/iter"
           }
         ]
