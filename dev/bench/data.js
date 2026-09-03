@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788445133115,
+  "lastUpdate": 1788453237615,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2813,6 +2813,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 212684,
             "range": "± 3591",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b6f4a1e95ed4ed12fe759711b1a164877d09ac96",
+          "message": "chore(deps): pull in chacha20 0.10.2 and unbreak the deny job (#103)\n\n* chore(deps): pull in chacha20 0.10.2 and drop the deny.toml exception\n\nchacha20 0.10.0 and 0.10.1 were yanked upstream; #100 parked a temporary\n`[advisories] ignore` entry because the unyanked 0.10.2 (published\n2026-08-27) was still inside the 7-day publish cooldown. That cooldown has\ncleared, so take the real fix and remove the exception.\n\n- `cargo update -p chacha20` (0.10.0 -> 0.10.2)\n- Drop the `chacha20@0.10.0` ignore entry and revert the `ignore` doc\n  comment now that the list is empty again\n\nCloses #101\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\n\n* fix(deps): update event-listener to 5.4.2 for RUSTSEC-2026-0221\n\nRUSTSEC-2026-0221 landed after #101 was filed and turns the deny job red\nindependently of the chacha20 yank: event-listener <=5.4.1 unconditionally\nimplements `Send`/`Sync` for `StackSlot<'_, T>`, letting a `!Send` tag set\nvia `Event::with_tag` cross a thread boundary. We reach it only\ntransitively through sqlx-core and never call `Event::with_tag`, but the\nadvisory is a hard `cargo deny` failure either way.\n\n5.4.2 was published 2026-07-27, well clear of the 7-day cooldown. It also\ndrops the concurrent-queue dependency.\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-04T00:32:14+08:00",
+          "tree_id": "7599fe394739094c6d3d0e325e194b46c20a012a",
+          "url": "https://github.com/henry40408/lur/commit/b6f4a1e95ed4ed12fe759711b1a164877d09ac96"
+        },
+        "date": 1788453236567,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 311780,
+            "range": "± 3512",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5667,
+            "range": "± 52",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207026,
+            "range": "± 4665",
             "unit": "ns/iter"
           }
         ]
