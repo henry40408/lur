@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787933362366,
+  "lastUpdate": 1788445133115,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2771,6 +2771,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207948,
             "range": "± 2819",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "885954451be164a358719ca5ea843ddf072da265",
+          "message": "chore(deps): bump the github-actions group with 2 updates (#102)\n\nBumps the github-actions group with 2 updates: [taiki-e/install-action](https://github.com/taiki-e/install-action) and [docker/setup-buildx-action](https://github.com/docker/setup-buildx-action).\n\n\nUpdates `taiki-e/install-action` from 2.86.1 to 2.86.5\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/288e746965032cfcc232e09af2daf5f23c14d780...ba47c86ac325773530516bb756137ac718732518)\n\nUpdates `docker/setup-buildx-action` from 4.2.0 to 4.3.0\n- [Release notes](https://github.com/docker/setup-buildx-action/releases)\n- [Commits](https://github.com/docker/setup-buildx-action/compare/bb05f3f5519dd87d3ba754cc423b652a5edd6d2c...37fe631027851001ddb9b187196cc803df7f5f0e)\n\n---\nupdated-dependencies:\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.86.5\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: github-actions\n- dependency-name: docker/setup-buildx-action\n  dependency-version: 4.3.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: github-actions\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-03T22:17:30+08:00",
+          "tree_id": "7a7e19b4f87b092efc9101e08d83039e2ca4ae6e",
+          "url": "https://github.com/henry40408/lur/commit/885954451be164a358719ca5ea843ddf072da265"
+        },
+        "date": 1788445132556,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 272391,
+            "range": "± 6602",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5459,
+            "range": "± 148",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 212684,
+            "range": "± 3591",
             "unit": "ns/iter"
           }
         ]
