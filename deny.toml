@@ -9,16 +9,9 @@ all-features = true
 [advisories]
 version = 2
 # Deny crates with a known security advisory (RUSTSEC) or that have been yanked.
-# `ignore` holds advisory IDs, and yanked-crate specs, we've reviewed and
-# consciously accept.
+# `ignore` holds advisory IDs we've reviewed and consciously accept.
 yanked = "deny"
-ignore = [
-    # chacha20 0.10.0 was yanked upstream; the unyanked 0.10.2 landed
-    # 2026-08-27 and is still inside the 7-day publish cooldown. Reached only
-    # transitively via rand -> sqlx-postgres, and the yank is not a security
-    # advisory. Drop this entry and `cargo update -p chacha20` from 2026-09-03.
-    { crate = "chacha20@0.10.0", reason = "yanked upstream; 0.10.2 still in publish cooldown" },
-]
+ignore = []
 
 [licenses]
 version = 2
