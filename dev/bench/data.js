@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789292747319,
+  "lastUpdate": 1789895745192,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2939,6 +2939,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 216319,
             "range": "± 6514",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8a120ea3d05bee105258d80e2d91fddf92101477",
+          "message": "chore: temporarily ignore RUSTSEC-2026-0285 in cargo-deny (#112)\n\nrustls 0.23.41 is reachable transitively through hyper-rustls and\ntokio-rustls (reqwest, sqlx) and is affected by RUSTSEC-2026-0285, where\nTLS 1.3 handshake messages are accepted across encryption level\nboundaries. The fix landed in rustls 0.23.45, published 2026-09-14, which\nis still inside our 168-hour supply-chain cooldown until 2026-09-21.\n\nIgnore the advisory until then so CI is unblocked; the handshake\ntranscript remains authenticated, so the advisory does not allow a\nnetwork-position attacker to alter or complete a handshake.\n\nRemoval is tracked in #111.\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-20T17:14:33+08:00",
+          "tree_id": "88c9af09229711ea0d98825e8921df2501591b87",
+          "url": "https://github.com/henry40408/lur/commit/8a120ea3d05bee105258d80e2d91fddf92101477"
+        },
+        "date": 1789895744373,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 175450,
+            "range": "± 8379",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3516,
+            "range": "± 221",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 302893,
+            "range": "± 18051",
             "unit": "ns/iter"
           }
         ]
