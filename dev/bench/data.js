@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789895745192,
+  "lastUpdate": 1789896580021,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -2981,6 +2981,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 302893,
             "range": "± 18051",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f3c91071f5b943ea4f38239414c7e460ddaa7829",
+          "message": "chore(deps): bump the cargo group across 1 directory with 2 updates (#110)\n\nBumps the cargo group with 2 updates in the / directory: [reqwest](https://github.com/seanmonstar/reqwest) and [toml](https://github.com/toml-rs/toml).\n\n\nUpdates `reqwest` from 0.13.4 to 0.13.5\n- [Release notes](https://github.com/seanmonstar/reqwest/releases)\n- [Changelog](https://github.com/seanmonstar/reqwest/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/seanmonstar/reqwest/compare/v0.13.4...v0.13.5)\n\nUpdates `toml` from 1.1.5+spec-1.1.0 to 1.1.6+spec-1.1.0\n- [Commits](https://github.com/toml-rs/toml/compare/toml-v1.1.5...toml-v1.1.6)\n\n---\nupdated-dependencies:\n- dependency-name: reqwest\n  dependency-version: 0.13.5\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: toml\n  dependency-version: 1.1.6+spec-1.1.0\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-20T17:28:05+08:00",
+          "tree_id": "b5b1a91e9d4dabc087fb15bc325a40c4ed056a0a",
+          "url": "https://github.com/henry40408/lur/commit/f3c91071f5b943ea4f38239414c7e460ddaa7829"
+        },
+        "date": 1789896579155,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 173748,
+            "range": "± 5062",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3409,
+            "range": "± 150",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 301722,
+            "range": "± 11696",
             "unit": "ns/iter"
           }
         ]
