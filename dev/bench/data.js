@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789896580021,
+  "lastUpdate": 1790042349227,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3023,6 +3023,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 301722,
             "range": "± 11696",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d9f94c0bf67b149e4f16c120e0aa2266337fa081",
+          "message": "fix(deps): upgrade rustls to 0.23.45 and drop RUSTSEC-2026-0285 ignore (#113)\n\nThe 168-hour cooldown on rustls 0.23.45 has cleared, so pick up the fix\nfor RUSTSEC-2026-0285 and empty the advisory ignore list in deny.toml.\n\nCloses #111\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-22T09:55:55+08:00",
+          "tree_id": "3f47494ed664dcb79f2bb098c7e748520876b5f1",
+          "url": "https://github.com/henry40408/lur/commit/d9f94c0bf67b149e4f16c120e0aa2266337fa081"
+        },
+        "date": 1790042348240,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 301632,
+            "range": "± 5910",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5696,
+            "range": "± 108",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207674,
+            "range": "± 4158",
             "unit": "ns/iter"
           }
         ]
