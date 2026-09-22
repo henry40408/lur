@@ -11,15 +11,7 @@ version = 2
 # Deny crates with a known security advisory (RUSTSEC) or that have been yanked.
 # `ignore` holds advisory IDs we've reviewed and consciously accept.
 yanked = "deny"
-ignore = [
-    # RUSTSEC-2026-0285 — rustls accepts TLS 1.3 handshake messages across
-    # encryption level boundaries. Fixed in rustls 0.23.45, released
-    # 2026-09-14; held back by our 168-hour supply-chain cooldown, which
-    # clears 2026-09-21. Transitive only (reqwest/sqlx -> hyper-rustls,
-    # tokio-rustls) and not exploitable to alter or complete a handshake.
-    # Tracked for removal in https://github.com/henry40408/lur/issues/111.
-    "RUSTSEC-2026-0285",
-]
+ignore = []
 
 [licenses]
 version = 2
