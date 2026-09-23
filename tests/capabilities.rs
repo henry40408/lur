@@ -30,6 +30,18 @@ fn json_encode_objects_and_arrays() {
 }
 
 #[test]
+fn json_encode_never_drops_keys_outside_the_sequence() {
+    // A hole plus an out-of-range numeric key can make the key count equal
+    // `#t`; encoding it as an array would silently drop that key.
+    run("local t = {'a', 'b', 'c', 'd'}\n\
+         t[2] = nil\n\
+         t[-1] = 'm'\n\
+         assert(#t == 4, 'precondition: #t spans the hole')\n\
+         local ok, err = pcall(lur.json.encode, t)\n\
+         assert(not ok and tostring(err):find('object keys must be strings'), tostring(err))");
+}
+
+#[test]
 fn json_encode_null_and_scalars() {
     run("assert(lur.json.encode(lur.null) == 'null', 'null')\n\
          assert(lur.json.encode(true) == 'true', 'bool')\n\

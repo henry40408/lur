@@ -103,16 +103,23 @@ fn number_to_json(f: f64) -> mlua::Result<Json> {
 fn table_to_json(t: &Table) -> mlua::Result<Json> {
     let len = t.raw_len();
     let mut count = 0usize;
-    let mut all_int_keys = true;
+    let mut in_sequence = true;
     for pair in t.clone().pairs::<Value, Value>() {
         let (k, _) = pair?;
         count += 1;
-        if !matches!(k, Value::Integer(_) | Value::Number(_)) {
-            all_int_keys = false;
+        // Distinct keys, all in `1..=len`, and `count == len` ⇒ exactly `1..#t`.
+        // A bare count check is fooled by a hole plus an out-of-range key.
+        let idx = match k {
+            Value::Integer(i) => Some(i as f64),
+            Value::Number(n) => Some(n),
+            _ => None,
+        };
+        if !idx.is_some_and(|n| n.fract() == 0.0 && n >= 1.0 && n <= len as f64) {
+            in_sequence = false;
         }
     }
 
-    if len > 0 && all_int_keys && count == len {
+    if len > 0 && in_sequence && count == len {
         let mut arr = Vec::with_capacity(len);
         for i in 1..=len {
             arr.push(lua_to_json(&t.raw_get::<Value>(i as i64)?)?);
