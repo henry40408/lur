@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790148466356,
+  "lastUpdate": 1790148732153,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3191,6 +3191,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 421671,
             "range": "± 6410",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a38c32248b6ce288e9bc07474c56ecd1d6330c8c",
+          "message": "fix(build): rerun version detection on commits, tags, and in worktrees (#117)\n\nbuild.rs only watched `.git/HEAD`, which holds a symbolic ref, so a new\ncommit on the same branch left `lur --version` stale; in a worktree\n`.git` is a file, so nothing was watched at all. Resolve HEAD, index,\nthe current branch ref, packed-refs and refs/tags via\n`git rev-parse --git-path`, and watch `src` so unstaged edits update\nthe `-dirty` suffix.\n\nCo-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-23T15:30:49+08:00",
+          "tree_id": "f66664b61cb1e52b1f99e58e60a79d9f3146fb15",
+          "url": "https://github.com/henry40408/lur/commit/a38c32248b6ce288e9bc07474c56ecd1d6330c8c"
+        },
+        "date": 1790148731028,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 311571,
+            "range": "± 6488",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5987,
+            "range": "± 567",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208741,
+            "range": "± 3467",
             "unit": "ns/iter"
           }
         ]
