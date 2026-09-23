@@ -133,7 +133,8 @@ rejected at load. Params are percent-decoded to raw bytes as `req.params`.
 3. `checkout()`, `build_req` (`method`, `path`, `params`, `query`/`query_all`, `headers`,
    `cookies`, `body`, streaming `read`, `json()`), then `call_handler` under the two-layer
    timeout.
-4. Returned table → `response_from` (`status` default 200, must be 100–599; `body` default
+4. Returned table → `response_from` (`status` default 200, must be 100–599; `headers`
+   expanded to validated pairs, CR/LF and framing headers rejected; `body` default
    empty); timeout → **503**; Lua error or bad return → logged, **500**. Handler errors never
    bring the server down (spec §8).
 

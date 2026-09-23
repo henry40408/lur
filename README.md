@@ -279,8 +279,11 @@ Handlers are registered once at load time.
 - **`lur.serve.http(method, path, handler)`** — `method` is `"GET"`…/`"ANY"`. `:name`
   path segments (e.g. `/users/:id`) bind into `req.params`. The most specific route wins
   regardless of order (more static segments, then a concrete method over `ANY`).
-  `handler(req)` returns `{ status?, body? }` (`status` defaults to `200`, must be in
-  `100..=599`; `body` defaults to empty).
+  `handler(req)` returns `{ status?, headers?, body? }` (`status` defaults to `200`, must
+  be in `100..=599`; `body` defaults to empty). `headers` maps a name to a string or an
+  array of strings (repeated header, e.g. two `Set-Cookie`). No `Content-Type` is
+  inferred. An invalid name/value (including CR/LF), or `Content-Length` /
+  `Transfer-Encoding`, is a **500**.
 - **`lur.serve.cron(spec, handler, opts?)`** — 6-field cron (`sec min hour dom mon dow`).
   `opts`: `name`, `overlap` (default `false` = skip a tick while the previous run is
   going), `timeout` (ms).
@@ -293,7 +296,13 @@ values), `headers` (lowercased), `cookies` (parsed `Cookie`; empty table if abse
 ```lua
 lur.serve.http("POST", "/echo", function(req)
   local data = req.json()
-  return { status = 200, body = lur.json.encode(data) }
+  return {
+    headers = {
+      ["Content-Type"] = "application/json",
+      ["Set-Cookie"] = { lur.cookie.serialize("seen", "1"), "theme=dark" },
+    },
+    body = lur.json.encode(data),
+  }
 end)
 ```
 

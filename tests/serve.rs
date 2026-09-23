@@ -475,3 +475,51 @@ fn handler_error_carries_location_for_diagnostics() {
         "error must carry the chunk name and line so the renderer can locate it: {msg}"
     );
 }
+
+#[test]
+fn handler_sets_single_and_repeated_response_headers() {
+    let s = serve(
+        "lur.serve.http('GET', '/h', function(req)\n\
+         \treturn { headers = {\n\
+         \t\t['Content-Type'] = 'application/json',\n\
+         \t\t['Set-Cookie'] = { 'a=1', 'b=2' },\n\
+         \t}, body = '{}' }\n\
+         end)",
+    );
+    let resp = s.dispatch("GET", "/h", b"").expect("dispatch ok");
+    let values = |name: &str| -> Vec<&str> {
+        resp.headers
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, v)| v.to_str().unwrap())
+            .collect()
+    };
+    assert_eq!(values("content-type"), ["application/json"]);
+    assert_eq!(values("set-cookie"), ["a=1", "b=2"], "array order kept");
+    assert_eq!(resp.headers.len(), 3);
+}
+
+#[test]
+fn omitted_headers_yield_none() {
+    let s = serve("lur.serve.http('GET', '/h', function(req) return { body = 'x' } end)");
+    assert!(s.dispatch("GET", "/h", b"").unwrap().headers.is_empty());
+}
+
+#[test]
+fn invalid_response_headers_are_rejected() {
+    for (case, headers) in [
+        ("CRLF in value", "{ ['X-A'] = 'a\\r\\nX-Injected: 1' }"),
+        ("non-string value", "{ ['X-A'] = 1 }"),
+        ("non-string array element", "{ ['X-A'] = { 'a', true } }"),
+        ("non-array table value", "{ ['X-A'] = { k = 'v' } }"),
+        ("invalid name", "{ ['bad name'] = 'v' }"),
+        ("framing header", "{ ['Content-Length'] = '0' }"),
+        ("headers not a table", "'x'"),
+    ] {
+        let s = serve(&format!(
+            "lur.serve.http('GET', '/h', function(req) return {{ headers = {headers} }} end)"
+        ));
+        let err = s.dispatch("GET", "/h", b"").expect_err(case).to_string();
+        assert!(err.contains("headers"), "{case}: {err}");
+    }
+}
