@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790148058670,
+  "lastUpdate": 1790148466356,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3149,6 +3149,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 218567,
             "range": "± 5750",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "011465d0d33de49fc0e79e5b2957ba8bb5cda748",
+          "message": "feat(serve): let handlers set response headers (#116)\n\nA handler may return `headers = { [name] = value | { value, ... } }`;\nan array emits the header once per value (e.g. several Set-Cookie).\nNames and values are validated in response_from, so CR/LF injection,\ninvalid names, non-string values, and handler-set Content-Length /\nTransfer-Encoding fail closed as a 500. No Content-Type is inferred.\n\nImplements docs/superpowers/specs/2026-06-28-serve-response-headers-design.md.\n\nCo-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-23T15:26:27+08:00",
+          "tree_id": "d40ed5abae442a458a65a79ea12a56da98eb08df",
+          "url": "https://github.com/henry40408/lur/commit/011465d0d33de49fc0e79e5b2957ba8bb5cda748"
+        },
+        "date": 1790148465527,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 241215,
+            "range": "± 5859",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4628,
+            "range": "± 147",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 421671,
+            "range": "± 6410",
             "unit": "ns/iter"
           }
         ]
