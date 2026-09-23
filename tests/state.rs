@@ -56,7 +56,7 @@ fn cas_ensure_absent() {
 
 #[test]
 fn cas_wrong_key_type_errors() {
-    // Tables and functions don't coerce to string, so they trigger the type guard.
+    // Tables don't coerce to string.
     let rt = Runtime::new().expect("runtime builds");
     let err = rt
         .run("lur.state.cas({}, nil, nil)")
@@ -145,8 +145,7 @@ fn state_incr_is_integer_and_has_decr() {
 
 #[test]
 fn state_is_shared_across_vms_from_the_same_config() {
-    // Cross-VM sharing is the whole point (§6): the store is host-side. Two VMs
-    // built from the same config share the same store Arc.
+    // The store is host-side, shared by VMs built from one config (spec §6).
     let config = RuntimeConfig::default();
     let writer = Runtime::with_config(config.clone()).expect("runtime builds");
     let reader = Runtime::with_config(config).expect("runtime builds");

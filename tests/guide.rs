@@ -14,8 +14,7 @@ struct Block {
     ignore: bool,
 }
 
-/// Scan raw Markdown for fenced lua blocks. The info string after `lua` selects
-/// behavior: empty → runnable, `ignore` → skipped.
+/// Fenced lua blocks in raw Markdown: `lua` runs, `lua ignore` is skipped.
 fn lua_blocks(md: &str) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut lines = md.lines();
@@ -29,9 +28,9 @@ fn lua_blocks(md: &str) -> Vec<Block> {
         if !info_lower.starts_with("lua") {
             continue;
         }
-        // Catch typos like ```Lua, ```lua title=x before they silently escape the suite.
+        // Catch ```Lua, ```lua title=x etc. before they silently escape the suite.
         assert!(
-            !(info != "lua" && info != "lua ignore"),
+            info == "lua" || info == "lua ignore",
             "unrecognised lua fence info string {info:?} — use `lua` or `lua ignore`"
         );
         let ignore = info == "lua ignore";
@@ -48,7 +47,7 @@ fn lua_blocks(md: &str) -> Vec<Block> {
     blocks
 }
 
-/// A permissive-but-sandboxed config: full fs/env/net (loose), with a temp db.
+/// Loose profile (full fs/env/net) with a temp db.
 fn permissive_config(db_path: std::path::PathBuf) -> RuntimeConfig {
     RuntimeConfig {
         policy: Arc::new(Policy::loose().expect("loose policy")),
@@ -67,7 +66,7 @@ fn every_runnable_example_succeeds() {
         }
         // Each block gets its own temp dir (cwd for relative fs paths) + db.
         let dir = tempfile::tempdir().expect("tempdir");
-        // SAFETY: set_current_dir is process-global; safe only because nextest runs each test in its own process.
+        // SAFETY: cwd is process-global; nextest runs each test in its own process.
         std::env::set_current_dir(dir.path()).expect("chdir");
         let rt = Runtime::with_config(permissive_config(dir.path().join("guide.db")))
             .expect("runtime builds");
@@ -85,8 +84,8 @@ fn every_runnable_example_succeeds() {
     );
 }
 
-/// Lua that walks the live `lur` table and writes every function's dotted path
-/// (e.g. `crypto.hex.encode`) to `./__lur_fns.txt`, one per line.
+/// Writes every function's dotted path in `lur` (e.g. `crypto.hex.encode`) to
+/// `./__lur_fns.txt`, one per line.
 const REFLECT_LUA: &str = r#"
 local names = {}
 local function walk(prefix, t, depth)
@@ -108,8 +107,7 @@ table.sort(names)
 lur.fs.write("./__lur_fns.txt", table.concat(names, "\n"))
 "#;
 
-/// Reflect the runtime `lur` table into the set of function dotted-paths it
-/// exposes (the authoritative list of what the guide must example).
+/// Every function the runtime exposes — what the guide must have examples for.
 fn runtime_functions() -> Vec<String> {
     let dir = tempfile::tempdir().expect("tempdir");
     // SAFETY: process-global cwd; safe only because nextest isolates each test.
@@ -125,9 +123,8 @@ fn runtime_functions() -> Vec<String> {
         .collect()
 }
 
-/// The set of `lur.<dotted.path>` functions actually *called* (followed by `(`)
-/// across all guide code blocks (runnable and `ignore`). Indexing like
-/// `lur.args.positional[1]` is not a call, so data fields are excluded.
+/// `lur.<path>` functions *called* (followed by `(`) in any guide block;
+/// data fields like `lur.args.positional[1]` are excluded.
 fn called_functions(blocks: &[Block]) -> std::collections::HashSet<String> {
     let mut called = std::collections::HashSet::new();
     for b in blocks {
@@ -156,7 +153,7 @@ fn every_runtime_function_has_an_example() {
     let funcs = runtime_functions();
     assert!(!funcs.is_empty(), "reflection found no lur functions");
     let called = called_functions(&lua_blocks(GUIDE));
-    // Functions intentionally without a worked example (none today).
+    // Functions intentionally without an example.
     const EXCEPTIONS: &[&str] = &[];
     let mut missing: Vec<String> = funcs
         .into_iter()

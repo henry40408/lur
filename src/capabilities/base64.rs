@@ -1,7 +1,4 @@
-//! `lur.base64` — standard base64 encode/decode (spec §4).
-//!
-//! The bridge for putting binary data through the UTF-8-only JSON boundary:
-//! `lur.base64.encode` raw bytes, then `lur.json.encode` the resulting ASCII.
+//! `lur.base64` — standard base64 (spec §4); how binary crosses UTF-8-only JSON.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -10,7 +7,6 @@ use mlua::{Error, Lua, Table, Value};
 use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
-/// Install `lur.base64.encode` / `lur.base64.decode`.
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let base64 = lua.create_table().map_err(RunError::Init)?;
 

@@ -1,8 +1,5 @@
-//! `lur.json` — JSON encode/decode (spec §4).
-//!
-//! JSON is the one place lur assumes UTF-8: `encode` requires string values to
-//! be valid UTF-8 and errors otherwise (binary must be base64-encoded first).
-//! `lur.null` ↔ JSON `null`; a Lua `nil` means "absent".
+//! `lur.json` — JSON encode/decode (spec §4). The one place lur requires UTF-8
+//! (base64 binary first). `lur.null` ↔ JSON `null`; `nil` means absent.
 
 use mlua::{Error, Lua, Table, Value};
 use serde_json::Value as Json;
@@ -11,7 +8,6 @@ use super::null;
 use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
-/// Install `lur.json.encode` / `lur.json.decode`.
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let json = lua.create_table().map_err(RunError::Init)?;
 
@@ -37,7 +33,6 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     Ok(())
 }
 
-/// Convert a `serde_json::Value` to a Lua value (JSON `null` → `lur.null`).
 pub(crate) fn json_to_lua(lua: &Lua, value: &Json) -> mlua::Result<Value> {
     match value {
         Json::Null => null::value(lua),
@@ -46,7 +41,7 @@ pub(crate) fn json_to_lua(lua: &Lua, value: &Json) -> mlua::Result<Value> {
             if let Some(i) = n.as_i64() {
                 Ok(Value::Integer(i))
             } else {
-                // u64 above i64::MAX or a non-integral number — use f64.
+                // Beyond i64 or fractional.
                 Ok(Value::Number(n.as_f64().expect("json number is f64")))
             }
         }
@@ -68,7 +63,6 @@ pub(crate) fn json_to_lua(lua: &Lua, value: &Json) -> mlua::Result<Value> {
     }
 }
 
-/// Convert a Lua value to a `serde_json::Value`.
 pub(crate) fn lua_to_json(value: &Value) -> mlua::Result<Json> {
     match value {
         Value::Nil => Ok(Json::Null),
@@ -90,15 +84,14 @@ pub(crate) fn lua_to_json(value: &Value) -> mlua::Result<Json> {
     }
 }
 
-/// JSON has a single number type. Represent an integral `f64` as an integer
-/// (Luau numbers are all `f64`, so `1` arrives as `1.0` and must encode as `1`).
+/// Whole-number floats encode as integers (`1`, not `1.0`).
 fn number_to_json(f: f64) -> mlua::Result<Json> {
     if !f.is_finite() {
         return Err(Error::runtime(
             "lur.json.encode: cannot encode NaN or infinity",
         ));
     }
-    if f.fract() == 0.0 && f >= i64::MIN as f64 && f <= i64::MAX as f64 {
+    if f.fract() == 0.0 && f >= i64::MIN as f64 && f < i64::MAX as f64 {
         return Ok(Json::Number((f as i64).into()));
     }
     serde_json::Number::from_f64(f)
@@ -106,8 +99,7 @@ fn number_to_json(f: f64) -> mlua::Result<Json> {
         .ok_or_else(|| Error::runtime("lur.json.encode: number is not representable in JSON"))
 }
 
-/// A Lua table becomes a JSON array when its keys are exactly `1..#t`, and a
-/// JSON object otherwise. An empty table encodes as `{}`.
+/// Array iff the keys are exactly `1..#t`; otherwise (and when empty) an object.
 fn table_to_json(t: &Table) -> mlua::Result<Json> {
     let len = t.raw_len();
     let mut count = 0usize;

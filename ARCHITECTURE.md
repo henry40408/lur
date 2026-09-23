@@ -1,12 +1,11 @@
 # Architecture
 
-This document is for developers working *on* `lur`. For how to *use* it, see the
-[README](README.md). Section references like "(spec §3)" point at
-[`docs/superpowers/specs/2026-06-26-lur-lua-runtime-design.md`](docs/superpowers/specs/2026-06-26-lur-lua-runtime-design.md).
+For developers working *on* `lur`; for usage see the [README](README.md). "(spec §N)" refers
+to [`docs/superpowers/specs/2026-06-26-lur-lua-runtime-design.md`](docs/superpowers/specs/2026-06-26-lur-lua-runtime-design.md).
 
-## The shape of it
+## Overview
 
-One binary, two execution modes, one shared core:
+One binary, two modes, one shared core:
 
 ```
                  ┌──────────────────────── src/main.rs ────────────────────────┐
@@ -23,288 +22,226 @@ One binary, two execution modes, one shared core:
               sandboxed Luau VM · lur.* capabilities · deadline interrupt · memory cap
 ```
 
-The crate root ([`src/lib.rs`](src/lib.rs)) exposes the library; `main.rs` is a thin
-CLI on top. The public modules are `capabilities`, `config`, `policy`, `runtime`,
-`serve`, and `units`.
+`src/lib.rs` is the library; `main.rs` is a thin CLI on top.
 
 ## Module map
 
 | Path | Responsibility |
 | --- | --- |
-| `src/main.rs` | CLI (clap), config/policy resolution, mode dispatch, exit codes. Not part of the library. |
-| `src/runtime.rs` | The shared core: `build_lua`, the `Runtime` (one-shot), `RuntimeConfig`, `RunError`, the deadline/timeout machinery. |
-| `src/serve.rs` | Server mode: the VM `Pool`, `Router`, request dispatch, cron schedulers, graceful shutdown. |
-| `src/color.rs` | Shared `NO_COLOR`/TTY color gate (`color_from_env`, `stderr_color`, `stdout_color`). Used by both `diagnostics.rs` (stderr) and `docs.rs` (stdout). |
-| `src/diagnostics.rs` | `render` — rustc-style error renderer: snippet + filtered traceback; `lur: <body>` fallback when no source snippet can be rendered. ANSI color gated by `stderr_color` (TTY + `NO_COLOR`). Consumed by `runtime.rs` (one-shot) and `serve.rs` (handler/cron errors). |
-| `src/docs.rs` | `render` for `lur docs`: pulldown-cmark → ANSI sink, color via `color::stdout_color`. Plain mode strips markup; color mode emits bold/blue headings and code blocks. |
-| `src/policy.rs` | `Policy` — the capability allow/deny model (`strict()` / `loose()`) and its checks. |
-| `src/config.rs` | TOML config file parsing and the profile/allowlist model. |
-| `src/units.rs` | `parse_size` (×1024) and `parse_duration` for CLI value parsers. |
-| `src/capabilities/` | One submodule per `lur.*` table; `mod.rs::install` orchestrates them. |
-| `src/capabilities/storage/` | The storage backend seam: `Backend`/`Transaction` enums (`Sqlite` and `Postgres` variants), the lazy-open `Shared` handle, `ExecResult`, `sqlite.rs` owning all SQLite SQL/binding/row-mapping/retry/tx/kv, and `postgres.rs` owning all Postgres SQL/binding/row-mapping/isolation/tx/kv. |
-| `src/capabilities/db.rs` | Wires the `lur.db` table (`exec`/`query`/`tx`) to `storage::Backend`. Returns `storage::Shared` to `kv`. |
-| `src/capabilities/kv.rs` | Wires the `lur.kv` table to `storage::Backend` kv methods; owns the `IN_KV_UPDATE` reentrancy guard. |
+| `src/main.rs` | CLI, config/policy resolution, mode dispatch, exit codes. Not in the library. |
+| `src/runtime.rs` | `build_lua`, one-shot `Runtime`, `RuntimeConfig`, `RunError`, timeout machinery. |
+| `src/serve.rs` | Server mode: VM `Pool`, `Router`, dispatch, cron, graceful shutdown. |
+| `src/color.rs` | `NO_COLOR`/TTY gate (`color_from_env`, `stderr_color`, `stdout_color`). |
+| `src/diagnostics.rs` | `render`: rustc-style error snippet + filtered traceback, `lur: <msg>` fallback. |
+| `src/docs.rs` | `render` for `lur docs` (embedded `docs/GUIDE.md`): pulldown-cmark → ANSI or plain text. |
+| `src/policy.rs` | `Policy`: allow/deny model (`strict()` / `loose()`) and its checks. |
+| `src/config.rs` | TOML config parsing; profile/allowlist model. |
+| `src/units.rs` | `parse_size` (binary, ×1024) and `parse_duration` for clap. |
+| `src/capabilities/` | One submodule per `lur.*` table; `mod.rs::install` orchestrates. |
+| `src/capabilities/storage/` | Backend seam: `Backend`/`Transaction` enums (`Sqlite`/`Postgres`), lazy `Shared` handle, `ExecResult`; `sqlite.rs` and `postgres.rs` own all backend-specific SQL, binding, row mapping, transactions, and kv. |
+| `src/capabilities/db.rs` | `lur.db` (`exec`/`query`/`tx`) over `storage::Backend`; hands `storage::Shared` to `kv`. |
+| `src/capabilities/kv.rs` | `lur.kv` over the backend's kv methods; owns the `IN_KV_UPDATE` reentrancy guard. |
 
-## The shared core: `build_lua`
+## Shared core: `build_lua`
 
-Both modes build their VM(s) through [`runtime::build_lua`](src/runtime.rs). The order
-is load-bearing:
+Both modes build VMs via [`runtime::build_lua`](src/runtime.rs). Order is load-bearing:
 
-1. **Strip dangerous globals.** `require`, `getfenv`, `setfenv`, and `loadstring` survive
-   Luau's `sandbox(true)` but each defeats a runtime guarantee — `require` reads `.luau`
-   files off disk (bypassing the `lur.fs` capability), and the other three reach the
-   *writable* global environment, which would let a value bleed across requests sharing a
-   pooled VM. They are set to `nil` before anything else.
-2. **Install capabilities.** `capabilities::install` builds the single `lur` table and
-   populates it (see below). This must happen *before* the freeze.
-3. **`sandbox(true)`.** Freezes the global table (so `rawset` and friends can't reopen it)
-   and disables untrusted hooks. Standard Luau already lacks `os.execute`, `io`,
-   `loadfile`/`dofile`, and `package`.
-4. **Install the deadline interrupt.** A shared `Deadline = Arc<Mutex<Option<Instant>>>`
-   is read by an `mlua` interrupt hook. Past the deadline it raises *on every interrupt*,
-   so a CPU-bound `pcall` loop cannot swallow the error and outlive its budget.
-5. **Apply the memory cap last**, after construction/injection have done their own
-   allocations.
+1. **Strip `require`, `getfenv`, `setfenv`, `loadstring`.** They survive `sandbox(true)`:
+   `require` reads `.luau` files off disk (bypassing `lur.fs`); the other three reach the
+   writable global env, letting values bleed across requests on a pooled VM.
+2. **`capabilities::install`** builds the `lur` table — must precede the freeze.
+3. **`sandbox(true)`** freezes globals (`rawset` can't reopen them). Luau already lacks
+   `os.execute`, `io`, `loadfile`/`dofile`, `package`.
+4. **Deadline interrupt.** Reads a shared `Deadline = Arc<Mutex<Option<Instant>>>`; past the
+   deadline it raises on *every* interrupt, so a `pcall` loop can't swallow it.
+5. **Memory cap last**, so construction allocations don't count against it.
 
-### The two-layer timeout
+### Two-layer timeout (spec §5)
 
-A single deadline can't cover both failure modes, so there are two layers (spec §5):
+- The **deadline interrupt** aborts CPU-bound Lua.
+- **`tokio::time::timeout`** kills code parked on async I/O, where the interrupt never fires.
 
-- The **deadline interrupt** aborts CPU-bound Lua (tight loops, busy work).
-- A **`tokio::time::timeout`** wraps the driving future to kill code parked on async I/O,
-  where the interrupt hook never fires.
-
-One-shot applies both in `Runtime::guarded`; server mode applies both in
-`call_handler`. After the await, the error is classified: out-of-memory →
-`RunError::OutOfMemory`; past-deadline → `Timeout`; otherwise `Script`.
+Applied in `Runtime::guarded` (one-shot) and `call_handler` (server). Errors are classified as
+out-of-memory → `RunError::OutOfMemory`, past-deadline → `Timeout`, else `Script`.
 
 ## Capability layer
 
-[`capabilities::install`](src/capabilities/mod.rs) creates the one flat `lur` table and
-hands it to each submodule's `install` in a fixed order:
+[`capabilities::install`](src/capabilities/mod.rs) fills the flat `lur` table in fixed order:
 
 ```
-null · log · json · base64 · crypto · cookie · time · io · fs · http · env · db · async · args · serve · state
+null · log · json · base64 · crypto · cookie · time · io · fs · http · env · db · kv · async · args · serve · state
 ```
 
-Each submodule sets its own slice (`lur.fs`, `lur.http`, …). Policy-gated modules
-(`fs`, `http`, `env`) receive an `Arc<Policy>`; storage modules receive the `--db` path;
-`async` receives the concurrency cap; `serve` receives a `Registry` only under
-`lur serve` (it is `None` in one-shot, which makes `lur.serve.*` raise a clear error).
-Everything is wired before `sandbox(true)` freezes it.
+`fs`/`http`/`env` get an `Arc<Policy>`; `db` gets the `--db` target and passes the shared
+handle to `kv`; `async` gets the concurrency cap; `serve` gets a `Registry` only under
+`lur serve` (`None` in one-shot, so `lur.serve.*` raises).
 
-Scalar-argument capability functions extract their arguments through
-`capabilities::argcheck::arg`, which preserves mlua's coercion but raises
-`lur.<cap>.<fn>: argument #<n> must be <type>, got <type>` on a type mismatch.
-Table/closure-taking capabilities (`http`, `serve`, `db`, `async`) validate
-their own arguments and are not routed through it.
+Scalar arguments go through `argcheck::arg` (keeps mlua coercion, raises
+`lur.<cap>.<fn>: argument #<n> must be <type>, got <type>`) and `argcheck::integer_arg`
+(rejects fractional numbers). Table/closure-taking APIs (`http`, `serve`, `db`, `async`)
+validate their own arguments.
 
 ### Policy enforcement
 
-[`Policy`](src/policy.rs) is the deny-by-default model shared into host callbacks behind
-an `Arc`. `strict()` grants nothing; `loose()` grants everything. Enforcement lives at
-each capability's boundary:
+[`Policy`](src/policy.rs) is deny-by-default, shared into callbacks via `Arc`. `strict()`
+grants nothing; `loose()` grants everything. Enforced at each capability:
 
-- **`lur.fs`** canonicalizes the path *before* the allowlist check, so `..` and symlink
-  escapes resolve to their real target first.
-- **`lur.http`** checks every request and every redirect hop against the network
-  allowlist, runs a DNS resolver that rejects loopback/private/link-local addresses
-  unless `--allow-private` (SSRF guard), caps redirects, caps the buffered body
-  (`--max-http-body`), and always verifies TLS.
-- **`lur.env`** returns `nil` for both "denied" and "unset", so it can't be used as an
-  oracle for which variables exist.
+- **`lur.fs`** canonicalizes before the allowlist check, defeating `..` and symlink escapes.
+- **`lur.http`** checks every request and redirect hop against the net allowlist, uses a DNS
+  resolver rejecting loopback/private/link-local IPs unless `--allow-private` (SSRF guard),
+  caps redirects (10) and the buffered body (`--max-http-body`), and always verifies TLS.
+- **`lur.env`** returns `nil` for both denied and unset, so it isn't an existence oracle.
 
 ## One-shot mode
 
-[`Runtime`](src/runtime.rs) owns a single VM and a **current-thread** tokio runtime that
-drives async host calls. `main.rs::run_one_shot` reads the script, builds a
-`RuntimeConfig`, and calls `run_to_exit_code`, which evaluates the chunk and maps its
-top-level `return` to a process exit code (spec §8): a number → that code, `nil`/`false`
-→ 1, anything else (or no return) → 0.
+[`Runtime`](src/runtime.rs) owns one VM and a current-thread tokio runtime.
+`main.rs::run_one_shot` builds a `RuntimeConfig` and calls `run_to_exit_code`, which maps the
+chunk's top-level `return` to an exit code (spec §8): number → that code, `nil`/`false` → 1,
+anything else or no return → 0.
 
 ## Server mode
 
-[`Server::load`](src/serve.rs) builds a **multi-threaded** runtime and a pool of
-`pool_size` pre-warmed VMs. Each VM runs `app.lua` once — not to serve traffic, but to
-*collect its registrations*: `lur.serve.http`/`lur.serve.cron` push into a per-VM
-`Registry`. The handler closures live inside each VM, indexed by a host-assigned id; the
-host keeps only the route/cron *metadata*. Because every VM runs the same script, they
-must register the same routes and jobs in the same order — `load` checks this and rejects
-an app whose registrations diverge across VMs (the ids would not line up).
+[`Server::load`](src/serve.rs) builds a multi-thread runtime and `pool_size` pre-warmed VMs.
+Each VM runs `app.lua` once to *collect registrations* (`lur.serve.http`/`cron` push into a
+per-VM `Registry`). Handler closures stay in each VM, indexed by id; the host keeps only
+metadata. All VMs must register identical routes and jobs in the same order, or `load` rejects
+the app (ids wouldn't line up).
 
-### The VM pool
+### VM pool
 
 ```
 Pool { available: Mutex<Vec<Vm>>, permits: Semaphore }
 ```
 
-A request `checkout()`s a VM: acquire a permit (parking if all VMs are busy), then pop a
-VM. The returned `CheckedOut` guard pushes the VM back into `available` on `Drop`, *then*
-releases the permit — so a waiter woken by the permit is guaranteed to find a VM waiting.
-Exclusive ownership for the whole call is what makes the per-call environment swap safe;
-it replaces what would otherwise be a single-VM serialize lock. The pool size therefore
-caps concurrent in-flight handlers.
+`checkout()` acquires a permit, then pops a VM. The `CheckedOut` guard pushes the VM back on
+`Drop` *before* releasing the permit, so a woken waiter always finds a VM. Exclusive ownership
+per call is what makes the per-call env swap safe; pool size caps concurrent handlers.
 
 ### Routing
 
-[`Router`](src/serve.rs) compiles `(method, path)` registrations into routes. A path is
-parsed into segments where `:name` becomes a `Param` and everything else is `Static`.
-`resolve` walks all routes and picks the **most specific** match independent of
-registration order: a static segment beats a param at the same position, and a concrete
-method beats `ANY` as a tiebreak. Duplicate `(method, signature)` pairs are rejected at
-load time. Matched params are percent-decoded to raw bytes and exposed as `req.params`.
+[`Router`](src/serve.rs) parses paths into `Static` / `Param` (`:name`) segments. `resolve`
+picks the most specific match regardless of registration order: static beats param at the
+same position; a concrete method beats `ANY` as tiebreak. Duplicate `(method, signature)` is
+rejected at load. Params are percent-decoded to raw bytes as `req.params`.
 
 ### Request lifecycle
 
-`handle` (the hyper adapter) → `dispatch_async`:
+`handle` (hyper adapter) → `dispatch_async`:
 
-1. Reject an oversize body with **413** at the host edge, before routing — the VM never
-   allocates it.
-2. `router.resolve` → **404** if nothing matches.
-3. `checkout()` a VM, `build_req` (sets `method`, `path`, `params`, `query`/`query_all`,
-   `headers`, `cookies`, `body`, the streaming `read`, and `json()`), then `call_handler` under the
-   two-layer timeout.
-4. Map the result: a returned table → `response_from` (reads `status`, default 200, and
-   `body`, default empty); timeout → **503**; a Lua error → logged and **500**. A handler
-   error never brings the server down (spec §8).
+1. Body over `--max-body` → **413** before routing; the VM never sees it.
+2. No route → **404**.
+3. `checkout()`, `build_req` (`method`, `path`, `params`, `query`/`query_all`, `headers`,
+   `cookies`, `body`, streaming `read`, `json()`), then `call_handler` under the two-layer
+   timeout.
+4. Returned table → `response_from` (`status` default 200, must be 100–599; `body` default
+   empty); timeout → **503**; Lua error or bad return → logged, **500**. Handler errors never
+   bring the server down (spec §8).
 
-Every `lua.load` is named from the CLI path (`cli.script`/`cli.app`; a nameless
-runtime uses `script`), so error positions read `app.lua:2:` rather than the
-Rust call site. `src/diagnostics.rs` renders an mlua error against the source
-(rustc-style snippet + filtered traceback), with a plain `lur: <message>`
-fallback when no location parses. Handler and cron errors use the same renderer,
-so server-side errors look identical to one-shot errors in the terminal.
+Chunks are named from the CLI path (`script` if unnamed), so errors read `app.lua:2:`.
+Handler and cron errors go through the same `diagnostics::render` as one-shot.
 
-The request body is a one-shot cursor (`BodyStream`): `req.read(n)` streams it in chunks,
-and once streaming starts `req.body`/`req.json()` refuse to serve a now-partial body.
+The body is a one-shot cursor (`BodyStream`): once `req.read(n)` streams it, `req.body` and
+`req.json()` raise instead of returning a partial body.
 
 ### Per-call isolation
 
-`fresh_env` builds a throwaway table whose metatable `__index` points at the frozen
-globals. Each handler/cron run is given this as its environment, so reads fall through to
-the real globals while writes land in the throwaway and are discarded when the call ends.
-This — together with stripping `getfenv`/`setfenv`/`loadstring` in `build_lua` — closes
-the cross-request global-bleed vector on a pooled VM (spec §3, §5.1).
+`fresh_env` makes a throwaway table whose `__index` is the frozen globals and sets it as the
+handler/cron env: reads fall through, writes are discarded after the call. Together with
+stripping `getfenv`/`setfenv`/`loadstring`, this prevents cross-request global bleed
+(spec §3, §5.1).
 
 ### Cron
 
-Each job gets its own `cron_loop` task that computes the next future fire from a 6-field
-schedule, sleeps until then (or until shutdown), and runs the handler on a pooled VM.
-It is **single-flight** by default: an `AtomicBool` skips a tick whose predecessor is
-still running (set `overlap = true` to allow concurrency). Missed ticks are **never
-replayed** (fire-forward). Errors and timeouts are logged with the job name, never
-propagated.
+Each job runs a `cron_loop`: compute the next fire from the 6-field spec, sleep (or stop on
+shutdown), run on a pooled VM. Single-flight by default (an `AtomicBool` skips a tick while the
+previous run is in flight; `overlap = true` allows concurrency). Missed ticks are never
+replayed. A per-job `timeout` overrides the per-event timeout. Errors and timeouts are logged
+with the job name, never propagated.
 
 ### Graceful shutdown
 
-`run_with_shutdown` fans a single shutdown future (SIGTERM/SIGINT, or any future for
-tests) out to the accept loop and every cron scheduler through a `tokio::sync::watch`
-channel. An `Arc<()>` liveness token is cloned into every in-flight connection and cron
-run; on shutdown the accept loop stops, then the drain loop waits until only the original
-`Arc` handle remains — bounded by `--shutdown-grace`. Anything still running past the
-grace period is aborted when the runtime drops.
+`run_with_shutdown` fans one shutdown future (SIGTERM/SIGINT, or any future in tests) out to
+the accept loop and cron loops via a `watch` channel. Each in-flight connection and cron run
+holds a clone of an `Arc<()>` token; after accept stops, draining waits until only the
+original remains, bounded by `--shutdown-grace`. Stragglers are aborted when the runtime drops.
 
 ## State & storage
 
-- Storage goes through a backend seam (`capabilities/storage`): `db.rs`/`kv.rs` call the
-  backend-neutral `Backend` enum, and `storage/sqlite.rs` owns every SQLite specific — the
-  `retry_busy`/`busy_timeout`/`BEGIN IMMEDIATE` handling described here included. The kv
-  logical value model (opaque bytes vs. integer counter) is backend-neutral and defined at
-  the seam.
-- **`lur.db`** ([`capabilities/db.rs`](src/capabilities/db.rs)) wires the `lur.db` table
-  onto the backend-neutral seam; `storage/sqlite.rs`'s `SqliteBackend` owns the lazily-
-  opened `sqlx` SQLite pool (WAL mode, file auto-created), reached through the shared
-  `storage::Shared` handle. `SqliteBackend::begin` opens write transactions with
-  `BEGIN IMMEDIATE`; write-lock contention is handled by a 5 s `busy_timeout` plus
-  `retry_busy`, a bounded (5-attempt) full-jitter backoff wrapping single-statement writes
-  (`db.exec`, `kv.add`/`cas`/`incr`/`decr`), lock acquisition (`begin`, covering
-  `db.tx`/`kv.update`) and opening itself (`open_pool`: connecting, plus the `lur_kv` DDL)
-  — retried only where no user code has run or the retried body is
-  pure, so a retry never duplicates a side effect. The two layers are complementary, not
-  alternatives: `busy_timeout` waits out ordinary write-lock contention, while `retry_busy`
-  covers the locks SQLite's handler cannot wait on at all — the WAL-mode pragma on a fresh
-  connection, and lock upgrades that fail fast to avoid deadlock. Opening counts as a write
-  path for exactly that reason: the first connection can need an exclusive lock and the DDL
-  needs the write lock. Dynamic SQL is wrapped in
-  `sqlx::AssertSqlSafe` at the call sites that build statements from user input. `db.rs`
-  hands `storage::Shared` to `kv`.
-- **`lur.kv`** ([`capabilities/kv.rs`](src/capabilities/kv.rs)) is a key/value store over
-  the shared pool. Atomic ops (`add`, `cas`, `incr`, `decr`) are single SQL statements;
-  `update` (read-modify-write) uses `SqliteBackend::kv_update`, which opens its own
-  `BEGIN IMMEDIATE` transaction. `get` is type-aware and always returns bytes; integer
-  counters are stored as integers and read back as decimal strings. Backed by an internal
-  `lur_kv(key, value)` table.
-- **Invariant:** kv counters are integers; `kv.get` always returns bytes (decimal string
-  for counters); write transactions (`db.tx`, `kv.update`) use `BEGIN IMMEDIATE`; integer
-  step arguments (`kv.incr`/`kv.decr`, `state.incr`/`state.decr`) reject fractional values.
-- **`Postgres`** ([`capabilities/storage/postgres.rs`](src/capabilities/storage/postgres.rs))
-  is the second `Backend`/`Transaction` variant, added behind the Phase 1 seam without
-  changing `db.rs`/`kv.rs` call sites or any SQLite behavior. `--db`'s scheme
-  (`postgres://`/`postgresql://` vs. a bare path) is what `StorageTarget::resolve` uses
-  to pick which backend `Shared::ensure` opens on first use. `PgBackend` owns the `sqlx`
-  `PgPool`, `$n` positional binding, row→Lua mapping (core scalar types only — a
-  non-core column raises a cast-to-text error), and the kv schema.
-- **Isolation model:** single-statement ops (`db.exec`, `kv.get`/`set`/`add`/`cas`/
-  `incr`/`decr`) run at Postgres's default `READ COMMITTED` — atomic per statement, so
-  they never need a retry. `db.tx` and `kv.update` instead open a `SERIALIZABLE`
-  transaction on a pinned connection for full anomaly protection against any concurrent
-  writer, at the documented cost that a conflicting transaction aborts with SQLSTATE
-  `40001` — surfaced to Lua with a stable, locale-independent message (matched by
-  SQLSTATE, not the driver's own localized prose; `storage/postgres.rs::map_pg_error`)
-  rather than retried, since retrying a body that already ran side effects could
-  duplicate them. The abort lands at the in-transaction statement about as often as at
-  `COMMIT` (measured roughly 50/50), so callers must not assume it only happens at
-  commit. The `retry_busy`/`busy_timeout` layer (`storage/sqlite.rs`) stays SQLite-only.
-- **Cancellation-safe pinned transactions:** `db.tx` and `kv.update` run the
-  user body/transform on a pinned connection inside a manually-opened
-  transaction (`BEGIN IMMEDIATE` on SQLite, `BEGIN ISOLATION LEVEL SERIALIZABLE`
-  on Postgres), which `sqlx` does not auto-roll-back. If the wall-clock timeout
-  drops that future mid-transform, the connection-owning guard
-  (`SqliteTransaction`/`PgTransaction` and the `PinnedTx` used by `kv_update`)
-  rolls back on `Drop` via a detached task, so the connection never returns to
-  the pool mid-transaction — on Postgres it would otherwise sit
-  idle-in-transaction holding a SERIALIZABLE snapshot + row locks on the shared
-  database. An explicit COMMIT/ROLLBACK disarms the guard, so the normal path
-  costs nothing.
-- **Operator-trusted connection:** the Postgres URL comes from the operator via `--db`,
-  never from script input, so it is exempt from the script-facing network allowlist and
-  the SSRF guard — the same trust boundary that exempts the SQLite file path from
-  `lur.fs`'s allowlist.
-- **`kind`-discriminated kv schema:** `lur_kv(key TEXT PRIMARY KEY, kind SMALLINT,
-  bytes BYTEA, num BIGINT)` maps the backend-neutral value model 1:1 — `kind = 0` is
-  opaque bytes (stored in `bytes`), `kind = 1` is an integer counter (stored in `num`,
-  read back via `get` as its decimal string), mirroring the same model SQLite represents
-  with typed columns.
-- **`lur.state`** ([`capabilities/state.rs`](src/capabilities/state.rs)) is a host-side,
-  process-wide `StateStore` shared by every VM in the pool (via `RuntimeConfig::state`),
-  holding **primitives only**. Every key is version-stamped (bumped on every write,
-  including deletes, to avoid ABA). `update` is an optimistic CAS loop whose user function
-  runs with **no host lock held**, so it scales across the pool; a conflicting write
-  triggers a retry.
+- **Seam.** `db.rs`/`kv.rs` call the backend-neutral `Backend` enum;
+  `StorageTarget::resolve` picks the backend from `--db` (`postgres://`/`postgresql://` →
+  Postgres, else a SQLite path) and `Shared::ensure` opens it on first use. The kv value
+  model (opaque bytes vs. integer counter) is defined at the seam.
+- **SQL safety.** Dynamic SQL is wrapped in `sqlx::AssertSqlSafe` at the statement-building
+  sites in `storage/sqlite.rs` and `storage/postgres.rs`; user values stay in bind params.
+- **`lur.kv`.** `add`/`cas`/`incr`/`decr` are single statements; `update` (read-modify-write)
+  uses the backend's `kv_update` transaction. `get` always returns bytes (counters as
+  decimal strings).
+- **Invariants:** kv counters are integers; `kv.get` returns bytes; `db.tx`/`kv.update` are
+  write transactions; integer steps (`kv.incr`/`decr`, `state.incr`/`decr`) reject fractions.
+
+### SQLite (`storage/sqlite.rs`)
+
+- `SqliteBackend` owns a lazily opened `sqlx` pool (WAL, file auto-created) and
+  `lur_kv(key TEXT PRIMARY KEY, value BLOB)` — counters are stored as SQLite integers.
+- Write transactions (`db.tx`, `kv.update`) use `BEGIN IMMEDIATE`.
+- Lock contention has two complementary layers: a 5 s `busy_timeout` waits out ordinary
+  write-lock contention; `retry_busy` (5 attempts, full-jitter backoff) covers locks the busy
+  handler can't wait on — the WAL pragma on a fresh connection and fail-fast lock upgrades.
+  It wraps single-statement writes (`db.exec`, `kv.add`/`cas`/`incr`/`decr`), `begin`, and
+  `open_pool` (connect + `lur_kv` DDL), i.e. only where no user code has run, so a retry never
+  duplicates a side effect.
+
+### Postgres (`storage/postgres.rs`)
+
+- `PgBackend` owns the `PgPool`, `$n` binding, row→Lua mapping (core scalar types only; other
+  columns raise a cast-to-text error), and `lur_kv(key TEXT PRIMARY KEY, kind SMALLINT,
+  bytes BYTEA, num BIGINT)` — `kind = 0` opaque bytes, `kind = 1` integer counter in `num`.
+- **Isolation:** single statements run at `READ COMMITTED` (atomic, no retry). `db.tx` and
+  `kv.update` use `SERIALIZABLE` on a pinned connection; conflicts abort with SQLSTATE
+  `40001`, surfaced with a stable, locale-independent message (`map_pg_error`) rather than
+  retried, since the body may have had side effects. The abort hits an in-transaction
+  statement about as often as `COMMIT` (~50/50) — don't assume commit-only. No
+  `retry_busy`/`busy_timeout` layer.
+- **Trusted URL:** the `--db` URL comes from the operator, not scripts, so it's exempt from
+  the net allowlist and SSRF guard (as the SQLite path is exempt from `lur.fs`).
+
+### Cancellation-safe transactions
+
+`db.tx`/`kv.update` run user code inside a manually opened transaction, which `sqlx` doesn't
+auto-roll-back. If the wall-clock timeout drops the future mid-body, the guard
+(`SqliteTransaction`/`PgTransaction`, or `PinnedTx` in `kv_update`) rolls back on `Drop` via a
+detached task, so the connection never returns to the pool mid-transaction (on Postgres it
+would sit idle-in-transaction holding locks). Explicit COMMIT/ROLLBACK disarms the guard.
+
+### `lur.state`
+
+[`capabilities/state.rs`](src/capabilities/state.rs): a process-wide host-side `StateStore`
+shared by all pooled VMs (via `RuntimeConfig::state`), **primitives only**. Each key carries a
+version bumped on every write, including deletes (prevents ABA). `update` is an optimistic
+CAS loop whose user function runs with no host lock held; conflicts retry.
 
 ## Async core
 
-[`capabilities/async_ops.rs`](src/capabilities/async_ops.rs) exposes `lur.async.sleep`
-and the combinators (`all`, `race`, `any`, `settled`) over arrays of zero-arg Lua
-functions. An optional `Arc<Semaphore>` (`--max-concurrency`) caps in-flight tasks: each
-task acquires an owned permit before it runs. Lua itself still executes one step at a
-time; tasks interleave only at I/O await points, and early settlement (`race`/`any`)
-drops — and thereby cancels — the remaining futures.
+[`capabilities/async_ops.rs`](src/capabilities/async_ops.rs): `lur.async.sleep` and
+combinators `all`/`race`/`any`/`settled` over arrays of zero-arg functions. `--max-concurrency`
+is an `Arc<Semaphore>`; each task takes an owned permit before running. Lua still runs one step
+at a time — tasks interleave only at I/O awaits; `race`/`any` drop (cancel) the remaining
+futures on settlement.
 
 ## Configuration resolution
 
-CLI flags are parsed by clap with `units::parse_size`/`parse_duration` value parsers.
-`main.rs::load_config` finds the TOML config (`--config`, else
-`$XDG_CONFIG_HOME/lur/config` → `~/.config/lur/config`, unless `--no-config`), and
-`build_policy` merges it with the flags: the **profile** is last-wins (a flag overrides
-`default_profile`) while **allowlists** are additive (config grants unioned with per-run
-flags). Mode selection in `main` is a literal peek at `argv[1] == "serve"`.
+`main` peeks `argv[1]`: `serve` → server mode, `docs` → print the guide, else one-shot.
+`load_config` finds the TOML config (`--config`, else `$XDG_CONFIG_HOME/lur/config` →
+`~/.config/lur/config`; skipped with `--no-config`). `build_policy` picks the profile by
+precedence `-A`/`--loose` > `--strict` > config `default_profile` > strict; under strict,
+allowlists are the union of config and flag grants.
 
 ## Tests & CI
 
-Integration tests live under `tests/` (one file per surface: `cli.rs`, `serve.rs`,
-`serve_http.rs`, `runtime.rs`, …) alongside unit tests inside each module. Run them with
-`cargo nextest run`. Benchmarks are in `benches/` (`cargo bench --bench runtime`). CI
-([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs fmt + clippy (`-D
-warnings`), nextest, coverage (`cargo-llvm-cov` → Codecov), and an informational
-benchmark report; every action is pinned to a commit SHA.
+Integration tests: one file per surface in `tests/`; unit tests inline. `tests/pg.rs` needs
+Postgres (`LUR_TEST_PG_URL`, default matches `docker compose up -d`): skipped locally if
+unreachable, a hard failure when `CI` is set. Benchmarks: `benches/runtime.rs`.
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): fmt, clippy (`-D warnings`),
+nextest (with a Postgres service), `cargo deny check`, plus informational coverage
+(`cargo-llvm-cov` → Codecov) and benchmark report. All actions are pinned to commit SHAs.

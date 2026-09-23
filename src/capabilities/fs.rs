@@ -1,8 +1,5 @@
-//! `lur.fs` — policy-gated filesystem access (spec §4/§5).
-//!
-//! Every call is checked against the [`Policy`] read/write allowlists, which
-//! canonicalize the path before the prefix check. Data is raw bytes in both
-//! directions; paths are raw bytes too (no encoding assumed).
+//! `lur.fs` — filesystem access gated by the [`Policy`] allowlists, which
+//! canonicalize paths before checking (spec §4/§5). Data and paths are raw bytes.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,7 +10,6 @@ use crate::capabilities::argcheck;
 use crate::policy::Policy;
 use crate::runtime::RunError;
 
-/// Install `lur.fs.read` / `lur.fs.write`, gated by `policy`.
 pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunError> {
     let fs = lua.create_table().map_err(RunError::Init)?;
 
@@ -52,7 +48,6 @@ pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunErr
     Ok(())
 }
 
-/// Build a `PathBuf` from raw bytes — paths carry no encoding (§4).
 #[cfg(unix)]
 fn bytes_to_path(bytes: &[u8]) -> PathBuf {
     use std::os::unix::ffi::OsStrExt;

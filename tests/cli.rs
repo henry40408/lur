@@ -10,9 +10,8 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// A stable empty XDG config dir, so the binary's default-location config
-/// discovery never bleeds the developer's real `~/.config/lur/config` into a
-/// test. Tests that exercise discovery override `XDG_CONFIG_HOME` themselves.
+/// Empty XDG config dir so the developer's real `~/.config/lur/config` never
+/// leaks into a test. Discovery tests override `XDG_CONFIG_HOME` themselves.
 fn empty_xdg() -> &'static Path {
     static DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
     DIR.get_or_init(|| tempfile::tempdir().unwrap()).path()
@@ -24,8 +23,7 @@ fn lur() -> Command {
     c
 }
 
-/// Write a config file into a fresh temp dir; returns the dir (keep it alive)
-/// and the file path.
+/// Write a config into a fresh temp dir; keep the returned dir alive.
 fn write_config(contents: &str) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config");
@@ -142,7 +140,6 @@ fn fs_read_is_denied_by_default() {
     let f = dir.path().join("f.txt");
     std::fs::write(&f, b"secret").unwrap();
 
-    // No grant: strict default denies, the script errors out.
     lur().arg(fixture("read_arg.lua")).arg(&f).assert().code(1);
 }
 
@@ -161,7 +158,7 @@ fn env_returns_value_when_allowlisted() {
 
 #[test]
 fn env_returns_nil_when_not_allowlisted() {
-    // Set but not granted → nil (indistinguishable from unset; oracle-proof).
+    // Denied reads as nil, indistinguishable from unset.
     lur()
         .arg(fixture("env_read.lua"))
         .arg("LUR_TEST_VAR")
@@ -173,7 +170,6 @@ fn env_returns_nil_when_not_allowlisted() {
 
 #[test]
 fn loose_profile_grants_env_without_allowlist() {
-    // --loose selects the permissive profile: env is readable with no --allow-env.
     lur()
         .arg("--loose")
         .arg(fixture("env_read.lua"))
@@ -201,7 +197,6 @@ fn loose_profile_grants_fs_read_without_allowlist() {
 
 #[test]
 fn strict_and_loose_are_mutually_exclusive() {
-    // Passing both is a usage error (clap exits 2).
     lur()
         .arg("--strict")
         .arg("--loose")
@@ -240,7 +235,7 @@ fn config_default_profile_loose_is_permissive() {
 
 #[test]
 fn strict_flag_overrides_config_loose() {
-    // Scalar settings are last-wins: an explicit --strict beats config loose.
+    // Scalar settings are last-wins.
     let (_d, cfg) = write_config("default_profile = \"loose\"\n");
     lur()
         .arg("--config")
@@ -256,7 +251,6 @@ fn strict_flag_overrides_config_loose() {
 
 #[test]
 fn config_and_flag_env_grants_are_unioned() {
-    // A flag-granted var works alongside config…
     let (_d, cfg) = write_config("[allow]\nenv = [\"FROM_CONFIG\"]\n");
     lur()
         .arg("--config")
@@ -270,7 +264,6 @@ fn config_and_flag_env_grants_are_unioned() {
         .code(0)
         .stdout(predicate::eq("flagval"));
 
-    // …and the config-granted var still resolves with the flag present.
     let (_d2, cfg2) = write_config("[allow]\nenv = [\"FROM_CONFIG\"]\n");
     lur()
         .arg("--config")
@@ -296,7 +289,6 @@ fn default_location_config_is_discovered_and_no_config_ignores_it() {
     )
     .unwrap();
 
-    // Discovered at the default location → env granted.
     lur()
         .env("XDG_CONFIG_HOME", xdg.path())
         .arg(fixture("env_read.lua"))
@@ -306,7 +298,6 @@ fn default_location_config_is_discovered_and_no_config_ignores_it() {
         .code(0)
         .stdout(predicate::eq("v"));
 
-    // --no-config drops the config layer → nil.
     lur()
         .env("XDG_CONFIG_HOME", xdg.path())
         .arg("--no-config")
@@ -320,7 +311,6 @@ fn default_location_config_is_discovered_and_no_config_ignores_it() {
 
 #[test]
 fn max_concurrency_caps_inflight_async_tasks() {
-    // Six overlapping async tasks, capped to 2 in flight at a time.
     lur()
         .arg("--max-concurrency")
         .arg("2")
@@ -332,7 +322,7 @@ fn max_concurrency_caps_inflight_async_tasks() {
 
 #[test]
 fn async_tasks_are_uncapped_by_default() {
-    // No cap → all six run concurrently (peak == task count).
+    // Uncapped: peak == task count (6).
     lur()
         .arg(fixture("async_peak.lua"))
         .assert()
@@ -358,10 +348,8 @@ fn missing_script_exits_with_a_clear_error() {
         .stderr(predicate::str::contains("does-not-exist.lua"));
 }
 
-/// `--version` reports a build-stamped string, not the Cargo.toml version. The
-/// exact value is resolved at build time (injected `GIT_VERSION` → `git
-/// describe` → `dev`), so this pins the format and the override rather than a
-/// literal: `lur <non-empty>` that is never the `0.1.0` Cargo fallback.
+/// `--version` is stamped by build.rs (`GIT_VERSION` → `git describe` → `dev`),
+/// never the Cargo.toml `version`; pin the shape, not a literal.
 #[test]
 fn version_flag_reports_a_build_stamped_version() {
     let out = lur().arg("--version").output().expect("runs");

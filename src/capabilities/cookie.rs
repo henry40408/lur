@@ -1,15 +1,11 @@
-//! `lur.cookie` — parse the `Cookie` request header and build `Set-Cookie`
-//! values. Pure-compute capability, no policy gate, in the spirit of
-//! `lur.base64`/`lur.crypto`: raw bytes in, raw bytes out, no automatic
-//! percent-encoding. `serialize` validates its inputs so a malformed cookie
-//! fails loudly rather than corrupting the response.
+//! `lur.cookie` — parse `Cookie` and build `Set-Cookie`. Raw bytes, no
+//! percent-encoding; `serialize` rejects input that would corrupt the header.
 
 use mlua::{Error, Lua, Table, Value};
 
 use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
-/// Install the flat `lur.cookie` table (`parse` + `serialize`).
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let cookie = lua.create_table().map_err(RunError::Init)?;
 
@@ -20,7 +16,7 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     Ok(())
 }
 
-/// Trim leading/trailing optional whitespace (space / tab) from a byte slice.
+/// Trim space/tab (HTTP OWS) from both ends.
 fn trim_ows(mut s: &[u8]) -> &[u8] {
     while let [first, rest @ ..] = s {
         if *first == b' ' || *first == b'\t' {
@@ -39,11 +35,8 @@ fn trim_ows(mut s: &[u8]) -> &[u8] {
     s
 }
 
-/// Split a `Cookie` header value into (name, value) byte pairs using the
-/// lenient rules: split on `;`, trim OWS per segment, split on the first `=`,
-/// skip a segment with no `=` or an empty name. Values are verbatim. Borrows
-/// from the input; duplicate names are preserved in order (a caller building a
-/// map collapses them, later-wins).
+/// Leniently split a `Cookie` header into (name, value) pairs: segments without
+/// `=` or with an empty name are skipped; duplicates are kept in order.
 pub(crate) fn cookie_pairs(header: &[u8]) -> Vec<(&[u8], &[u8])> {
     let mut pairs = Vec::new();
     for segment in header.split(|&b| b == b';') {
@@ -60,7 +53,6 @@ pub(crate) fn cookie_pairs(header: &[u8]) -> Vec<(&[u8], &[u8])> {
     pairs
 }
 
-/// `lur.cookie.parse(header) -> { name = value, ... }`.
 fn install_parse(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
     let parse = lua
         .create_function(|lua, header: Value| {
@@ -68,7 +60,7 @@ fn install_parse(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
                 argcheck::arg(lua, header, "lur.cookie.parse", 1, "string")?;
             let out = lua.create_table()?;
             let bytes = header.as_bytes();
-            // Later duplicate overwrites earlier.
+            // Later duplicates win.
             for (name, value) in cookie_pairs(&bytes) {
                 out.set(lua.create_string(name)?, lua.create_string(value)?)?;
             }
@@ -79,8 +71,7 @@ fn install_parse(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
     Ok(())
 }
 
-/// RFC 6265 cookie-name separator characters (a name is a token: no controls,
-/// no separators, no space/tab).
+/// RFC 2616 token separators (space/tab are excluded by the range check).
 fn is_separator(b: u8) -> bool {
     matches!(
         b,
@@ -103,8 +94,7 @@ fn is_separator(b: u8) -> bool {
     )
 }
 
-/// Validate a cookie name: non-empty, all bytes are token characters
-/// (visible ASCII `0x21..=0x7e`, excluding separators).
+/// A cookie name must be a non-empty token.
 fn validate_name(name: &[u8]) -> Result<(), Error> {
     if name.is_empty() {
         return Err(Error::runtime(
@@ -122,11 +112,7 @@ fn validate_name(name: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-/// Reject bytes that would break the header: controls (`< 0x20`), DEL
-/// (`0x7f`), and `;`. Used for the cookie value and for the
-/// `domain`/`path`/`expires` attribute values. Bytes `>= 0x80` are allowed
-/// (raw-bytes stance; the serve layer's `HeaderValue::from_bytes` is the
-/// final backstop).
+/// Reject controls, DEL, and `;`. Bytes `>= 0x80` pass (raw-bytes stance).
 fn reject_bad_bytes(label: &str, v: &[u8]) -> Result<(), Error> {
     if v.iter().any(|&b| b < 0x20 || b == 0x7f || b == b';') {
         return Err(Error::runtime(format!(
@@ -136,7 +122,6 @@ fn reject_bad_bytes(label: &str, v: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-/// Canonicalize a `same_site` value, accepting any case.
 fn canon_same_site(v: &[u8]) -> Result<&'static str, Error> {
     if v.eq_ignore_ascii_case(b"strict") {
         Ok("Strict")
@@ -151,8 +136,7 @@ fn canon_same_site(v: &[u8]) -> Result<&'static str, Error> {
     }
 }
 
-/// `lur.cookie.serialize(name, value, opts?) -> string`. Returns one
-/// `Set-Cookie` value (without the `Set-Cookie:` prefix).
+/// Returns one `Set-Cookie` header value (no `Set-Cookie:` prefix).
 fn install_serialize(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
     let serialize = lua
         .create_function(|lua, (name, value, opts): (Value, Value, Option<Table>)| {

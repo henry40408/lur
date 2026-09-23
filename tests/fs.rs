@@ -60,7 +60,7 @@ fn fs_write_is_denied_with_only_read_grant() {
     let dir = tempfile::tempdir().unwrap();
     let f = dir.path().join("out.txt");
 
-    // Read grant on the dir must not permit writing (lists are separate).
+    // Read and write allowlists are separate.
     let rt = runtime_with(Policy::from_roots(&[dir.path().to_path_buf()], &[]).unwrap());
     assert!(
         rt.run(&format!("lur.fs.write({}, 'x')", lit(&f))).is_err(),

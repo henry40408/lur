@@ -1,23 +1,19 @@
-//! The capability policy and allowlist matching (spec §5).
+//! The capability policy: fs, env, and network allowlists (spec §5).
 //!
-//! v1 implements the filesystem allowlists. Read and write are **separate**
-//! lists (like Deno). Matching is escape-proof by **canonicalizing** the
-//! requested path (resolving `.`/`..`/symlinks to the real absolute path)
-//! before the prefix check, so a granted root cannot be escaped via `..` or a
-//! symlink. A directory root grants its whole subtree; a file root grants only
-//! that file. Roots are canonicalized once at construction.
+//! Fs read and write are separate lists. Requested paths are canonicalized
+//! before the prefix check, so `..` or a symlink cannot escape a granted root;
+//! a directory root grants its subtree, a file root only that file.
 //!
 //! Known limitation: canonicalize-then-open has a TOCTOU window (a symlink
-//! swapped after the check). Full mitigation belongs to the reserved §5
-//! Layer-B OS hardening, not v1.
+//! swapped after the check); mitigation is deferred to §5 Layer-B OS hardening.
 
 use std::net::{IpAddr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-/// A network allowlist entry: a host (any port) or a host with a fixed port.
-/// The host `*` matches any host (still subject to the private-network deny).
+/// `host` (any port) or `host:port`; `*` matches any host (still subject to
+/// the private-network deny).
 #[derive(Clone, Debug)]
 struct HostRule {
     host: String,
@@ -68,28 +64,23 @@ impl HostRule {
     }
 }
 
-/// A resolved capability policy.
 #[derive(Clone, Debug, Default)]
 pub struct Policy {
-    /// Canonicalized readable roots.
+    /// Canonicalized.
     fs_read: Vec<PathBuf>,
-    /// Canonicalized writable roots.
+    /// Canonicalized.
     fs_write: Vec<PathBuf>,
-    /// Allowlisted environment-variable names (exact match).
+    /// Exact names.
     env_allow: Vec<String>,
-    /// When set, every environment variable is readable (`-A`).
     env_allow_all: bool,
-    /// Allowed network hosts (host or host:port).
     net_allow: Vec<HostRule>,
-    /// When set, connections to loopback/private/link-local IPs are permitted
-    /// (off by default — SSRF deny, §5).
+    /// Off by default (SSRF guard, §5).
     allow_private_net: bool,
 }
 
-/// Why a filesystem access was refused.
 #[derive(Debug, Error)]
 pub enum PolicyError {
-    /// The path resolved fine but is not within any granted root.
+    /// Resolved, but outside every granted root.
     #[error("{op} access to {} is not allowed by the policy", path.display())]
     Denied { op: &'static str, path: PathBuf },
 
@@ -103,15 +94,12 @@ pub enum PolicyError {
 }
 
 impl Policy {
-    /// The shipped strict policy: no access at all (the secure-by-default
-    /// profile, §5).
+    /// No access at all (the default profile, §5).
     pub fn strict() -> Self {
         Self::default()
     }
 
-    /// The permissive `loose` profile: full filesystem read/write, every
-    /// environment variable, any network host, and private-network egress (§5).
-    /// Equivalent to `-A` at the policy layer.
+    /// Full fs read/write, every env var, any host, private IPs included (§5).
     pub fn loose() -> std::io::Result<Self> {
         let root = vec![PathBuf::from("/")];
         Ok(Self::from_roots(&root, &root)?
@@ -120,8 +108,7 @@ impl Policy {
             .allow_private())
     }
 
-    /// Build a policy from raw read/write roots, canonicalizing each to an
-    /// absolute real path. Roots that do not exist are an error.
+    /// Roots are canonicalized; a missing root is an error.
     pub fn from_roots(read: &[PathBuf], write: &[PathBuf]) -> std::io::Result<Self> {
         Ok(Self {
             fs_read: canonicalize_all(read)?,
@@ -130,48 +117,43 @@ impl Policy {
         })
     }
 
-    /// Add allowlisted environment-variable names (builder style).
+    /// Replaces the env allowlist.
     pub fn with_env(mut self, names: Vec<String>) -> Self {
         self.env_allow = names;
         self
     }
 
-    /// Grant read access to every environment variable (`-A`).
     pub fn allow_all_env(mut self) -> Self {
         self.env_allow_all = true;
         self
     }
 
-    /// Whether `name` may be read via `lur.env`.
     pub fn allows_env(&self, name: &str) -> bool {
         self.env_allow_all || self.env_allow.iter().any(|n| n == name)
     }
 
-    /// Add allowlisted network hosts (`host`, `host:port`, or `*`).
+    /// Replaces the network allowlist (`host`, `host:port`, or `*`).
     pub fn with_net(mut self, hosts: Vec<String>) -> Self {
         self.net_allow = hosts.iter().map(|h| HostRule::parse(h)).collect();
         self
     }
 
-    /// Permit connections to private/loopback/link-local IPs (`--allow-private`).
     pub fn allow_private(mut self) -> Self {
         self.allow_private_net = true;
         self
     }
 
-    /// Whether `host:port` is on the network allowlist.
     pub fn allows_net(&self, host: &str, port: u16) -> bool {
         let host = host.to_lowercase();
         self.net_allow.iter().any(|r| r.matches(&host, port))
     }
 
-    /// Whether connections to private/loopback IPs are permitted.
     pub fn allows_private_net(&self) -> bool {
         self.allow_private_net
     }
 
-    /// Whether `ip` is in a loopback / private / link-local / unique-local range
-    /// (the SSRF deny set, §5). IPv4-mapped IPv6 addresses are unwrapped first.
+    /// The SSRF deny set (§5): loopback, private, link-local, unique-local, and
+    /// unspecified. IPv4-mapped IPv6 addresses are unwrapped first.
     pub fn is_private_ip(ip: IpAddr) -> bool {
         match ip {
             IpAddr::V4(v4) => {
@@ -186,24 +168,20 @@ impl Policy {
         }
     }
 
-    /// Check a read. On success, returns the canonicalized path to open.
+    /// Returns the canonicalized path to open.
     pub fn allows_read(&self, path: &Path) -> Result<PathBuf, PolicyError> {
         let resolved = resolve_existing(path)?;
         gate("read", &self.fs_read, resolved)
     }
 
-    /// Check a write. A not-yet-existing file resolves through its parent. On
-    /// success, returns the canonicalized path to write.
+    /// A new file resolves through its parent. Returns the canonicalized path.
     pub fn allows_write(&self, path: &Path) -> Result<PathBuf, PolicyError> {
         let resolved = resolve_for_write(path)?;
         gate("write", &self.fs_write, resolved)
     }
 }
 
-/// Return `resolved` if it lies within any granted root, else `Denied`.
-///
-/// `starts_with` is component-wise, so a file root `/a/b` does not spuriously
-/// match a sibling `/a/bc`, and a directory root matches its whole subtree.
+/// `starts_with` is component-wise, so root `/a/b` does not match `/a/bc`.
 fn gate(op: &'static str, roots: &[PathBuf], resolved: PathBuf) -> Result<PathBuf, PolicyError> {
     if roots.iter().any(|root| resolved.starts_with(root)) {
         Ok(resolved)
@@ -226,7 +204,6 @@ fn canonicalize_all(roots: &[PathBuf]) -> std::io::Result<Vec<PathBuf>> {
     roots.iter().map(std::fs::canonicalize).collect()
 }
 
-/// Canonicalize an existing path.
 fn resolve_existing(path: &Path) -> Result<PathBuf, PolicyError> {
     std::fs::canonicalize(path).map_err(|source| PolicyError::Resolve {
         path: path.to_path_buf(),
@@ -234,12 +211,21 @@ fn resolve_existing(path: &Path) -> Result<PathBuf, PolicyError> {
     })
 }
 
-/// Canonicalize a write target: the file if it exists, otherwise its parent
-/// directory joined with the file name (so new files are allowed, but only
-/// inside an already-real parent).
+/// The file if it exists, else its canonical parent joined with the file name.
 fn resolve_for_write(path: &Path) -> Result<PathBuf, PolicyError> {
     if let Ok(existing) = std::fs::canonicalize(path) {
         return Ok(existing);
+    }
+    // A dangling symlink fails canonicalize, but writing through it would
+    // create its target outside the granted root.
+    if std::fs::symlink_metadata(path).is_ok() {
+        return Err(PolicyError::Resolve {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "path is a dangling symlink",
+            ),
+        });
     }
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
     let file_name = path.file_name();
@@ -271,6 +257,22 @@ mod tests {
         assert!(p.allows_env("ANY_NAME"));
         assert!(p.allows_net("example.com", 443));
         assert!(p.allows_private_net());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_through_dangling_symlink_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("escaped.txt");
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let p = Policy::from_roots(&[], &[root.path().to_path_buf()]).unwrap();
+        assert!(matches!(
+            p.allows_write(&link),
+            Err(PolicyError::Resolve { .. })
+        ));
     }
 
     #[test]

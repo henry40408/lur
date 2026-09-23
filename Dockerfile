@@ -1,25 +1,20 @@
 # syntax=docker/dockerfile:1
 
 # ---- build: cross-compile a static musl binary with cargo-zigbuild ----------
-# The builder is pinned to the native build platform; zig cross-compiles to the
-# target arch's musl triple, so no qemu emulation is needed — an arm64 image
-# builds at the host's native speed.
-# No Rust version here: rust-toolchain.toml is the single source of truth and
-# rustup installs it below. Do not "simplify" this to `rust:1.97` — the
-# un-suffixed tag resolves to trixie, which would be a silent Debian major bump.
+# Native build platform + zig cross-compile: no qemu. The Rust version comes from
+# rust-toolchain.toml; don't pin e.g. `rust:1.97` — un-suffixed tags resolve to
+# trixie, a silent Debian major bump.
 FROM --platform=$BUILDPLATFORM rust:bookworm AS build
 
-# aws-lc-sys (the rustls crypto backend) compiles its C sources through CMake;
-# the Luau (C++) and SQLite (C) deps are built by zig cc/c++. curl + xz fetch zig.
+# CMake for aws-lc-sys (rustls backend); curl + xz fetch zig.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends cmake curl xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Zig 0.14.1 avoids the libc++-19 bindgen requirement that 0.15+ introduces.
 ARG ZIG_VERSION=0.14.1
-# 0.23.0 is the first release that drops `-Wl,--fix-cortex-a53-843419`, which
-# rustc emits for aarch64 since 1.98 (rust-lang/rust#155453) and zig's linker
-# rejects. Anything older fails the arm64 leg outright.
+# >= 0.23.0 drops `-Wl,--fix-cortex-a53-843419`, which rustc emits for aarch64
+# since 1.98 (rust-lang/rust#155453) and zig's linker rejects.
 ARG ZIGBUILD_VERSION=0.23.0
 RUN cargo install cargo-zigbuild --version "${ZIGBUILD_VERSION}" --locked
 RUN set -eux; \
@@ -34,18 +29,15 @@ RUN set -eux; \
 
 WORKDIR /app
 
-# Install the pinned toolchain in a layer keyed on rust-toolchain.toml alone, so
-# editing source does not re-download the compiler. Any rustup proxy invocation
-# triggers the install.
+# Toolchain layer keyed on rust-toolchain.toml alone; `cargo --version` triggers
+# the rustup install.
 COPY rust-toolchain.toml .
 RUN cargo --version
 
 COPY . .
 
-# Map Docker's TARGETARCH onto the Rust musl triple and build. GIT_VERSION (the
-# release tag, or a `<ref>-<sha>` marker for non-release builds) is read by
-# build.rs to stamp `lur --version`; the literal "dev" is treated as unset and
-# falls back to "dev" since the build context excludes .git.
+# GIT_VERSION stamps `lur --version` via build.rs; with no .git in the context,
+# "dev" ends up as "dev".
 ARG TARGETARCH
 ARG GIT_VERSION=dev
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -65,9 +57,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/lur /usr/local/bin/lur
 
-# `lur serve` binds the app default (loopback). In a container the listener must
-# bind all interfaces for a reverse proxy to reach it; set it via ENV so it stays
-# overridable at runtime with `-e BIND=...` or a compose `environment:` entry.
+# The default bind is loopback; containers need all interfaces. ENV keeps it
+# overridable (`-e BIND=...`).
 ENV BIND=0.0.0.0:8080
 EXPOSE 8080
 

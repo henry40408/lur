@@ -1,19 +1,18 @@
 # lur guide
 
-`lur` runs Luau in a sandbox. Two modes share one core: one-shot
-`lur script.lua [args]` runs a script to completion; `lur serve app.lua` serves
-it as a long-running HTTP server. Capabilities live under the `lur.*` global;
-each is gated by a policy (default profile is `strict` — deny-all). See the
-[README](../README.md) for the full flag set and the sandbox model.
+`lur` runs Luau in a sandbox: `lur script.lua [args]` runs once;
+`lur serve app.lua` runs an HTTP server. Capabilities live under `lur.*`, gated
+by a policy (default `strict` — deny-all). Flags and the sandbox model are in
+the [README](../README.md).
 
-Every example below is run as part of the test suite, so it stays correct.
+Every example below runs in the test suite.
 
 ## Data & I/O
 
 ### lur.json
 
-Encode/decode JSON. JSON `null` becomes `lur.null` (a sentinel distinct from
-`nil`, since a `nil` value means the key is absent); UTF-8 only — base64 binary.
+JSON `null` decodes to `lur.null` (distinct from `nil`, which means absent).
+UTF-8 only — base64 binary first.
 
 ```lua
 local s = lur.json.encode({ ok = true, n = 3 })
@@ -32,9 +31,8 @@ assert(lur.base64.decode(enc) == "hi")
 
 ### lur.crypto
 
-Pure-compute hashing, HMAC, hex, CSPRNG bytes, and constant-time compare.
-Digests are raw bytes — bridge through `hex` or `lur.base64`. `sha1`/`md5` are
-legacy-interop only.
+Hashing, HMAC, hex, CSPRNG bytes, constant-time compare. Digests are raw
+bytes; `sha1`/`md5` are legacy-interop only.
 
 ```lua
 local digest = lur.crypto.sha256("abc")
@@ -55,8 +53,7 @@ assert(#lur.crypto.hmac_sha1("k", "m") == 20)
 
 ### lur.cookie
 
-Parse a `Cookie` header into a table; build one `Set-Cookie` value. Values are
-raw bytes (base64 arbitrary data).
+Parse a `Cookie` header; build one `Set-Cookie` value. Values are raw bytes.
 
 ```lua
 local jar = lur.cookie.parse("a=1; b=2")
@@ -69,8 +66,7 @@ assert(set:find("HttpOnly", 1, true))
 
 ### lur.time
 
-Clocks and timestamp parsing that fill the gaps in `os.*`. All values are
-integer milliseconds.
+Clocks and timestamp parsing missing from `os.*`, in integer milliseconds.
 
 ```lua
 assert(lur.time.now_ms() > 0)
@@ -85,20 +81,20 @@ assert(lur.time.parse_http_date("Thu, 01 Jan 1970 00:00:01 GMT") == 1000)
 
 ### lur.log
 
-`info`/`warn`/`error` write to **stderr** (stdout is the data channel); each
-call emits `<level>: <msg>\n`.
+`info`/`warn`/`error` write `<level>: <msg>\n` to **stderr** (stdout is the
+data channel).
 
 ```lua
-lur.log.info("starting\n")
-lur.log.warn("careful\n")
-lur.log.error("oops\n")
+lur.log.info("starting")
+lur.log.warn("careful")
+lur.log.error("oops")
 ```
 
 ### lur.io
 
-`lur.stdout.write(bytes)` / `flush()` is the data channel (raw bytes, no
-newline). `lur.stdin.read()` drains all input, `read(n)` reads up to `n` (`nil`
-at EOF), and `lines()` iterates newline-stripped lines.
+`lur.stdout.write(bytes)` / `flush()` write raw bytes (no newline).
+`lur.stdin.read()` drains input, `read(n)` reads up to `n` (`nil` at EOF),
+`lines()` iterates newline-stripped lines.
 
 ```lua
 lur.stdout.write("data\n")
@@ -107,9 +103,9 @@ lur.stdout.flush()
 
 ```lua ignore
 -- Reading stdin needs piped input; run as: echo hi | lur read.lua
-local all = lur.stdin.read()        -- drain everything (read(n) reads up to n bytes)
+local all = lur.stdin.read()
 lur.stdout.write(all)
-for line in lur.stdin.lines() do    -- or iterate newline-stripped lines
+for line in lur.stdin.lines() do
   lur.stdout.write(line .. "\n")
 end
 ```
@@ -128,9 +124,9 @@ assert(type(lur.args.flags) == "table")
 
 ### lur.state
 
-Process-wide shared state across the VM pool (primitives only): `get`/`set`
-(`nil` deletes), `incr` (atomic add), `update` (optimistic CAS), `cas`
-(value-based compare-and-set), `add` (set-if-absent).
+Process-wide state shared across the VM pool (primitives only): `get`/`set`
+(`nil` deletes), `incr`/`decr` (atomic), `update` (optimistic CAS), `cas`
+(compare-and-set), `add` (set-if-absent).
 
 ```lua
 lur.state.set("hits", 0)
@@ -140,12 +136,10 @@ lur.state.update("hits", function(n) return (n or 0) + 1 end)
 assert(lur.state.get("hits") == 2)
 lur.state.set("hits", nil)
 assert(lur.state.get("hits") == nil)
--- cas(key, expected, new): swaps new in only when current value equals expected
 lur.state.set("x", 10)
 assert(lur.state.cas("x", 10, 20) == true)   -- matched: 10 -> 20
 assert(lur.state.cas("x", 10, 30) == false)  -- stale: value is now 20
 assert(lur.state.get("x") == 20)
--- add(key, value): set-if-absent (returns true on success, false if already set)
 assert(lur.state.add("once", "hello") == true)
 assert(lur.state.add("once", "world") == false)
 assert(lur.state.get("once") == "hello")
@@ -156,8 +150,8 @@ assert(lur.state.get("once") == "hello")
 ### lur.fs
 
 `read(path) → bytes`, `write(path, bytes)`. Paths are canonicalized before the
-allowlist check, so `..`/symlink escapes are rejected. Grant access with
-`--allow-fs-read`/`--allow-fs-write`/`--allow-fs` (or `--loose`/`-A`).
+allowlist check, so `..`/symlink escapes fail. Grant with `--allow-fs-read`/
+`--allow-fs-write`/`--allow-fs` (or `-A`).
 
 ```lua
 lur.fs.write("./note.txt", "hello")
@@ -166,8 +160,8 @@ assert(lur.fs.read("./note.txt") == "hello")
 
 ### lur.env
 
-`lur.env(name) → string | nil`. Returns `nil` for **both** "denied" and "unset",
-so it can't be used as an oracle. Grant names with `--allow-env` (or `-A`).
+`lur.env(name) → string | nil` — `nil` for **both** denied and unset, so it is
+not an oracle. Grant with `--allow-env` (or `-A`).
 
 ```lua
 assert(lur.env("LUR_GUIDE_DEFINITELY_UNSET") == nil)
@@ -177,8 +171,8 @@ assert(lur.env("LUR_GUIDE_DEFINITELY_UNSET") == nil)
 
 `request(method, url, opts?)` plus `get`/`post`/`put`/`patch`/`delete`/`head`.
 `opts` may set `headers`, `query`, `body` **or** `json`, and `timeout` (ms).
-Response: `{ status, body, headers, headers_all, json() }`. Every hop is checked
-against the network allowlist and the SSRF guard; grant hosts with `--allow-net`.
+Returns `{ status, body, headers, headers_all, json() }`. Each request and hop is
+checked against the allowlist and SSRF guard; grant hosts with `--allow-net`.
 
 ```lua ignore
 local res = lur.http.get("https://example.com", { timeout = 5000 })
@@ -189,7 +183,7 @@ local posted = lur.http.post("https://api.example.com/items", {
 })
 local body = posted.json()
 
--- The verb helpers wrap `request`; use `request` directly for any method.
+-- `request` takes any method
 lur.http.request("OPTIONS", "https://api.example.com/items")
 lur.http.put("https://api.example.com/items/1", { json = { name = "v2" } })
 lur.http.patch("https://api.example.com/items/1", { json = { name = "v3" } })
@@ -202,10 +196,10 @@ assert(probe.status == 200)
 
 ### lur.db
 
-Requires `--db <path>`. `exec(sql, ...params)` returns
-`{ rows_affected, last_insert_id }`; `query(sql, ...params)` returns an array of
-row tables keyed by column; `tx(fn)` runs on a pinned connection (commit on
-return, rollback on error). Use `?` placeholders.
+Requires `--db`. `exec(sql, ...params) → { rows_affected, last_insert_id }`;
+`query(sql, ...params)` → array of rows keyed by column; `tx(fn)` runs on a
+pinned connection (commit on return, rollback on error). SQLite uses `?`
+placeholders.
 
 ```lua
 lur.db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
@@ -223,10 +217,10 @@ assert(#lur.db.query("SELECT id FROM t") == 2)
 
 ### lur.kv
 
-A key/value store over the same SQLite pool. Keys are strings; values are raw
-bytes. Basic operations: `get(key) → bytes | nil`, `set(key, bytes)`,
-`delete(key)`. Atomic ops: `add` (set-if-absent), `cas` (compare-and-swap),
-`incr`/`decr` (integer counters), `update` (read-modify-write).
+Key/value store on the `--db` backend; string keys, raw-byte values.
+`get`/`set`/`delete`, plus atomic `add` (set-if-absent), `cas`
+(compare-and-swap), `incr`/`decr` (integer counters), `update`
+(read-modify-write).
 
 ```lua
 lur.kv.set("greeting", "hi")
@@ -234,24 +228,22 @@ assert(lur.kv.get("greeting") == "hi")
 lur.kv.delete("greeting")
 assert(lur.kv.get("greeting") == nil)
 
--- add: insert only when key is absent (returns true on insert, false if already set)
 assert(lur.kv.add("once", "first") == true)
 assert(lur.kv.add("once", "again") == false)
 assert(lur.kv.get("once") == "first")
 
--- cas: compare-and-swap (expected, new) — returns true if applied
+-- cas(key, expected, new): true if applied
 assert(lur.kv.cas("once", "first", "second") == true)
 assert(lur.kv.cas("once", "first", "nope")  == false)
--- cas compares raw bytes: a counter created by incr/decr (stored as an integer) will not match — drive counters via incr/decr, not cas.
+-- counters (incr/decr) are stored as integers, so cas never matches them
 
--- incr/decr: integer counters (create-at-1 when absent; optional step)
+-- incr/decr: start from 0; optional step
 assert(lur.kv.incr("hits")    == 1)
 assert(lur.kv.incr("hits", 4) == 5)
 assert(lur.kv.decr("hits", 2) == 3)
 
--- update: read-modify-write; transform returns new value (string) or nil to delete.
--- The transform must not call lur.db write operations: a nested lur.kv call fast-fails;
--- a lur.db write is bounded by the 5 s busy_timeout rather than failing immediately.
+-- update: return the new value, or nil to delete. Inside the transform a
+-- nested lur.kv call raises; a lur.db write blocks on the lock, so avoid it.
 lur.kv.update("counter", function(cur)
   local n = tonumber(cur) or 0
   return tostring(n + 1)
@@ -261,13 +253,10 @@ assert(lur.kv.get("counter") == "1")
 
 ### Postgres backend
 
-`--db` also accepts a `postgres://` / `postgresql://` connection string — the scheme
-selects the backend at first use, e.g.
-`lur --db postgres://user:pass@localhost/lur_dev app.lua`. Placeholders and row types
-are native to the engine, not translated: Postgres uses `$1, $2, …`, and only core
-scalar types read back (a non-core column must be cast, e.g. `col::text`). `db.tx` and
-`kv.update` run at `SERIALIZABLE` there and may raise on a conflict, so always drive
-them through `pcall` (or your own retry) instead of assuming they succeed:
+`--db postgres://…` (or `postgresql://`) selects Postgres. Nothing is
+translated: placeholders are `$1, $2, …`, and only core scalar types read back
+(cast others, e.g. `col::text`). `db.tx` and `kv.update` run at `SERIALIZABLE`
+and may raise on conflict — wrap them in `pcall` or your own retry:
 
 ```lua ignore
 -- lur --db postgres://user:pass@localhost/lur_dev?sslmode=disable app.lua
@@ -287,9 +276,9 @@ assert(ok or err ~= nil)
 
 ### lur.async
 
-`sleep(ms)` and combinators over arrays of zero-arg functions: `all` (fail-fast),
-`race`/`any` (first to settle/succeed), `settled` (never raises). Lua runs one
-step at a time; tasks interleave at I/O await points.
+`sleep(ms)` and combinators over arrays of zero-arg functions: `all`
+(fail-fast), `race`/`any` (first to settle/succeed), `settled` (never raises).
+Tasks interleave only at I/O awaits.
 
 ```lua
 lur.async.sleep(1)
@@ -306,14 +295,14 @@ local settled = lur.async.settled({
 assert(settled[1].ok == false)
 assert(settled[2].ok == true and settled[2].value == "ok")
 
--- race: the first task to settle wins (the one that never awaits).
+-- race: first to settle wins
 local first = lur.async.race({
   function() return "fast" end,
   function() lur.async.sleep(20); return "slow" end,
 })
 assert(first == "fast")
 
--- any: the first task to *succeed* wins, skipping earlier failures.
+-- any: first to *succeed* wins
 local winner = lur.async.any({
   function() error("nope") end,
   function() return "winner" end,
@@ -325,12 +314,12 @@ assert(winner == "winner")
 
 ### lur.serve
 
-Server mode (`lur serve app.lua`). Registration happens once at load.
-`serve.http(method, path, handler)` — paths may contain `:name` segments bound
-into `req.params`; the handler returns `{ status?, body? }`. `serve.cron(spec,
-handler, opts?)` takes a 6-field cron expression and optional `name`/`overlap`/
-`timeout`. `req` exposes `method`, `path`, `params`, `query`, `query_all`,
-`headers`, `cookies`, `body`, and `json()`.
+Only under `lur serve`; registration happens once at load.
+`serve.http(method, path, handler)` — `:name` path segments bind into
+`req.params`; the handler returns `{ status?, body? }`. `serve.cron(spec,
+handler, opts?)` takes a 6-field cron spec and optional `name`/`overlap`/
+`timeout`. `req` has `method`, `path`, `params`, `query`, `query_all`,
+`headers`, `cookies`, `body`, `json()`, and `read(n)`.
 
 ```lua ignore
 lur.serve.http("POST", "/echo", function(req)
@@ -339,6 +328,6 @@ lur.serve.http("POST", "/echo", function(req)
 end)
 
 lur.serve.cron("0 */5 * * * *", function()
-  lur.log.info("tick\n")
+  lur.log.info("tick")
 end, { name = "ticker", overlap = false })
 ```

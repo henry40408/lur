@@ -8,7 +8,6 @@ use mlua::{Lua, Table, Value};
 use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
-/// Install `lur.log` with `info` / `warn` / `error`.
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let log = lua.create_table().map_err(RunError::Init)?;
     for level in ["info", "warn", "error"] {

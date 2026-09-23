@@ -1,12 +1,6 @@
-//! `lur.async` — the concurrency API (spec §7): `sleep` plus the four
-//! combinators `all` / `race` / `settled` / `any`, mirroring JS
-//! `Promise.all` / `race` / `allSettled` / `any`.
-//!
-//! Each combinator wraps a `{ fn1, fn2, … }` array of zero-arg Lua functions
-//! into futures driven concurrently on the one VM — Lua still runs one piece at
-//! a time, interleaving only at I/O await points (probe-verified). Cancellation
-//! is by drop: when a combinator settles early, the remaining futures are
-//! dropped, aborting their coroutines.
+//! `lur.async` (spec §7): `sleep` plus `all`/`race`/`settled`/`any`, mirroring
+//! JS `Promise.*`. Tasks interleave on one VM only at await points; when a
+//! combinator settles early the rest are dropped (cancelled).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,14 +11,11 @@ use tokio::sync::Semaphore;
 
 use crate::runtime::RunError;
 
-/// Collect the `{ fn1, fn2, … }` array part into a list of handler functions.
 fn task_list(tasks: &Table) -> mlua::Result<Vec<Function>> {
     tasks.clone().sequence_values::<Function>().collect()
 }
 
-/// Drive one task to completion, first acquiring a concurrency permit when a
-/// cap is set so no more than `max_concurrency` tasks run their bodies at once
-/// (spec §7/§9). The owned permit is held until the task settles.
+/// Run one task, holding a `max_concurrency` permit (if capped) until it settles.
 async fn run_task(f: Function, sem: Option<Arc<Semaphore>>) -> mlua::Result<Value> {
     let _permit = match sem {
         Some(s) => Some(s.acquire_owned().await.expect("semaphore never closed")),
@@ -33,15 +24,13 @@ async fn run_task(f: Function, sem: Option<Arc<Semaphore>>) -> mlua::Result<Valu
     f.call_async::<Value>(()).await
 }
 
-/// Install `lur.async.sleep` and the `all` / `race` / `settled` / `any` combinators.
-/// `max_concurrency` caps how many combinator tasks run concurrently per VM.
+/// `max_concurrency` caps concurrently running combinator tasks per VM.
 pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result<(), RunError> {
     let sem = max_concurrency.map(|n| Arc::new(Semaphore::new(n)));
     let async_tbl = lua.create_table().map_err(RunError::Init)?;
 
-    // `lur.async.sleep(ms)` parks on the tokio timer; while parked no Lua runs,
-    // so this is the path the wall-clock timeout layer (not the interrupt)
-    // guards (§5).
+    // No Lua runs while parked, so only the wall-clock timeout (not the
+    // interrupt) can cut this short.
     let sleep = lua
         .create_async_function(|_, ms: u64| async move {
             tokio::time::sleep(Duration::from_millis(ms)).await;
@@ -50,8 +39,7 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
         .map_err(RunError::Init)?;
     async_tbl.set("sleep", sleep).map_err(RunError::Init)?;
 
-    // all: await every task, results in argument order; the first error
-    // re-raises (fail-fast) and the rest are cancelled.
+    // all: results in order; the first error re-raises and cancels the rest.
     let sem_all = sem.clone();
     let all = lua
         .create_async_function(move |lua, tasks: Table| {
@@ -70,8 +58,7 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
         .map_err(RunError::Init)?;
     async_tbl.set("all", all).map_err(RunError::Init)?;
 
-    // settled: await every task but never raise; a per-task array of
-    // { ok = true, value } / { ok = false, err }.
+    // settled: never raises; { ok = true, value } / { ok = false, err } per task.
     let sem_settled = sem.clone();
     let settled = lua
         .create_async_function(move |lua, tasks: Table| {
@@ -101,8 +88,7 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
         .map_err(RunError::Init)?;
     async_tbl.set("settled", settled).map_err(RunError::Init)?;
 
-    // race: return as soon as the FIRST task settles (success or failure); its
-    // value, or re-raise its error. The rest are cancelled.
+    // race: the first task to settle wins, success or failure.
     let sem_race = sem.clone();
     let race = lua
         .create_async_function(move |_, tasks: Table| {
@@ -123,8 +109,7 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
         .map_err(RunError::Init)?;
     async_tbl.set("race", race).map_err(RunError::Init)?;
 
-    // any: return the first task to SUCCEED; if every task fails, raise an
-    // aggregate error. The rest are cancelled once one succeeds.
+    // any: the first success wins; raises an aggregate error if all fail.
     let sem_any = sem.clone();
     let any = lua
         .create_async_function(move |_, tasks: Table| {

@@ -1,8 +1,5 @@
-//! Storage backend seam. `Backend` isolates all backend-specific code (SQL
-//! dialect, binding, row mapping, concurrency) so `db.rs`/`kv.rs` stay
-//! backend-neutral. `SQLite` and `Postgres` are the two backends; `--db`'s
-//! scheme (via `StorageTarget::resolve`) picks which one `Shared::ensure`
-//! opens.
+//! Storage backend seam: keeps `db.rs`/`kv.rs` backend-neutral. The `--db`
+//! scheme picks `SQLite` or `Postgres`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -21,7 +18,6 @@ pub(crate) struct ExecResult {
     pub last_insert_id: i64,
 }
 
-/// Which concrete backend a `--db` value selects, resolved by URL scheme.
 enum StorageTarget {
     Sqlite(std::path::PathBuf),
     Postgres(String),
@@ -38,9 +34,6 @@ impl StorageTarget {
     }
 }
 
-/// A storage backend. `Sqlite` is the original backend; `Postgres` lands in
-/// Phase 2, which only extends the match arms below — no `db.rs`/`kv.rs` call
-/// site changes.
 #[derive(Clone)]
 pub(crate) enum Backend {
     Sqlite(SqliteBackend),
@@ -190,8 +183,7 @@ impl Transaction {
     }
 }
 
-/// Lazily-opened backend handle shared by `lur.db` and `lur.kv`. Cheaply
-/// cloneable; the backend opens on first use.
+/// Backend handle shared by `lur.db` and `lur.kv`, opened on first use.
 #[derive(Clone)]
 pub(crate) struct Shared {
     cell: Arc<OnceLock<Backend>>,
@@ -206,7 +198,6 @@ impl Shared {
         }
     }
 
-    /// Get the backend, opening it on first use. Errors clearly when no `--db`.
     pub(crate) async fn ensure(&self) -> mlua::Result<Backend> {
         if let Some(b) = self.cell.get() {
             return Ok(b.clone());
@@ -237,8 +228,7 @@ impl Shared {
     }
 }
 
-/// A `Backend` over a single-connection `SQLite` pool, for cancellation tests
-/// that must force connection reuse. Lives here so `db.rs` can reach it.
+/// Single-connection `SQLite` backend for `db.rs` cancellation tests.
 #[cfg(test)]
 pub(crate) async fn sqlite_max1_backend(dir: &std::path::Path) -> Backend {
     Backend::Sqlite(sqlite::max1_backend(dir).await)

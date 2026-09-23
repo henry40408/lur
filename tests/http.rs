@@ -14,7 +14,7 @@ fn runtime_with(policy: Policy) -> Runtime {
     .expect("runtime builds")
 }
 
-/// loopback policy that permits the test server (127.0.0.1 is private).
+/// Permits the loopback test server (127.0.0.1 is private).
 fn loopback_policy() -> Policy {
     Policy::strict()
         .with_net(vec!["127.0.0.1".to_string()])
@@ -158,7 +158,6 @@ fn http_json_opt_sets_body() {
 #[test]
 fn http_denied_when_host_not_allowlisted() {
     let port = spawn(Resp::Fixed(200, "x"));
-    // allowlist a different host; the request target is not permitted.
     let rt = runtime_with(
         Policy::strict()
             .with_net(vec!["example.com".to_string()])
@@ -174,7 +173,7 @@ fn http_denied_when_host_not_allowlisted() {
 #[test]
 fn http_private_ip_denied_by_default() {
     let port = spawn(Resp::Fixed(200, "x"));
-    // Host allowlisted, but private network not permitted → blocked (SSRF deny).
+    // Allowlisted but private → SSRF guard blocks.
     let rt = runtime_with(Policy::strict().with_net(vec!["127.0.0.1".to_string()]));
     assert!(
         rt.run(&format!("lur.http.get('http://127.0.0.1:{port}/')"))
@@ -201,7 +200,6 @@ fn http_body_exceeding_cap_errors() {
 
 #[test]
 fn http_redirect_to_disallowed_host_is_blocked() {
-    // Redirect to a host that is not on the allowlist must be refused per-hop.
     let target = spawn(Resp::Redirect("http://evil.example:9/".to_string()));
     let rt = runtime_with(loopback_policy());
     assert!(

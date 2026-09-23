@@ -141,7 +141,7 @@ fn path_param_is_extracted_into_req_params() {
 
 #[test]
 fn static_segment_beats_dynamic_param() {
-    // Registration order is dynamic-first to prove resolution is order-free.
+    // Dynamic registered first to prove order doesn't matter.
     let s = serve(
         "lur.serve.http('GET', '/users/:id', function(req) return { body = 'dynamic' } end)\n\
          lur.serve.http('GET', '/users/me', function(req) return { body = 'static' } end)",
@@ -158,7 +158,7 @@ fn param_is_percent_decoded_to_raw_bytes() {
     let s = serve(
         "lur.serve.http('GET', '/f/:name', function(req) return { body = req.params.name } end)",
     );
-    // %2F is '/', %20 is space — decoded after segment splitting.
+    // Decoded after segment splitting, so %2F stays in one segment.
     let resp = s.dispatch("GET", "/f/a%2Fb%20c", b"").expect("dispatch ok");
     assert_eq!(resp.body, b"a/b c");
 }
@@ -265,7 +265,7 @@ fn req_json_unavailable_after_chunked_read() {
 
 #[test]
 fn req_body_still_available_after_whole_read() {
-    // read() with no arg is sugar, not a chunked consume — req.body stays usable.
+    // Argless read() doesn't consume req.body.
     let s = serve(
         "lur.serve.http('POST', '/r', function(req)\n\
          \tlocal whole = req.read()\n\
@@ -305,9 +305,8 @@ fn body_within_max_is_served() {
 
 #[test]
 fn global_writes_do_not_bleed_across_requests() {
-    // A handler that creates a NEW global. sandbox(true) does not stop this, and
-    // without per-call isolation the value persists to the next request. Pinned
-    // to a single-VM pool so both requests provably hit the same VM.
+    // sandbox(true) allows new globals; per-call isolation must discard them.
+    // Single-VM pool so both requests hit the same VM.
     let s = Server::load(
         "lur.serve.http('GET', '/c', function(req)\n\
          \tcounter = (counter or 0) + 1\n\
@@ -329,8 +328,7 @@ fn global_writes_do_not_bleed_across_requests() {
 
 #[test]
 fn handlers_cannot_reach_the_global_env_escapes() {
-    // getfenv/setfenv/loadstring would each reach the writable global env and
-    // bleed state across requests on the same pooled VM; they must be gone.
+    // getfenv/setfenv/loadstring would reach the shared global env.
     let s = serve(
         "lur.serve.http('GET', '/e', function()\n\
          \treturn { body = tostring(getfenv) .. ',' .. tostring(setfenv) .. ',' .. tostring(loadstring) }\n\
@@ -341,8 +339,7 @@ fn handlers_cannot_reach_the_global_env_escapes() {
 
 #[test]
 fn multi_vm_pool_resolves_routes_on_every_vm() {
-    // Build a 3-VM pool: every VM collects the same registrations, so the
-    // host-assigned handler ids must line up and routing works on each.
+    // Handler ids must line up across all 3 VMs.
     let s = Server::load(
         "lur.serve.http('GET', '/users/:id', function(req) return { body = req.params.id } end)",
         RuntimeConfig {
@@ -358,8 +355,7 @@ fn multi_vm_pool_resolves_routes_on_every_vm() {
 
 #[test]
 fn isolated_handler_still_reads_real_globals() {
-    // The fresh per-call environment must fall through to the real globals, so
-    // capability modules like lur.json stay usable.
+    // The per-call env falls through to real globals like lur.json.
     let s = serve(
         "lur.serve.http('GET', '/j', function(req)\n\
          \treturn { body = lur.json.encode({ ok = true }) }\n\
@@ -373,7 +369,7 @@ fn isolated_handler_still_reads_real_globals() {
 
 #[test]
 fn io_parked_handler_exceeding_timeout_returns_503() {
-    // Parked on async I/O (sleep) — the tokio wall-clock layer fires.
+    // Parked on I/O: the wall-clock layer fires.
     let s = serve_with_timeout(
         "lur.serve.http('GET', '/slow', function(req)\n\
          \tlur.async.sleep(5000)\n\
@@ -389,7 +385,7 @@ fn io_parked_handler_exceeding_timeout_returns_503() {
 
 #[test]
 fn cpu_bound_handler_exceeding_timeout_returns_503() {
-    // A tight loop — the deadline interrupt fires on a back-edge.
+    // CPU-bound: the deadline interrupt fires.
     let s = serve_with_timeout(
         "lur.serve.http('GET', '/spin', function(req)\n\
          \twhile true do end\n\
@@ -461,21 +457,18 @@ fn req_cookies_merges_multiple_headers_later_wins() {
 
 #[test]
 fn handler_error_carries_location_for_diagnostics() {
-    // dispatch returns a raised Lua error as Err(RunError::Script(..)); it must
-    // carry a parsable chunk+line location or diagnostics::render, which the hyper
-    // layer calls, cannot build its snippet. The render output itself is covered by
-    // diagnostics::tests.
+    // The Err must carry a chunk:line location for diagnostics::render's snippet
+    // (render itself is covered in diagnostics::tests).
     let s = serve(
         "lur.serve.http('GET', '/boom', function(req)\n\
          \tlocal x = nil\n\
          \treturn x.y\n\
          end)",
     );
-    // dispatch propagates Lua errors as Err; the 500 is produced by the hyper adapter.
+    // The 500 comes from the hyper adapter, not dispatch.
     let err = s
         .dispatch("GET", "/boom", b"")
         .expect_err("a handler error must be returned as Err from dispatch");
-    // With chunk_name defaulting to "script", the error must contain "script:3".
     let msg = err.to_string();
     assert!(
         msg.contains("script:3"),

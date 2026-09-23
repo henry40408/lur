@@ -1,7 +1,5 @@
-//! The flat `lur.*` capability surface installed into the VM (spec §4).
-//!
-//! Each submodule installs its slice of the single `lur` table; [`install`]
-//! orchestrates them and must run before `sandbox(true)` freezes the globals.
+//! The flat `lur.*` capability table (spec §4). [`install`] must run before
+//! `sandbox(true)` freezes the globals.
 
 pub(crate) mod argcheck;
 pub mod args;
@@ -27,10 +25,7 @@ use mlua::Lua;
 
 use crate::runtime::{RunError, RuntimeConfig};
 
-/// Build the flat `lur` table and install it as the only global capability.
-///
-/// `serve_registry` is `Some` only under `lur serve`; it makes `lur.serve.http`
-/// collect routes instead of raising the one-shot registration error.
+/// `serve_registry` is `Some` only under `lur serve`; otherwise `lur.serve.*` raises.
 pub fn install(
     lua: &Lua,
     config: &RuntimeConfig,

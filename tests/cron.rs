@@ -3,8 +3,7 @@ use std::path::PathBuf;
 use lur::runtime::RuntimeConfig;
 use lur::serve::Server;
 
-/// A single-VM server with a `SQLite` db (so cron handlers can use lur.kv as an
-/// observable side effect).
+/// Single-VM server with a `SQLite` db, so cron handlers can write lur.kv.
 fn cron_server(db: PathBuf, src: &str) -> Server {
     Server::load(
         src,
@@ -47,7 +46,7 @@ fn cron_in_one_shot_is_a_registration_error() {
 
 #[test]
 fn invalid_cron_spec_fails_at_load() {
-    // 5-field crontab is not valid — must be 6-field (sec min hour dom mon dow).
+    // Specs are 6-field (sec min hour dom mon dow); 5-field crontab is rejected.
     let err = Server::load(
         "lur.serve.cron('0 * * * *', function() end)",
         RuntimeConfig::default(),

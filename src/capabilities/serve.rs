@@ -1,9 +1,5 @@
-//! `lur.serve.*` — handler registration for server mode (spec §3).
-//!
-//! Running `app.lua` only *collects* registrations: each `lur.serve.http`
-//! call pushes a route into the host-side [`Registry`], which the server then
-//! owns. In one-shot mode the registry is absent and the calls raise a clear
-//! "only under `lur serve`" error.
+//! `lur.serve.*` — collects route/cron registrations into a [`Registry`] while
+//! `app.lua` runs (spec §3). Raises in one-shot mode, where there is none.
 
 use std::sync::{Arc, Mutex};
 
@@ -11,33 +7,27 @@ use mlua::{Function, Lua, Table, Value};
 
 use crate::runtime::RunError;
 
-/// One declared route collected during `app.lua` warm-up.
 pub struct Registration {
-    /// HTTP method, upper-cased (`"ANY"` matches every method).
+    /// Upper-cased; `"ANY"` matches every method.
     pub method: String,
-    /// Route path (exact match in v1; `:param` segments come later).
+    /// Literal segments or `:name` params.
     pub path: String,
-    /// The Lua handler closure, VM-bound.
     pub handler: Function,
 }
 
-/// One declared cron job collected during `app.lua` warm-up.
 pub struct CronRegistration {
     /// 6-field cron spec (`sec min hour dom mon dow`).
     pub spec: String,
-    /// Job name (for logs and single-flight tracking); auto-derived if omitted.
+    /// Defaults to `cron[<spec>]`.
     pub name: String,
-    /// When `true`, overlapping runs are allowed; default is single-flight.
+    /// Allow overlapping runs; default is single-flight.
     pub overlap: bool,
-    /// Per-run timeout in milliseconds, overriding the global per-event budget.
+    /// Overrides the global per-event timeout.
     pub timeout_ms: Option<u64>,
-    /// The Lua handler closure, VM-bound.
     pub handler: Function,
 }
 
-/// Host-side collector that `lur.serve.*` writes into. `Arc`/`Mutex` because the
-/// `send` feature requires registration closures to be `Send` (a pooled VM can
-/// be checked out across worker threads).
+/// `Arc<Mutex>` because the `send` feature requires `Send` closures.
 #[derive(Clone, Default)]
 pub struct Registry {
     routes: Arc<Mutex<Vec<Registration>>>,
@@ -45,19 +35,15 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// Drain the collected HTTP route registrations.
     pub fn take(&self) -> Vec<Registration> {
         std::mem::take(&mut self.routes.lock().expect("registry mutex poisoned"))
     }
 
-    /// Drain the collected cron registrations.
     pub fn take_crons(&self) -> Vec<CronRegistration> {
         std::mem::take(&mut self.crons.lock().expect("registry mutex poisoned"))
     }
 }
 
-/// Install `lur.serve`. With a `registry` the calls collect routes; without
-/// one (one-shot mode) they raise a registration error.
 pub fn install(lua: &Lua, lur: &Table, registry: Option<&Registry>) -> Result<(), RunError> {
     let serve = lua.create_table().map_err(RunError::Init)?;
 
