@@ -279,3 +279,32 @@ fn pool_serves_concurrent_requests_in_parallel() {
         "two 200ms requests on a 2-VM pool should overlap, took {elapsed:?}"
     );
 }
+
+#[test]
+fn serve_writes_handler_response_headers() {
+    let (addr, _reaper, _dir) = spawn_server(
+        "lur.serve.http('GET', '/h', function(req)\n\
+         \treturn { headers = { ['Content-Type'] = 'text/plain', ['Set-Cookie'] = { 'a=1', 'b=2' } }, body = 'ok' }\n\
+         end)\n\
+         lur.serve.http('GET', '/bad', function(req)\n\
+         \treturn { headers = { ['X-A'] = 'a\\r\\nX-Injected: 1' }, body = 'no' }\n\
+         end)",
+    );
+    let request = |path: &str| {
+        round_trip(
+            &addr,
+            &format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"),
+        )
+    };
+
+    let ok = request("/h").to_ascii_lowercase();
+    assert!(ok.starts_with("http/1.1 200"), "{ok:?}");
+    assert!(ok.contains("\r\ncontent-type: text/plain\r\n"), "{ok:?}");
+    assert!(ok.contains("\r\nset-cookie: a=1\r\n"), "{ok:?}");
+    assert!(ok.contains("\r\nset-cookie: b=2\r\n"), "{ok:?}");
+
+    // CRLF in a value is a 500, never a split response.
+    let bad = request("/bad");
+    assert!(bad.starts_with("HTTP/1.1 500"), "{bad:?}");
+    assert!(!bad.contains("X-Injected"), "{bad:?}");
+}

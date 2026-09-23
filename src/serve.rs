@@ -14,6 +14,7 @@ use chrono::Utc;
 use cron::Schedule;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
+use hyper::header::{CONTENT_LENGTH, HeaderName, HeaderValue, TRANSFER_ENCODING};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response as HyperResponse};
@@ -186,6 +187,8 @@ pub struct RawRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
     pub status: u16,
+    /// Validated; a name may repeat (e.g. `Set-Cookie`).
+    pub headers: Vec<(HeaderName, HeaderValue)>,
     pub body: Vec<u8>,
 }
 
@@ -409,14 +412,17 @@ impl Server {
                 );
                 Response {
                     status: 500,
+                    headers: Vec::new(),
                     body: b"Internal Server Error".to_vec(),
                 }
             }
         };
 
-        let built = HyperResponse::builder()
-            .status(response.status)
-            .body(Full::new(Bytes::from(response.body)));
+        let mut built = HyperResponse::builder().status(response.status);
+        for (name, value) in response.headers {
+            built = built.header(name, value);
+        }
+        let built = built.body(Full::new(Bytes::from(response.body)));
         Ok(built.unwrap_or_else(|_| HyperResponse::new(Full::new(Bytes::new()))))
     }
 
@@ -429,6 +435,7 @@ impl Server {
         let Some((id, params)) = self.router.resolve(&req.method, &req.path) else {
             return Ok(Response {
                 status: 404,
+                headers: Vec::new(),
                 body: b"Not Found".to_vec(),
             });
         };
@@ -572,6 +579,7 @@ async fn wait_for_signal() {
 fn timeout_response() -> Response {
     Response {
         status: 503,
+        headers: Vec::new(),
         body: b"Service Unavailable".to_vec(),
     }
 }
@@ -579,6 +587,7 @@ fn timeout_response() -> Response {
 fn oversize_response() -> Response {
     Response {
         status: 413,
+        headers: Vec::new(),
         body: b"Payload Too Large".to_vec(),
     }
 }
@@ -876,7 +885,7 @@ fn hex(c: u8) -> Option<u8> {
 fn response_from(values: MultiValue) -> Result<Response, RunError> {
     let Some(Value::Table(table)) = values.into_iter().next() else {
         return Err(RunError::Script(mlua::Error::RuntimeError(
-            "handler must return a table { status, body }".into(),
+            "handler must return a table { status, headers, body }".into(),
         )));
     };
 
@@ -899,6 +908,65 @@ fn response_from(values: MultiValue) -> Result<Response, RunError> {
         .map_err(RunError::Script)?
         .map(|s| s.as_bytes().to_vec())
         .unwrap_or_default();
+    let headers = match table.get::<Value>("headers").map_err(RunError::Script)? {
+        Value::Nil => Vec::new(),
+        Value::Table(t) => headers_from(&t).map_err(RunError::Script)?,
+        other => {
+            return Err(RunError::Script(mlua::Error::RuntimeError(format!(
+                "response headers must be a table, got {}",
+                other.type_name()
+            ))));
+        }
+    };
 
-    Ok(Response { status, body })
+    Ok(Response {
+        status,
+        headers,
+        body,
+    })
+}
+
+/// `{ [name] = value | { value, ... } }` → flat pairs, array order kept.
+/// Invalid names/values (incl. CR/LF) error, so a bad header is a 500 rather
+/// than a split response. Framing headers are hyper's job: a handler-set
+/// `Content-Length` could disagree with the body.
+fn headers_from(table: &mlua::Table) -> mlua::Result<Vec<(HeaderName, HeaderValue)>> {
+    let err = |msg: String| mlua::Error::RuntimeError(format!("response headers: {msg}"));
+    let mut out = Vec::new();
+    for pair in table.pairs::<Value, Value>() {
+        let (key, value) = pair?;
+        let Value::String(key) = key else {
+            return Err(err(format!(
+                "name must be a string, got {}",
+                key.type_name()
+            )));
+        };
+        let name = HeaderName::from_bytes(&key.as_bytes())
+            .map_err(|e| err(format!("{e}: {:?}", key.to_string_lossy())))?;
+        if name == CONTENT_LENGTH || name == TRANSFER_ENCODING {
+            return Err(err(format!("{name} is set by the server")));
+        }
+        let parse = |v: &Value| match v {
+            Value::String(s) => {
+                HeaderValue::from_bytes(&s.as_bytes()).map_err(|e| err(format!("{e} for {name}")))
+            }
+            other => Err(err(format!(
+                "value for {name} must be a string or array of strings, got {}",
+                other.type_name()
+            ))),
+        };
+        match &value {
+            Value::Table(values) => {
+                let len = values.raw_len();
+                if values.pairs::<Value, Value>().count() != len {
+                    return Err(err(format!("values for {name} must be an array")));
+                }
+                for i in 1..=len {
+                    out.push((name.clone(), parse(&values.raw_get::<Value>(i)?)?));
+                }
+            }
+            other => out.push((name.clone(), parse(other)?)),
+        }
+    }
+    Ok(out)
 }

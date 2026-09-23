@@ -316,7 +316,8 @@ assert(winner == "winner")
 
 Only under `lur serve`; registration happens once at load.
 `serve.http(method, path, handler)` — `:name` path segments bind into
-`req.params`; the handler returns `{ status?, body? }`. `serve.cron(spec,
+`req.params`; the handler returns `{ status?, headers?, body? }`, where a
+header value is a string or an array of strings. `serve.cron(spec,
 handler, opts?)` takes a 6-field cron spec and optional `name`/`overlap`/
 `timeout`. `req` has `method`, `path`, `params`, `query`, `query_all`,
 `headers`, `cookies`, `body`, `json()`, and `read(n)`.
@@ -324,7 +325,10 @@ handler, opts?)` takes a 6-field cron spec and optional `name`/`overlap`/
 ```lua ignore
 lur.serve.http("POST", "/echo", function(req)
   local data = req.json()
-  return { status = 200, body = lur.json.encode(data) }
+  return {
+    headers = { ["Content-Type"] = "application/json" },
+    body = lur.json.encode(data),
+  }
 end)
 
 lur.serve.cron("0 */5 * * * *", function()
