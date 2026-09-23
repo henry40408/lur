@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790147645969,
+  "lastUpdate": 1790148058670,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3107,6 +3107,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 211957,
             "range": "± 5419",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "20bd8242b7eae1302a724c72128d2953905d6d4f",
+          "message": "fix(kv): scope the update re-entry flag to the VM, not the thread (#115)\n\nThe flag was a thread_local held across the transform's awaits. In\nserve mode VMs share multi-thread tokio workers, so while one request's\ntransform was parked, another VM's lur.kv calls on that worker were\nrejected as re-entry; and if the task resumed on another worker, the\nguard restored that worker's flag, leaving the original one stuck on\nand rejecting every later kv call there.\n\nCo-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-23T15:19:38+08:00",
+          "tree_id": "c8abf9ee30ed5ffa6a25ece5d82f36239bdc97da",
+          "url": "https://github.com/henry40408/lur/commit/20bd8242b7eae1302a724c72128d2953905d6d4f"
+        },
+        "date": 1790148057606,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 313528,
+            "range": "± 8892",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5832,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 218567,
+            "range": "± 5750",
             "unit": "ns/iter"
           }
         ]
