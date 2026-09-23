@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790148732153,
+  "lastUpdate": 1790149068075,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3233,6 +3233,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208741,
             "range": "± 3467",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a359b92b285f528e11c7f0d394f6d327a5833389",
+          "message": "fix(json): never encode a table with out-of-range keys as an array (#118)\n\ntable_to_json treated a table as an array when every key was numeric and\nthe key count equalled `#t`. A hole plus an out-of-range numeric key\n(0, negative, fractional, or past `#t`) satisfies that, so the extra key\nwas silently dropped: `{'a','b','c','d'}` with `[2]=nil, [-1]='m'`\nencoded as `[\"a\",null,\"c\",\"d\"]`. Require every key to be an integer in\n`1..=#t`; anything else takes the object path, which rejects non-string\nkeys with an error.\n\nCo-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-23T15:35:56+08:00",
+          "tree_id": "1dbfddc52798d31833216c12f78814dc38f71f04",
+          "url": "https://github.com/henry40408/lur/commit/a359b92b285f528e11c7f0d394f6d327a5833389"
+        },
+        "date": 1790149067570,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 313861,
+            "range": "± 11012",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5879,
+            "range": "± 63",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208601,
+            "range": "± 5671",
             "unit": "ns/iter"
           }
         ]
