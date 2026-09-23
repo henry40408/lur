@@ -1,10 +1,9 @@
-//! Human-readable size and duration parsing for the CLI (spec §12): `128m`,
-//! `16m`, `5s`, `2m`, `500ms`. Sizes are binary (k/m/g = ×1024); durations
-//! accept `ms`/`s`/`m`/`h`. A bare number is bytes (size) or seconds (duration).
+//! CLI size and duration parsing (spec §12), case-insensitive. Sizes are
+//! binary (`k`/`m`/`g`); durations take `ms`/`s`/`m`/`h`. A bare number is
+//! bytes or seconds.
 
 use std::time::Duration;
 
-/// Split a trimmed `<digits><unit>` string into its numeric and unit parts.
 fn split_num_unit(s: &str) -> Result<(u64, &str), String> {
     let s = s.trim();
     let idx = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
@@ -18,8 +17,6 @@ fn split_num_unit(s: &str) -> Result<(u64, &str), String> {
     Ok((n, unit.trim()))
 }
 
-/// Parse a byte size: bare/`b` = bytes, `k`/`kb` = ×1024, `m`/`mb` = ×1024²,
-/// `g`/`gb` = ×1024³ (case-insensitive).
 pub fn parse_size(s: &str) -> Result<usize, String> {
     let lower = s.to_ascii_lowercase();
     let (n, unit) = split_num_unit(&lower)?;
@@ -35,8 +32,6 @@ pub fn parse_size(s: &str) -> Result<usize, String> {
         .ok_or_else(|| format!("size too large: {s:?}"))
 }
 
-/// Parse a duration: `ms` = milliseconds, bare/`s` = seconds, `m` = minutes,
-/// `h` = hours (case-insensitive).
 pub fn parse_duration(s: &str) -> Result<Duration, String> {
     let lower = s.to_ascii_lowercase();
     let (n, unit) = split_num_unit(&lower)?;

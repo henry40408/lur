@@ -1,10 +1,6 @@
-//! Server mode (spec §3): load `app.lua` into a pool of pre-warmed VMs, then
-//! dispatch each request to the matching Lua handler on an exclusively-borrowed
-//! VM.
-//!
-//! The host owns the route table (`(method, path) → handler id`); each pooled VM
-//! holds its own handler closures, keyed by that id. The network layer (hyper)
-//! is a thin adapter on top of [`Server::dispatch`].
+//! Server mode (spec §3): a pool of pre-warmed VMs, each request run on an
+//! exclusively-borrowed VM. The host owns the route table (`(method, path) →
+//! handler id`); each VM holds its own handler closures under the same ids.
 
 use std::convert::Infallible;
 use std::future::Future;
@@ -30,28 +26,25 @@ use tracing::{error, info, warn};
 use crate::capabilities::serve::Registry;
 use crate::runtime::{Deadline, RunError, RuntimeConfig, build_lua};
 
-/// A loaded server application: a VM pool plus the host-side route table and the
-/// multi-threaded runtime that drives request handling.
+/// A loaded app: VM pool, route table, cron jobs, and the tokio runtime.
 pub struct Server {
     pool: Pool,
     router: Router,
     cron_jobs: Vec<CronJob>,
     rt: tokio::runtime::Runtime,
-    /// Per-request wall-clock budget; `None` leaves handlers unbounded.
+    /// `None` leaves handlers unbounded.
     per_event_timeout: Option<Duration>,
     /// Request-body cap; a larger body gets a 413 before the handler runs.
     max_body: Option<usize>,
     /// Grace period for draining in-flight work on graceful shutdown.
     shutdown_grace: Duration,
-    /// App source text, retained for rendering handler/cron errors (diagnostics).
+    /// Kept for rendering handler/cron errors.
     source: Arc<str>,
-    /// Bare chunk name (no `@` prefix) used by the diagnostics renderer.
+    /// Chunk name without the `@` prefix.
     chunk_name: String,
 }
 
-/// One pre-warmed VM in the pool: its sandboxed Lua state and the handler
-/// closures it collected at warm-up, indexed by the host-assigned handler id
-/// (HTTP and cron handlers each in their own list).
+/// A pre-warmed VM with its handler closures, indexed by handler id.
 struct Vm {
     lua: Lua,
     deadline: Deadline,
@@ -59,9 +52,7 @@ struct Vm {
     cron_handlers: Vec<Function>,
 }
 
-/// A fixed-size pool of VMs, each checked out exclusively per request. The
-/// semaphore caps in-flight handlers at the pool size; a waiter parks until a
-/// VM is returned.
+/// Fixed-size VM pool; the semaphore caps in-flight handlers at the pool size.
 struct Pool {
     available: Mutex<Vec<Vm>>,
     permits: Semaphore,
@@ -119,30 +110,24 @@ impl Drop for CheckedOut<'_> {
 /// Decoded path parameters: `(name, raw-byte value)` pairs.
 type Params = Vec<(String, Vec<u8>)>;
 
-/// One parsed path segment of a route pattern.
+/// A route pattern segment: literal, or `:name` binding one segment.
 enum Seg {
-    /// A literal segment that must match exactly.
     Static(String),
-    /// A `:name` segment that matches any one segment and binds it.
     Param(String),
 }
 
-/// A compiled route: method, parsed pattern, and the handler id (an index into
-/// every VM's handler list — the same registration order across all VMs).
+/// `id` indexes every VM's handler list (same registration order in all VMs).
 struct Route {
     method: String,
     pattern: Vec<Seg>,
     id: usize,
 }
 
-/// The host-side route table: resolves `(method, path)` to a handler id,
-/// applying static-beats-dynamic precedence independent of registration order.
 struct Router {
     routes: Vec<Route>,
 }
 
-/// A scheduled job: its parsed schedule plus the handler id (an index into every
-/// VM's cron-handler list).
+/// `id` indexes every VM's cron-handler list.
 #[derive(Clone)]
 struct CronJob {
     schedule: Schedule,
@@ -152,8 +137,7 @@ struct CronJob {
     id: usize,
 }
 
-/// Cron metadata collected at warm-up (handler lives in each VM by id). Compared
-/// across VMs to keep handler ids aligned.
+/// Cron registration minus the handler; compared across VMs to keep ids aligned.
 #[derive(Clone, PartialEq, Eq)]
 struct CronMeta {
     spec: String,
@@ -162,8 +146,7 @@ struct CronMeta {
     timeout_ms: Option<u64>,
 }
 
-/// Parse each collected cron spec into a [`CronJob`], assigning registration-
-/// order ids. A bad spec (e.g. 5-field crontab) fails the load.
+/// A bad spec (e.g. 5-field crontab) fails the load.
 fn build_cron_jobs(meta: &[CronMeta]) -> Result<Vec<CronJob>, RunError> {
     meta.iter()
         .enumerate()
@@ -185,36 +168,30 @@ fn build_cron_jobs(meta: &[CronMeta]) -> Result<Vec<CronJob>, RunError> {
         .collect()
 }
 
-/// A request as seen by the host before it crosses into Lua. Path is still
-/// percent-encoded; query is the raw string without the leading `?`.
+/// A request before it crosses into Lua.
 #[derive(Debug, Default, Clone)]
 pub struct RawRequest {
-    /// HTTP method (case-insensitive; normalized to upper case for the handler).
+    /// Case-insensitive; upper-cased for the handler.
     pub method: String,
-    /// Request path, percent-encoded (`/users/42`).
+    /// Still percent-encoded.
     pub path: String,
-    /// Raw query string without the `?` (`a=1&b=2`); empty if none.
+    /// Without the leading `?`; empty if none.
     pub query: String,
-    /// Header name/value pairs in arrival order (names case-insensitive).
+    /// In arrival order.
     pub headers: Vec<(String, String)>,
-    /// Full request body as raw bytes.
     pub body: Vec<u8>,
 }
 
-/// The host-side view of a handler's reply (spec §3).
+/// A handler's reply (spec §3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
-    /// HTTP status code (defaults to 200 when the handler omits it).
     pub status: u16,
-    /// Response body as raw bytes (defaults to empty).
     pub body: Vec<u8>,
 }
 
 impl Server {
-    /// Load `app.lua`: build a multi-threaded runtime and a pool of `pool_size`
-    /// pre-warmed VMs. Each VM runs the script once to collect its own handler
-    /// closures (same registration order across VMs); the route table is built
-    /// from that order and rejects a duplicate `(method, path)` at load time.
+    /// Run `app.lua` once per pooled VM to collect handlers. Fails if VMs
+    /// register differently or a route is duplicated.
     pub fn load(source: &str, config: RuntimeConfig) -> Result<Self, RunError> {
         let pool_size = config.pool_size.max(1);
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -222,8 +199,7 @@ impl Server {
             .build()
             .map_err(RunError::AsyncRuntime)?;
 
-        // Warm up each VM inside the runtime so an app.lua that awaits at the top
-        // level (e.g. fetching config) still works.
+        // Warm up inside the runtime so top-level awaits in app.lua work.
         let bare_chunk_name = config.chunk_name.as_deref().unwrap_or("script").to_owned();
         let chunk_name = format!("@{bare_chunk_name}");
         let (vms, routes, crons) = rt.block_on(async {
@@ -294,9 +270,8 @@ impl Server {
         })
     }
 
-    /// Run the named cron job's handler once, returning whether a job matched.
-    /// Lets embedders (and tests) trigger a job deterministically; errors are
-    /// logged like a scheduled fire, never propagated.
+    /// Run the named cron job once; returns whether it exists. Errors are
+    /// logged, not propagated.
     pub fn fire_cron(&self, name: &str) -> Result<bool, RunError> {
         let Some(job) = self.cron_jobs.iter().find(|j| j.name == name) else {
             return Ok(false);
@@ -305,8 +280,7 @@ impl Server {
         Ok(true)
     }
 
-    /// Dispatch a bare `(method, path, body)` request — query and headers empty.
-    /// Convenience wrapper over [`Self::dispatch_raw`].
+    /// [`Self::dispatch_raw`] with empty query and headers.
     pub fn dispatch(&self, method: &str, path: &str, body: &[u8]) -> Result<Response, RunError> {
         self.dispatch_raw(&RawRequest {
             method: method.to_owned(),
@@ -316,23 +290,19 @@ impl Server {
         })
     }
 
-    /// Dispatch a fully-described request, driving the async handler on the
-    /// runtime's executor (synchronous wrapper).
+    /// Blocking wrapper over the async dispatch.
     pub fn dispatch_raw(&self, req: &RawRequest) -> Result<Response, RunError> {
         self.rt.block_on(self.dispatch_async(req))
     }
 
-    /// Bind `addr` and serve requests until a shutdown signal (SIGTERM/SIGINT),
-    /// then drain (spec §3/§5). Each connection is a spawned task; handlers run
-    /// on whichever VM the pool hands out, across worker threads.
+    /// Serve on `addr` until SIGTERM/SIGINT, then drain (spec §3/§5).
     pub fn run(self, addr: SocketAddr) -> std::io::Result<()> {
         self.run_with_shutdown(addr, wait_for_signal())
     }
 
-    /// As [`Self::run`], but driven by an arbitrary `shutdown` future instead of
-    /// OS signals. On shutdown: stop accepting, stop cron scheduling, then wait
-    /// for in-flight requests and jobs to finish within the grace period before
-    /// returning (anything still running is aborted when the runtime drops).
+    /// [`Self::run`] with a custom `shutdown` future. On shutdown, stops
+    /// accepting and scheduling, then waits up to the grace period for in-flight
+    /// work; anything left is aborted when the runtime drops.
     pub fn run_with_shutdown(
         self,
         addr: SocketAddr,
@@ -345,18 +315,17 @@ impl Server {
             let listener = TcpListener::bind(addr).await?;
             info!("listening on http://{addr}");
 
-            // Fan the single shutdown future out to the accept loop and every cron loop.
+            // Fan shutdown out to the accept loop and every cron loop.
             let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
             tokio::spawn(async move {
                 shutdown.await;
                 let _ = shutdown_tx.send(true);
             });
 
-            // A liveness token cloned into every in-flight connection and cron
-            // run; draining waits until only this original handle remains.
+            // Cloned into every in-flight connection and cron run; draining
+            // waits until only this handle remains.
             let active = Arc::new(());
 
-            // Cron loops draw VMs from the same pool as request handlers.
             for job in &server.cron_jobs {
                 tokio::spawn(cron_loop(
                     server.clone(),
@@ -399,8 +368,7 @@ impl Server {
         })
     }
 
-    /// Adapt one hyper request through [`Self::dispatch_async`]. A handler error
-    /// becomes a 500 and is logged — it must never bring the server down (§8).
+    /// A handler error becomes a logged 500, never a crash (§8).
     async fn handle(
         &self,
         req: Request<Incoming>,
@@ -452,11 +420,8 @@ impl Server {
         Ok(built.unwrap_or_else(|_| HyperResponse::new(Full::new(Bytes::new()))))
     }
 
-    /// The async core of [`Self::dispatch_raw`]; the network loop awaits this
-    /// directly rather than blocking.
     async fn dispatch_async(&self, req: &RawRequest) -> Result<Response, RunError> {
-        // Reject an oversize body at the host edge, before routing or building
-        // the Lua `req` — the VM never allocates it (spec §3).
+        // Reject before routing so the VM never allocates the body (spec §3).
         if matches!(self.max_body, Some(max) if req.body.len() > max) {
             return Ok(oversize_response());
         }
@@ -468,8 +433,7 @@ impl Server {
             });
         };
 
-        // Exclusive ownership for the whole call is what makes the per-call
-        // environment swap safe: no other request runs on this VM until it returns.
+        // Exclusive checkout is what makes the per-call environment swap safe.
         let checked = self.pool.checkout().await;
         let vm = checked.vm();
         let handler = &vm.handlers[id];
@@ -482,9 +446,7 @@ impl Server {
         }
     }
 
-    /// Run a cron job's handler once on a pooled VM. Errors and timeouts are
-    /// logged (tagged with the job name) and never propagated — a job must not
-    /// bring the server down (§8).
+    /// Errors and timeouts are logged, never propagated (§8).
     async fn run_cron(&self, job: &CronJob) {
         let checked = self.pool.checkout().await;
         let vm = checked.vm();
@@ -511,17 +473,15 @@ impl Server {
     }
 }
 
-/// Why a handler call did not return a value.
 enum CallError {
-    /// Exceeded its time budget (interrupt or wall-clock layer).
+    /// Hit either timeout layer.
     TimedOut,
-    /// Raised a Lua error.
     Lua(mlua::Error),
 }
 
-/// Run `handler` on `vm` with a fresh per-call environment under the two-layer
-/// timeout (spec §5): the deadline interrupt aborts CPU-bound code, while
-/// `tokio::time::timeout` drops a handler parked on async I/O.
+/// Run `handler` in a fresh environment under the two-layer timeout (spec §5):
+/// the deadline interrupt stops CPU-bound code, `tokio::time::timeout` drops
+/// code parked on async I/O.
 async fn call_handler(
     vm: &Vm,
     handler: &Function,
@@ -556,9 +516,8 @@ async fn call_handler(
     }
 }
 
-/// The scheduler loop for one cron job: compute the next future fire, sleep to
-/// it, then run (single-flight by default — a tick is skipped, not queued, while
-/// the previous run is still in flight). Fire-forward: missed ticks are never
+/// Sleep to each next fire and run the job. Single-flight by default (a tick
+/// is skipped while the previous run is in flight); missed ticks are never
 /// replayed (spec §3).
 async fn cron_loop(
     server: Arc<Server>,
@@ -600,7 +559,6 @@ async fn cron_loop(
     }
 }
 
-/// Resolve once an OS shutdown signal (SIGTERM or SIGINT) arrives.
 async fn wait_for_signal() {
     use tokio::signal::unix::{SignalKind, signal};
     let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
@@ -611,7 +569,6 @@ async fn wait_for_signal() {
     }
 }
 
-/// The 5xx returned when a handler exceeds its per-event budget (spec §3/§8).
 fn timeout_response() -> Response {
     Response {
         status: 503,
@@ -619,7 +576,6 @@ fn timeout_response() -> Response {
     }
 }
 
-/// The 413 returned when a request body exceeds `max_body` (spec §3).
 fn oversize_response() -> Response {
     Response {
         status: 413,
@@ -627,9 +583,8 @@ fn oversize_response() -> Response {
     }
 }
 
-/// A throwaway per-call environment: writes land here (and are discarded after
-/// the call) while reads fall through `__index` to the readonly globals. This
-/// closes the global-bleed vector between requests sharing a VM (spec §3).
+/// Per-call environment: writes land here and are discarded; reads fall
+/// through to the readonly globals. Prevents cross-request global bleed (spec §3).
 fn fresh_env(lua: &mlua::Lua) -> mlua::Result<mlua::Table> {
     let env = lua.create_table()?;
     let meta = lua.create_table()?;
@@ -639,9 +594,7 @@ fn fresh_env(lua: &mlua::Lua) -> mlua::Result<mlua::Table> {
 }
 
 impl Router {
-    /// Compile `(method, path)` registrations into routes, assigning each its
-    /// registration-order id and rejecting a duplicate `(method, pattern)` —
-    /// two routes that would match the same requests.
+    /// Rejects two routes with the same method and pattern shape.
     fn build(registrations: &[(String, String)]) -> Result<Self, RunError> {
         let mut routes: Vec<Route> = Vec::new();
         for (id, (method, path)) in registrations.iter().enumerate() {
@@ -663,9 +616,7 @@ impl Router {
         Ok(Self { routes })
     }
 
-    /// Resolve `(method, path)` to a handler id and its decoded path parameters.
-    /// Among matches, the most specific (most static segments, then a concrete
-    /// method over `ANY`) wins, independent of registration order.
+    /// The most specific match wins regardless of registration order.
     fn resolve(&self, method: &str, path: &str) -> Option<(usize, Params)> {
         let method = method.to_uppercase();
         let req_segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -688,7 +639,7 @@ impl Router {
     }
 }
 
-/// Parse a route path into segments, dropping empty ones (so `/a/` ≡ `/a`).
+/// Empty segments are dropped, so `/a/` ≡ `/a`.
 fn parse_pattern(path: &str) -> Vec<Seg> {
     path.split('/')
         .filter(|s| !s.is_empty())
@@ -709,7 +660,6 @@ fn same_signature(a: &[Seg], b: &[Seg]) -> bool {
         })
 }
 
-/// Match `pattern` against request segments, returning decoded params or `None`.
 fn match_pattern(pattern: &[Seg], req_segs: &[&str]) -> Option<Params> {
     if pattern.len() != req_segs.len() {
         return None;
@@ -725,8 +675,8 @@ fn match_pattern(pattern: &[Seg], req_segs: &[&str]) -> Option<Params> {
     Some(params)
 }
 
-/// Whether route `a` is strictly more specific than `b` (a static segment beats
-/// a param at the same position; a concrete method beats `ANY` as a tiebreak).
+/// At the first differing position a static segment beats a param; a concrete
+/// method beats `ANY` as the tiebreak.
 fn more_specific(a: &Route, b: &Route) -> bool {
     for (x, y) in a.pattern.iter().zip(&b.pattern) {
         match (x, y) {
@@ -738,8 +688,6 @@ fn more_specific(a: &Route, b: &Route) -> bool {
     a.method != "ANY" && b.method == "ANY"
 }
 
-/// Build the Lua `req` table handed to a handler: `method`, `path`, `params`,
-/// `query` / `query_all`, `headers`, `cookies`, `body`, and a `json()` shorthand.
 fn build_req(
     lua: &mlua::Lua,
     req: &RawRequest,
@@ -749,7 +697,6 @@ fn build_req(
     table.set("method", req.method.to_uppercase())?;
     table.set("path", req.path.as_str())?;
 
-    // Path parameters (percent-decoded to raw bytes, always strings).
     let params_table = lua.create_table()?;
     for (name, value) in params {
         params_table.set(name.as_str(), lua.create_string(value)?)?;
@@ -774,16 +721,15 @@ fn build_req(
     table.set("query", query)?;
     table.set("query_all", query_all)?;
 
-    // Headers: names lower-cased, last value wins (case-insensitive lookup).
+    // Lower-cased names; last value wins.
     let headers = lua.create_table()?;
     for (name, value) in &req.headers {
         headers.set(name.to_lowercase(), value.as_str())?;
     }
     table.set("headers", headers)?;
 
-    // Every `Cookie` header folds into one table, later value winning. Always a
-    // table — an absent or empty header yields an empty `req.cookies`, never `nil`.
-    // Cookie names are case-sensitive, so unlike header names they are not lowered.
+    // All `Cookie` headers fold into one table (later wins; never `nil`).
+    // Cookie names are case-sensitive, so not lowered.
     let cookies = lua.create_table()?;
     for (name, value) in &req.headers {
         if name.eq_ignore_ascii_case("cookie") {
@@ -794,9 +740,8 @@ fn build_req(
     }
     table.set("cookies", cookies)?;
 
-    // The body is a one-shot stream: `req.body` and `req.json()` materialize it
-    // whole, but go unavailable once a chunked `req.read(n)` has consumed part of
-    // it (spec §3). The mutex is what makes the closures `Send`.
+    // `req.body` / `req.json()` become unavailable once `req.read(n)` has run
+    // (spec §3). The mutex makes the closures `Send`.
     let state = Arc::new(Mutex::new(BodyStream {
         body: req.body.clone(),
         cursor: 0,
@@ -807,14 +752,13 @@ fn build_req(
     let read = lua.create_function(move |lua, n: Option<usize>| {
         let mut st = read_state.lock().expect("body stream mutex poisoned");
         match n {
-            // No arg: drain the remaining body (sugar, not a chunked consume).
+            // No arg: drain the rest; does not count as streaming.
             None => {
                 let chunk = lua.create_string(&st.body[st.cursor..])?;
                 st.cursor = st.body.len();
                 Ok(Value::String(chunk))
             }
-            // Chunked read: advance the cursor; nil once exhausted. Marks the
-            // body as streamed, disabling `req.body` / `req.json()`.
+            // nil once exhausted.
             Some(n) => {
                 st.streamed = true;
                 if st.cursor >= st.body.len() && n > 0 {
@@ -847,8 +791,7 @@ fn build_req(
     })?;
     table.set("json", json)?;
 
-    // `req.body` is a computed property: present only while the body has not been
-    // chunk-consumed. Served via `__index` so the streamed guard can fire.
+    // Served via `__index` so the streamed guard can fire.
     let index_state = Arc::clone(&state);
     let index = lua.create_function(move |lua, (_t, key): (mlua::Table, Value)| {
         if matches!(&key, Value::String(s) if s.as_bytes() == b"body") {
@@ -869,16 +812,14 @@ fn build_req(
     Ok(table)
 }
 
-/// The one-shot request body behind `req.read` / `req.body` / `req.json`: a
-/// cursor into the bytes plus a flag set once a chunked `read(n)` runs.
+/// `streamed` is set once `read(n)` runs.
 struct BodyStream {
     body: Vec<u8>,
     cursor: usize,
     streamed: bool,
 }
 
-/// Parse a raw query string into ordered `(key, value)` byte pairs. Keys and
-/// values are percent-decoded and `+` is treated as a space (form convention).
+/// Ordered, percent-decoded `(key, value)` pairs; `+` decodes to a space.
 fn parse_query(query: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
     query
         .split('&')
@@ -893,8 +834,7 @@ fn parse_query(query: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
         .collect()
 }
 
-/// Percent-decode `input` to raw bytes. With `plus_as_space`, `+` decodes to a
-/// space (query-string convention); an invalid `%` escape is left verbatim.
+/// An invalid `%` escape is left verbatim.
 fn percent_decode(input: &[u8], plus_as_space: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(input.len());
     let mut i = 0;
@@ -922,7 +862,6 @@ fn percent_decode(input: &[u8], plus_as_space: bool) -> Vec<u8> {
     out
 }
 
-/// Hex digit to its nibble value, or `None` if not a hex digit.
 fn hex(c: u8) -> Option<u8> {
     match c {
         b'0'..=b'9' => Some(c - b'0'),
@@ -932,13 +871,12 @@ fn hex(c: u8) -> Option<u8> {
     }
 }
 
-/// Turn a handler's return values into a [`Response`]: the first value must be a
-/// table; `status` defaults to 200 (and must be a valid HTTP status in
-/// `100..=599`) and `body` to empty.
+/// The first value must be a table; `status` defaults to 200 (must be in
+/// `100..=599`), `body` to empty.
 fn response_from(values: MultiValue) -> Result<Response, RunError> {
     let Some(Value::Table(table)) = values.into_iter().next() else {
         return Err(RunError::Script(mlua::Error::RuntimeError(
-            "handler must return a table { status, body, headers }".into(),
+            "handler must return a table { status, body }".into(),
         )));
     };
 

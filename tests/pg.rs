@@ -6,13 +6,9 @@ fn pg_test_url() -> String {
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/postgres".to_string())
 }
 
-/// A `RuntimeConfig` pointed at Postgres, or `None` when the server is
-/// unreachable. Locally an unreachable server SKIPS the test (returns None);
-/// under CI it is a hard failure (panics), because CI provisions the service.
-/// Building the config once and `.clone()`-ing it (rather than calling this
-/// per runtime) is required whenever two runtimes must share `lur.state`: the
-/// `Arc<StateStore>` behind it lives on the config, and `RuntimeConfig::default`
-/// mints a fresh store on every call.
+/// Postgres config, or `None` (skip) when unreachable locally; panics under CI,
+/// which provisions the service. Clone one config to share `lur.state` across
+/// runtimes — each call mints a fresh `Arc<StateStore>`.
 fn pg_config() -> Option<RuntimeConfig> {
     let url = pg_test_url();
     let reachable = reachable(&url);
@@ -36,11 +32,10 @@ fn pg_runtime() -> Option<Runtime> {
     Some(Runtime::with_config(config).expect("runtime builds"))
 }
 
-/// Parse host:port out of a postgres URL and try a TCP connect with a short timeout.
+/// TCP-connect to the URL's host:port with a short timeout.
 fn reachable(url: &str) -> bool {
     use std::net::ToSocketAddrs;
     use std::time::Duration;
-    // postgres://user:pass@host:port/db  ->  host:port
     let after_scheme = url.split("://").nth(1).unwrap_or("");
     let authority = after_scheme.split('/').next().unwrap_or("");
     let hostport = authority.rsplit('@').next().unwrap_or("");
@@ -55,16 +50,12 @@ fn reachable(url: &str) -> bool {
         .any(|addr| std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok())
 }
 
-/// The locale-independent tail `postgres.rs::map_pg_error` appends for a
-/// SQLSTATE 40001 serialization failure. Identical at every call site
-/// (in-transaction statement or COMMIT), so a retry loop — and these tests —
-/// can match on it regardless of which site the abort lands at.
+/// Locale-independent tail appended for SQLSTATE 40001, identical whether the
+/// abort lands on a statement or COMMIT.
 const SERIALIZATION_FAILURE_TAIL: &str = "serialization failure (SQLSTATE 40001): concurrent transaction conflict, retry the transaction";
 
-/// A fresh, uniquely-named table per test so parallel tests don't collide on the
-/// shared database. Caller drops it via `DROP TABLE IF EXISTS`.
+/// Unique table name so parallel tests don't collide; caller drops it.
 fn unique(prefix: &str) -> String {
-    // A process-local counter, so neither the clock nor an RNG is involved.
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
     format!("{prefix}_{}", N.fetch_add(1, Ordering::Relaxed))
@@ -101,7 +92,6 @@ fn pg_noncore_column_errors_until_cast_to_text() {
         lur.db.exec([[INSERT INTO {t} VALUES ('{{\"a\":1}}')]])"
     ))
     .expect("setup jsonb table");
-    // Reading jsonb directly errors with the cast-to-text guidance.
     let err = rt
         .run(&format!("lur.db.query('SELECT j FROM {t}')"))
         .unwrap_err()
@@ -110,7 +100,6 @@ fn pg_noncore_column_errors_until_cast_to_text() {
         err.contains("unsupported column type") && err.contains("::text"),
         "got: {err}"
     );
-    // Casting to text succeeds.
     rt.run(&format!(
         "local rows = lur.db.query('SELECT j::text AS j FROM {t}')\n\
          assert(rows[1].j:find('\"a\"'), 'jsonb text form')\n\
@@ -233,13 +222,11 @@ fn pg_serializable_tx_conflict_is_fallible_and_catchable() {
     ))
     .expect("seed");
 
-    // Each thread: crosswise read-then-write serializable tx, pcall-guarded.
     let spawn = |read_id: i64, write_id: i64, table: String| {
         std::thread::spawn(move || {
             let rt = pg_runtime().expect("worker runtime");
             for _ in 0..40 {
-                // `return pcall(...)`: a 40001 abort is caught inside the script,
-                // so rt.run itself must always succeed — proving catchability.
+                // A 40001 abort is caught by pcall, so rt.run must always succeed.
                 rt.run(&format!(
                     "return pcall(function()\n\
                        lur.db.tx(function(tx)\n\
@@ -257,7 +244,7 @@ fn pg_serializable_tx_conflict_is_fallible_and_catchable() {
     h1.join().unwrap();
     h2.join().unwrap();
 
-    // Runtime + data intact after the conflict storm (atomicity held through aborts).
+    // Data intact after the conflict storm.
     seed.run(&format!(
         "assert(#lur.db.query('SELECT id FROM {t}') == 2, 'table intact')\n\
          lur.db.exec('DROP TABLE {t}')"
@@ -265,19 +252,10 @@ fn pg_serializable_tx_conflict_is_fallible_and_catchable() {
     .expect("healthy after concurrent serializable conflicts");
 }
 
-/// Deterministically forces an SSI write-skew conflict (classic crosswise
-/// read-then-write) and asserts the abort actually fires, is voiced with the
-/// stable 40001 tail, and leaves the table intact. Complementary to
-/// `pg_serializable_tx_conflict_is_fallible_and_catchable` above, which proves
-/// no-fatal-under-stress + data integrity across many rounds but never proves
-/// a conflict actually happened. Here a `lur.state` barrier (process-local,
-/// synchronous, outside the SERIALIZABLE read/write set) rendezvouses both
-/// transactions between their SELECT and UPDATE so SSI is guaranteed to see
-/// the rw-antidependency cycle both ways.
-///
-/// The abort site splits roughly 50/50 between COMMIT and the in-transaction
-/// UPDATE (measured over repeated runs), so the assertion below matches the
-/// stable 40001 tail rather than the context prefix or Postgres's own prose.
+/// Deterministic write-skew: unlike the stress test above, proves an abort
+/// actually fires. A `lur.state` barrier (outside the SERIALIZABLE read/write
+/// set) holds both txs between SELECT and UPDATE so SSI must see the cycle.
+/// The abort lands on COMMIT or UPDATE ~50/50, so match only the 40001 tail.
 #[test]
 fn pg_ssi_write_skew_aborts_one_side_with_stable_40001_message() {
     let Some(config) = pg_config() else { return };
@@ -295,9 +273,7 @@ fn pg_ssi_write_skew_aborts_one_side_with_stable_40001_message() {
     ))
     .expect("seed");
 
-    // Each thread reads the OTHER row and writes its OWN row, rendezvousing
-    // between the two so both reads are guaranteed to precede either write —
-    // exactly the write-skew shape SSI must detect and abort one side of.
+    // Read the other row, rendezvous, write own row: both reads precede either write.
     let spawn = |read_id: i64, write_id: i64, table: String, barrier: String, out_key: String| {
         let cfg = config.clone();
         std::thread::spawn(move || {
@@ -344,10 +320,8 @@ fn pg_ssi_write_skew_aborts_one_side_with_stable_40001_message() {
     .expect("exactly one write-skew side aborts with the stable 40001 message");
 }
 
-/// Guards against an over-broad refactor mapping every Postgres error to the
-/// serialization-failure message: a primary-key violation inside `db.tx`
-/// (SQLSTATE 23505, not 40001) must NOT be voiced as a serialization failure
-/// and must still carry the driver's own text.
+/// A non-40001 error (PK violation, 23505) keeps the driver's text and is not
+/// voiced as a serialization failure.
 #[test]
 fn pg_tx_non_serialization_error_keeps_driver_text() {
     let Some(rt) = pg_runtime() else { return };
@@ -371,9 +345,7 @@ fn pg_tx_non_serialization_error_keeps_driver_text() {
         !err.contains(SERIALIZATION_FAILURE_TAIL),
         "a non-40001 error must not be voiced as a serialization failure: {err}"
     );
-    // Assert the shape, not the driver's wording: the wording is itself
-    // localized by `lc_messages` — depending on it here would reintroduce
-    // exactly the fragility this voicing removes.
+    // Assert shape only: driver wording varies with `lc_messages`.
     let (_, driver_text) = err
         .split_once("lur.db.tx exec: ")
         .unwrap_or_else(|| panic!("must keep the site's context prefix: {err}"));

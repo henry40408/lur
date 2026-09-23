@@ -1,12 +1,9 @@
-//! Shared argument extraction that preserves mlua's coercions but raises a
-//! lur-voiced message on a type mismatch:
+//! Argument extraction with mlua's coercions but lur-voiced errors:
 //! `lur.<cap>.<fn>: argument #<n> must be <expected>, got <actual>`.
 
 use mlua::{Error, FromLua, Lua, Value};
 
-/// Extract an optional integer argument. Accepts Lua integers and
-/// whole-number floats; rejects fractional or out-of-range floats with a
-/// lur-voiced message. Absent (nil) → None.
+/// Optional integer argument; whole-number floats in i64 range are accepted.
 pub(crate) fn integer_arg(value: Value, fname: &str, n: usize) -> mlua::Result<Option<i64>> {
     match value {
         Value::Nil => Ok(None),
@@ -17,7 +14,8 @@ pub(crate) fn integer_arg(value: Value, fname: &str, n: usize) -> mlua::Result<O
                     "{fname}: argument #{n} must be integer, got float"
                 )));
             }
-            if f < i64::MIN as f64 || f > i64::MAX as f64 {
+            // `i64::MAX as f64` rounds up to 2^63, which is out of range.
+            if f < i64::MIN as f64 || f >= i64::MAX as f64 {
                 return Err(mlua::Error::RuntimeError(format!(
                     "{fname}: argument #{n} out of integer range"
                 )));
@@ -31,9 +29,8 @@ pub(crate) fn integer_arg(value: Value, fname: &str, n: usize) -> mlua::Result<O
     }
 }
 
-/// Convert `value` (the `n`-th argument to `fname`) to `T`. Coercion is
-/// identical to mlua's default (e.g. a number is still accepted where a string
-/// is wanted); only the failure message is customized.
+/// Convert argument `n` of `fname` to `T` with mlua's coercions (a number still
+/// passes as a string); only the error message changes.
 pub(crate) fn arg<T: FromLua>(
     lua: &Lua,
     value: Value,
@@ -43,7 +40,7 @@ pub(crate) fn arg<T: FromLua>(
 ) -> mlua::Result<T> {
     let got = value.type_name();
     #[allow(clippy::map_err_ignore)]
-    // discarding the original is deliberate: the message is rewritten below
+    // The original error is replaced on purpose.
     T::from_lua(value, lua).map_err(|_e| {
         Error::runtime(format!(
             "{fname}: argument #{n} must be {expected}, got {got}"
@@ -110,5 +107,12 @@ mod tests {
     #[test]
     fn integer_arg_nil_is_none() {
         assert_eq!(integer_arg(Value::Nil, "lur.x.y", 1).unwrap(), None);
+    }
+
+    #[test]
+    fn integer_arg_rejects_two_pow_63() {
+        // 2^63 == `i64::MAX as f64`; it must not saturate to i64::MAX.
+        let err = integer_arg(Value::Number(2f64.powi(63)), "lur.x.y", 1).unwrap_err();
+        assert!(err.to_string().contains("out of integer range"), "{err}");
     }
 }

@@ -1,6 +1,5 @@
-//! Render the embedded `GUIDE.md` to ANSI-styled text for `lur docs`. A
-//! hand-rolled sink over `pulldown-cmark` — color is gated so plain mode is
-//! clean text with the Markdown markup stripped, never half-rendered source.
+//! Render the embedded `GUIDE.md` for `lur docs`: a hand-rolled
+//! `pulldown-cmark` sink whose plain mode strips all markup and escapes.
 
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
@@ -21,11 +20,9 @@ const LUA_KEYWORDS: &[&str] = &[
     "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
 ];
 
-/// Highlight a Lua snippet with 16-color SGR. Returns `code` unchanged when
-/// `color` is false. Never panics; unterminated strings/comments consume to the
-/// end of input as that token. A pragmatic tokenizer — not a full Lua lexer —
-/// but it must not mis-scan: comments/strings are recognized before operators,
-/// and keywords match only on word boundaries.
+/// A pragmatic Lua highlighter, not a full lexer: comments/strings are scanned
+/// before operators, keywords match on word boundaries, and an unterminated
+/// string/comment runs to the end.
 fn highlight_lua(code: &str, color: bool) -> String {
     if !color {
         return code.to_string();
@@ -108,10 +105,8 @@ fn highlight_lua(code: &str, color: bool) -> String {
     out
 }
 
-/// Render `markdown` to terminal text, glamour-aligned. When `color` is false,
-/// styling strings are empty but the structure (heading `#` prefixes, `│ ` code
-/// frame, indentation) is kept, so plain mode is clean, readable text with no
-/// escape codes.
+/// Glamour-style terminal rendering. Without `color`, the structure (heading
+/// `#` prefixes, `│ ` code frame, indentation) stays but no escapes are emitted.
 pub fn render(markdown: &str, color: bool) -> String {
     let st = |s: &'static str| -> &'static str { if color { s } else { "" } };
 

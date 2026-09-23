@@ -1,6 +1,4 @@
-//! `SQLite` storage backend: owns the `sqlx` `SQLite` pool and all
-//! `SQLite`-specific SQL, `?` binding, row→Lua type mapping, WAL/busy
-//! handling, and retry.
+//! `SQLite` storage backend: pool, SQL, `?` binding, row→Lua mapping, busy retry.
 
 use std::future::Future;
 use std::path::Path;
@@ -18,11 +16,10 @@ use crate::capabilities::null;
 /// A dynamically-bound `SQLite` query.
 pub(crate) type Query<'q> = sqlx::query::Query<'q, sqlx::Sqlite, SqliteArguments>;
 
-/// Retry policy for write-lock contention: 4 retries on top of the first try.
+/// Retries on write-lock contention, on top of the first try.
 const MAX_BUSY_RETRIES: u32 = 4;
 
-/// True when `e` is `SQLite` busy/locked (primary result codes 5/6, including
-/// their extended variants, recognized via code or message).
+/// `SQLITE_BUSY`/`SQLITE_LOCKED` (codes 5/6); extended variants match by message.
 fn is_busy(e: &sqlx::Error) -> bool {
     if let Some(db) = e.as_database_error() {
         let code = db.code();
@@ -35,14 +32,11 @@ fn is_busy(e: &sqlx::Error) -> bool {
     false
 }
 
-/// Full-jitter exponential backoff: after the `attempt`-th failure (0-based),
-/// sleep a uniform random duration in `[0, min(cap, base·2^attempt))`.
-/// `base = 5 ms`, `cap = 200 ms`. Randomness is drawn from the OS CSPRNG
-/// (`getrandom`) so no new dependency is added.
+/// Full-jitter backoff: uniform in `[0, min(200 ms, 5 ms·2^attempt))`.
 fn jitter_delay(attempt: u32) -> std::time::Duration {
     const BASE_MS: u64 = 5;
     const CAP_MS: u64 = 200;
-    // `attempt.min(6)` keeps the shift well clear of overflow; base·2^6 = 320 > cap.
+    // Bound the shift; 5·2^6 already exceeds the cap.
     let ceil = (BASE_MS << attempt.min(6)).clamp(1, CAP_MS);
     let mut buf = [0u8; 8];
     getrandom::fill(&mut buf).expect("OS CSPRNG unavailable");
@@ -50,13 +44,8 @@ fn jitter_delay(attempt: u32) -> std::time::Duration {
     std::time::Duration::from_millis(ms)
 }
 
-/// Run `op`, retrying on a busy/locked error with jittered backoff up to
-/// `MAX_BUSY_RETRIES` times. Non-busy errors return immediately. The caller
-/// keeps its own lur-voiced error mapping on the returned `sqlx::Error`.
-///
-/// `op` MUST rebuild its query (and re-clone any bound parameters) on each
-/// call, and MUST NOT be given work whose re-run would duplicate a side effect
-/// outside `SQLite`.
+/// Run `op`, retrying busy errors with jittered backoff. `op` must rebuild its
+/// query on each call and have no side effects outside `SQLite`.
 pub(crate) async fn retry_busy<T, F, Fut>(mut op: F) -> sqlx::Result<T>
 where
     F: FnMut() -> Fut,
@@ -106,25 +95,13 @@ where
         .map_err(|e| Error::runtime(format!("lur.db: decoding column {i}: {e}")))
 }
 
-/// Open the `SQLite` pool in WAL mode and ensure the internal `lur_kv` table.
+/// Open the WAL-mode pool and ensure the internal `lur_kv` table.
 ///
-/// Opening is a write path like any other and gets the same busy handling.
-/// Establishing the first connection can need an exclusive lock (the WAL-mode
-/// switch, and re-creating the -wal/-shm sidecars a previous last-connection
-/// close removed), and the `lur_kv` DDL needs the write lock whenever the table
-/// is genuinely absent — neither is covered by `busy_timeout` alone, so both
-/// go through `retry_busy`.
-///
-/// `busy_timeout` is 5 s (sqlx's default). It was briefly lowered to 200 ms on
-/// the premise that app-level jitter, not `SQLite`'s polling, should break the
-/// writer herd; measurement showed the opposite. `retry_busy` contributes at
-/// most ~71 ms of cumulative sleep (4 retries over a 5/10/20/40 ms full-jitter
-/// ramp), so a 200 ms timeout capped the whole wait budget at roughly 1 s —
-/// far too little for a loaded host, where it surfaced `database is locked`
-/// to Lua. The two layers are complementary rather than alternatives:
-/// `SQLite`'s handler waits out ordinary write-lock contention, `retry_busy`
-/// the locks it cannot wait on at all (the WAL-mode pragma on a fresh
-/// connection, and lock upgrades that fail fast to avoid deadlock).
+/// Both layers are needed: `busy_timeout` (5 s) waits out ordinary write-lock
+/// contention; `retry_busy` covers locks `SQLite` fails fast on (the WAL-mode
+/// switch on a fresh connection, lock upgrades). Don't lower `busy_timeout`:
+/// `retry_busy` sleeps < 75 ms in total, so 200 ms surfaced `database is
+/// locked` under load.
 pub(crate) async fn open_pool(path: &Path) -> sqlx::Result<SqlitePool> {
     let opts = SqliteConnectOptions::new()
         .filename(path)
@@ -160,7 +137,7 @@ fn bind_one<'q>(q: Query<'q>, v: &Value) -> mlua::Result<Query<'q>> {
         Value::Boolean(b) => q.bind(*b as i64),
         Value::Integer(i) => q.bind(*i),
         Value::Number(n) => {
-            if n.fract() == 0.0 && *n >= i64::MIN as f64 && *n <= i64::MAX as f64 {
+            if n.fract() == 0.0 && *n >= i64::MIN as f64 && *n < i64::MAX as f64 {
                 q.bind(*n as i64)
             } else {
                 q.bind(*n)
@@ -182,9 +159,7 @@ fn bind_one<'q>(q: Query<'q>, v: &Value) -> mlua::Result<Query<'q>> {
     })
 }
 
-/// Decode column 0 of a single-column row into bytes, returning `None` for
-/// NULL. INTEGER and REAL values are rendered as their decimal string; TEXT/BLOB
-/// come back as raw bytes. Never panics on a type mismatch.
+/// Column 0 as bytes (`None` for NULL); INTEGER/REAL render as decimal text.
 pub(crate) fn value_to_bytes(row: &sqlx::sqlite::SqliteRow) -> mlua::Result<Option<Vec<u8>>> {
     let raw = row
         .try_get_raw(0)
@@ -209,14 +184,13 @@ where
         .map_err(|e| Error::runtime(format!("lur.kv: decoding value: {e}")))
 }
 
-/// `SQLite` backend: owns the pool. Cloning is a cheap `sqlx` pool handle clone.
+/// `SQLite` backend; cloning clones the pool handle.
 #[derive(Clone)]
 pub(crate) struct SqliteBackend {
     pool: SqlitePool,
 }
 
 impl SqliteBackend {
-    /// Open the WAL-mode pool and ensure the internal `lur_kv` table.
     pub(crate) async fn open(path: &Path) -> mlua::Result<Self> {
         let pool = open_pool(path)
             .await
@@ -263,8 +237,7 @@ impl SqliteBackend {
         Ok(out)
     }
 
-    /// Open a `BEGIN IMMEDIATE` write transaction on a pinned connection,
-    /// retrying the lock acquisition on busy.
+    /// `BEGIN IMMEDIATE` on a pinned connection, retrying on busy.
     pub(crate) async fn begin(&self) -> mlua::Result<SqliteTransaction> {
         let conn = retry_busy(|| async {
             let mut conn = self.pool.acquire().await?;
@@ -390,10 +363,7 @@ impl SqliteBackend {
         Ok(applied)
     }
 
-    /// Atomically add `delta` to an integer counter `key`, creating it at
-    /// `delta` when absent. Returns the new value, or errors if the key holds
-    /// a non-integer (the `WHERE typeof(value)='integer'` guard returns no
-    /// row).
+    /// Atomic upsert-add; a non-integer existing value yields no row → error.
     pub(crate) async fn kv_incr(
         &self,
         voice: &'static str,
@@ -424,14 +394,9 @@ impl SqliteBackend {
         }
     }
 
-    /// Read-modify-write orchestration for `lur.kv.update`: begins a
-    /// `BEGIN IMMEDIATE` write on a pinned connection, reads the current value
-    /// (type-aware, matching `kv_get`), calls `func`, then writes/deletes the
-    /// result before committing — rolling back and re-raising on any error.
-    /// The write binds the returned string as raw bytes (`Vec<u8>` → BLOB) so
-    /// a value written by `update` compares equal under `lur.kv.cas`, which
-    /// also binds BLOB; going through the generic `?`-bind path would store
-    /// it as TEXT instead, which `SQLite` never treats as equal to a BLOB.
+    /// `lur.kv.update` read-modify-write inside `BEGIN IMMEDIATE`. The result is
+    /// bound as BLOB (not via `bind_one`, which would store TEXT) so it stays
+    /// comparable under `lur.kv.cas`; `SQLite` never equates TEXT and BLOB.
     pub(crate) async fn kv_update(
         &self,
         lua: &Lua,
@@ -444,7 +409,7 @@ impl SqliteBackend {
             Ok(conn)
         })
         .await
-        .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
+        .map_err(|e| Error::runtime(format!("lur.kv.update: begin: {e}")))?;
         let mut tx = PinnedTx::new(conn);
 
         // Cancellation anywhere in here drops `tx`, which rolls back.
@@ -509,12 +474,9 @@ impl SqliteBackend {
     }
 }
 
-/// Best-effort rollback of a pinned connection whose transaction is still open
-/// because the enclosing future was cancelled before COMMIT/ROLLBACK. The
-/// rollback is detached onto the runtime so the connection returns to the pool
-/// clean instead of inside an open `BEGIN IMMEDIATE`. With no runtime (not
-/// reached in practice — the storage APIs always run inside one) the connection
-/// is closed instead, which also releases the write lock.
+/// Detached best-effort ROLLBACK for a transaction left open by cancellation,
+/// so the connection doesn't return to the pool mid-`BEGIN`. Without a runtime,
+/// closes the connection instead (also releasing the lock).
 fn spawn_rollback(conn: PoolConnection<Sqlite>) {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => {
@@ -529,10 +491,8 @@ fn spawn_rollback(conn: PoolConnection<Sqlite>) {
     }
 }
 
-/// Owns a pinned connection with a manually-opened transaction. Dropping it
-/// while the transaction is still open (e.g. a `kv.update` future cancelled
-/// mid-transform) best-effort rolls back via `spawn_rollback`. `disarm` takes
-/// the connection back after an explicit COMMIT/ROLLBACK so `Drop` is a no-op.
+/// Pinned connection with an open transaction; rolls back on drop unless
+/// `disarm`ed after an explicit COMMIT/ROLLBACK.
 struct PinnedTx {
     conn: Option<PoolConnection<Sqlite>>,
 }
@@ -542,12 +502,10 @@ impl PinnedTx {
         Self { conn: Some(conn) }
     }
 
-    /// Exclusive access to the pinned connection (present until `disarm`).
     fn conn(&mut self) -> &mut PoolConnection<Sqlite> {
         self.conn.as_mut().expect("connection present until disarm")
     }
 
-    /// Disarm the rollback-on-drop guard after an explicit COMMIT/ROLLBACK.
     fn disarm(mut self) {
         self.conn = None;
     }
@@ -561,8 +519,7 @@ impl Drop for PinnedTx {
     }
 }
 
-/// A pinned-connection `SQLite` write transaction. `exec`/`query` run on the
-/// pinned connection; `commit`/`rollback` take it. A call after finish errors.
+/// Pinned-connection write transaction; calls after commit/rollback error.
 pub(crate) struct SqliteTransaction {
     conn: tokio::sync::Mutex<Option<PoolConnection<Sqlite>>>,
 }
@@ -629,9 +586,7 @@ impl SqliteTransaction {
 }
 
 impl Drop for SqliteTransaction {
-    /// If the transaction was never committed/rolled back — its future was
-    /// cancelled mid-body — best-effort roll it back so the pinned connection
-    /// does not return to the pool inside an open `BEGIN IMMEDIATE`.
+    /// Roll back a transaction abandoned by cancellation.
     fn drop(&mut self) {
         if let Some(conn) = self.conn.get_mut().take() {
             spawn_rollback(conn);
@@ -639,10 +594,8 @@ impl Drop for SqliteTransaction {
     }
 }
 
-// A single-connection pool so a second acquire is forced onto the SAME
-// connection a cancelled transaction used — the only way to observe a
-// connection returned to the pool mid-transaction. Shared by the sqlite and
-// db.rs cancellation tests.
+// One-connection pool: the next acquire must reuse the cancelled tx's
+// connection, exposing one returned mid-transaction. Shared with db.rs tests.
 #[cfg(test)]
 pub(super) async fn max1_backend(dir: &std::path::Path) -> SqliteBackend {
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
@@ -668,9 +621,7 @@ mod tests {
     use super::*;
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
-    // A second BEGIN IMMEDIATE while the first still holds the write lock, with
-    // busy_timeout=0, yields a genuine SQLITE_BUSY — the exact error retry_busy
-    // must recognize. A syntax error must NOT be classified busy.
+    // busy_timeout=0 plus a held write lock yields a genuine SQLITE_BUSY.
     #[test]
     fn is_busy_classifies_sqlite_lock_errors() {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -706,11 +657,7 @@ mod tests {
                 .unwrap_err();
             assert!(is_busy(&busy), "SQLITE_BUSY not classified busy: {busy:?}");
 
-            // A non-busy DB error (syntax) must classify as not-busy. Run it on
-            // the connection we already hold: the pool (max 2) is fully checked
-            // out by `a` and `b`, so `execute(&pool)` would block on acquire for
-            // the 30 s timeout instead of reaching SQLite. `b`'s failed BEGIN
-            // left no open transaction, so it is a usable connection.
+            // Reuse `b`: the pool is exhausted, so `&pool` would block on acquire.
             let syntax = sqlx::query("NOT VALID SQL")
                 .execute(&mut *b)
                 .await
@@ -719,11 +666,7 @@ mod tests {
         });
     }
 
-    // open_pool runs the lur_kv DDL under the write lock, so it is a write path
-    // like any other and must wait a holder out rather than error busy. The hold
-    // sits inside the 5 s busy_timeout, so SQLite's own handler absorbs it;
-    // retry_busy covers only the locks that handler cannot wait on, which this
-    // test cannot force deterministically.
+    // The lur_kv DDL needs the write lock; open must wait out a holder.
     #[test]
     fn open_pool_waits_out_a_held_write_lock() {
         const HOLD_MS: u64 = 500;
@@ -735,8 +678,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("held.db");
 
-            // A raw pool: it creates the file and switches on WAL, but leaves
-            // lur_kv absent so the open below must take the write lock for DDL.
+            // Raw pool without lur_kv, so open_pool must run the DDL.
             let opts = SqliteConnectOptions::new()
                 .filename(&path)
                 .create_if_missing(true)
@@ -769,9 +711,7 @@ mod tests {
         });
     }
 
-    // Dropping an unfinished SqliteTransaction (as cancellation does) must roll
-    // it back: the write is undone and — critically — the sole pooled connection
-    // is usable for a fresh transaction rather than stuck in an open BEGIN.
+    // Dropping an unfinished tx rolls back and frees the sole connection.
     #[test]
     fn sqlite_dropped_tx_rolls_back() {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -793,10 +733,7 @@ mod tests {
             .unwrap();
             drop(tx); // simulate a future cancelled mid-transaction
 
-            // With max_connections=1 this begin can only acquire the sole connection
-            // after the detached rollback released it — synchronization without a
-            // sleep. Unfixed, the connection returns to the pool inside an open BEGIN
-            // and this errors.
+            // Only succeeds once the detached rollback releases the connection.
             let tx2 = backend
                 .begin()
                 .await
@@ -818,8 +755,7 @@ mod tests {
         });
     }
 
-    // A kv.update whose transform is cancelled mid-flight must roll back its
-    // pinned connection, leaving it reusable (a fresh begin succeeds).
+    // Cancelling kv.update mid-transform rolls back and frees the connection.
     #[test]
     fn sqlite_cancelled_kv_update_rolls_back() {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -831,8 +767,7 @@ mod tests {
             let backend = max1_backend(dir.path()).await;
             let lua = Lua::new();
 
-            // Transform signals when entered, then parks forever, so we cancel
-            // the update exactly mid-transform.
+            // Transform signals entry, then parks forever.
             let entered = std::sync::Arc::new(tokio::sync::Notify::new());
             let entered2 = entered.clone();
             let parking = lua
@@ -852,8 +787,7 @@ mod tests {
             }
             drop(fut); // cancel mid-transform → PinnedTx::drop rolls back
 
-            // kv_get needs the sole connection, so it blocks until the detached
-            // rollback frees it; unfixed, that connection is stuck in BEGIN IMMEDIATE.
+            // Blocks until the detached rollback frees the sole connection.
             let got = backend.kv_get(&lua, "k".to_string()).await.unwrap();
             assert_eq!(got, Value::Nil, "cancelled update must not commit");
             let tx = backend

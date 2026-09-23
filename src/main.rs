@@ -28,22 +28,15 @@ enum LogFormat {
     Json,
 }
 
-/// What is logged when `RUST_LOG` says nothing: lur's own events at INFO,
-/// everything else at ERROR.
+/// Used when `RUST_LOG` is unset or unparsable.
 const DEFAULT_FILTER: &str = "error,lur=info";
 
-/// Install the global `tracing` subscriber for server mode. One-shot mode does
-/// not call this and keeps plain `eprintln!` for user-facing errors.
+/// Server mode only; one-shot reports errors with plain `eprintln!`.
 fn init_tracing(format: LogFormat) {
-    // `Targets` and not `EnvFilter`: both read the same `lur=debug` out of
-    // `RUST_LOG`, but `EnvFilter` matches its directives with a regex engine, and
-    // all it buys — filtering on spans and fields — nothing here writes.
-    //
-    // An unparsable *level* (`lur=nonsense`) falls back to the default rather than
-    // refusing to start: a typo should cost a log level, not a startup. A mistyped
-    // *target* cannot be caught at all — a bare word is a target name at TRACE, so
-    // `RUST_LOG=nonsense` parses cleanly into a filter nothing matches and the log
-    // goes silent. `EnvFilter` behaved identically on both counts.
+    // `Targets` over `EnvFilter`: same `RUST_LOG` syntax without the regex
+    // engine, whose span/field filtering nothing here needs. An unparsable
+    // directive falls back to the default instead of failing startup; note a
+    // bare word (`RUST_LOG=nonsense`) parses as a target and silences the log.
     let filter: Targets = std::env::var("RUST_LOG")
         .ok()
         .and_then(|directives| directives.parse().ok())
@@ -56,8 +49,7 @@ fn init_tracing(format: LogFormat) {
                 FmtSpan::NONE
             }
         });
-    // Per no-color.org `NO_COLOR` disables colour when set *and non-empty*, so an
-    // empty value is not a setting.
+    // no-color.org: only a non-empty `NO_COLOR` disables colour.
     let use_ansi = std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
     let layer = tracing_subscriber::fmt::layer()
         .with_span_events(span_events)
@@ -83,7 +75,7 @@ struct CommonFlags {
     #[arg(long, value_name = "SIZE", default_value_t = DEFAULT_MAX_HTTP_BODY_BYTES, value_parser = parse_size)]
     max_http_body: usize,
 
-    /// Grant full filesystem access for this run.
+    /// Alias for `--loose`: full fs, env, and network access, private IPs included.
     #[arg(short = 'A', long = "allow-all")]
     allow_all: bool,
 
@@ -91,7 +83,7 @@ struct CommonFlags {
     #[arg(long, conflicts_with = "loose")]
     strict: bool,
 
-    /// Select the loose profile — permissive (full access, like `-A`).
+    /// Select the loose profile — full access (same as `-A`).
     #[arg(long)]
     loose: bool,
 
@@ -119,8 +111,8 @@ struct CommonFlags {
     #[arg(long = "allow-private")]
     allow_private: bool,
 
-    /// `SQLite` database path for lur.db / lur.kv.
-    #[arg(long = "db", value_name = "PATH")]
+    /// `SQLite` path or `postgres://` URL for lur.db / lur.kv.
+    #[arg(long = "db", value_name = "PATH|URL")]
     db: Option<PathBuf>,
 
     /// Cap on concurrently in-flight lur.async.* tasks per VM (unbounded if omitted).
@@ -132,7 +124,7 @@ struct CommonFlags {
     #[arg(long = "config", value_name = "FILE")]
     config: Option<PathBuf>,
 
-    /// Ignore the user config entirely → pure shipped strict, zero grants.
+    /// Ignore the user config file (no standing grants).
     #[arg(long = "no-config", conflicts_with = "config")]
     no_config: bool,
 }
@@ -167,9 +159,8 @@ struct ServeCli {
     /// Path to the server application script.
     app: PathBuf,
 
-    /// Address to bind the HTTP listener to. Defaults to loopback so a
-    /// bare-metal run is not exposed on all interfaces without opting in; the
-    /// container image sets `BIND=0.0.0.0:8080` so a reverse proxy can reach it.
+    /// Address to bind (loopback by default; the container image sets
+    /// `BIND=0.0.0.0:8080`).
     #[arg(
         long,
         value_name = "ADDR",
@@ -178,18 +169,15 @@ struct ServeCli {
     )]
     bind: SocketAddr,
 
-    /// Number of pre-warmed VMs in the pool — the cap on concurrent requests.
-    /// Defaults to the CPU count.
+    /// Number of pre-warmed VMs, capping concurrent requests (default: CPU count).
     #[arg(long, value_name = "N", default_value_t = default_pool_size())]
     pool_size: usize,
 
-    /// Per-request wall-clock limit (e.g. `5s`, `500ms`); on timeout the request
-    /// gets a 503 (no limit if omitted).
+    /// Per-request time limit (e.g. `5s`); a timed-out request gets a 503.
     #[arg(long, value_name = "DUR", value_parser = parse_duration)]
     timeout: Option<Duration>,
 
-    /// Max request-body size (e.g. `2m`); a larger request gets a 413 (no limit
-    /// if omitted).
+    /// Max request-body size (e.g. `2m`); a larger request gets a 413.
     #[arg(long = "max-body", value_name = "SIZE", value_parser = parse_size)]
     max_body: Option<usize>,
 
@@ -197,7 +185,7 @@ struct ServeCli {
     #[arg(long = "shutdown-grace", value_name = "DUR", default_value = "10s", value_parser = parse_duration)]
     shutdown_grace: Duration,
 
-    /// Log output format
+    /// Log output format.
     #[arg(long, env = "LOG_FORMAT", default_value = "full")]
     log_format: LogFormat,
 
@@ -205,14 +193,11 @@ struct ServeCli {
     common: CommonFlags,
 }
 
-/// Default VM-pool size: the number of CPUs available to the process.
 fn default_pool_size() -> usize {
     std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
 }
 
-/// Load the user config layer: `--no-config` drops it, `--config` forces a
-/// specific file (which must exist), otherwise the default location is loaded
-/// if present (absent → empty, no error).
+/// `--config` must exist; the default location is optional.
 fn load_config(flags: &CommonFlags) -> Result<Config, String> {
     if flags.no_config {
         return Ok(Config::empty());
@@ -226,8 +211,7 @@ fn load_config(flags: &CommonFlags) -> Result<Config, String> {
     }
 }
 
-/// The default config path: `$XDG_CONFIG_HOME/lur/config`, falling back to
-/// `~/.config/lur/config`.
+/// `$XDG_CONFIG_HOME/lur/config`, else `~/.config/lur/config`.
 fn default_config_path() -> Option<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|x| !x.is_empty()) {
         return Some(PathBuf::from(xdg).join("lur").join("config"));
@@ -235,10 +219,8 @@ fn default_config_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config").join("lur").join("config"))
 }
 
-/// Resolve the capability policy from the config layer and the per-run flags.
-/// The profile is last-wins (flags beat config); allowlists are additive
-/// (config standing grants ∪ flag per-run grants). `-A`/`--loose` force the
-/// permissive profile (§5/§12).
+/// Flags override the config's profile; allowlists are the union of config
+/// and flags (§5/§12).
 fn build_policy(flags: &CommonFlags, config: &Config) -> Result<Policy, String> {
     let profile = if flags.allow_all || flags.loose {
         Profile::Loose
@@ -252,7 +234,7 @@ fn build_policy(flags: &CommonFlags, config: &Config) -> Result<Policy, String> 
         return Policy::loose().map_err(|e| e.to_string());
     }
 
-    // Strict: union config grants (config fs paths may use `~`) with flag grants.
+    // Config fs paths may use `~`.
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let home = home.as_deref();
     let mut read: Vec<PathBuf> = config
@@ -287,8 +269,6 @@ fn build_policy(flags: &CommonFlags, config: &Config) -> Result<Policy, String> 
     Ok(policy)
 }
 
-/// Build a [`RuntimeConfig`] from the shared flags (policy resolved, args set
-/// by the caller).
 fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig, String> {
     let config = load_config(flags)?;
     let policy = Arc::new(build_policy(flags, &config)?);
@@ -309,8 +289,7 @@ fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig,
 }
 
 fn main() -> ExitCode {
-    // `lur serve ...` routes to server mode; everything else is one-shot. Peeked
-    // manually so the one-shot `lur script.lua [args]` grammar stays untouched.
+    // Subcommands are peeked manually so `lur script.lua [args]` stays untouched.
     let argv: Vec<String> = std::env::args().collect();
     if argv.get(1).map(String::as_str) == Some("serve") {
         let serve_argv = std::iter::once(argv[0].clone()).chain(argv.iter().skip(2).cloned());
@@ -324,7 +303,6 @@ fn main() -> ExitCode {
     run_one_shot(Cli::parse())
 }
 
-/// Load `app.lua` and serve it forever (server mode).
 fn run_serve(cli: ServeCli) -> ExitCode {
     init_tracing(cli.log_format);
 
@@ -366,7 +344,6 @@ fn run_serve(cli: ServeCli) -> ExitCode {
     }
 }
 
-/// Run a single script to completion (one-shot mode).
 fn run_one_shot(cli: Cli) -> ExitCode {
     let source = match std::fs::read_to_string(&cli.script) {
         Ok(s) => s,

@@ -1,14 +1,10 @@
-//! `lur.args` — the script's parsed argument vector (spec §4).
-//!
-//! `lur.args.flags.NAME` holds `--name value` / `--name=value` (a bare `--flag`
-//! is the boolean `true`); `lur.args.positional` is the array of non-flag
-//! arguments in order.
+//! `lur.args` (spec §4): `flags.NAME` from `--name value` / `--name=value` (bare
+//! `--flag` → `true`), `positional` for the rest.
 
 use mlua::{Lua, Table, Value};
 
 use crate::runtime::RunError;
 
-/// Install `lur.args` built from the raw script argv.
 pub fn install(lua: &Lua, lur: &Table, argv: &[String]) -> Result<(), RunError> {
     let flags = lua.create_table().map_err(RunError::Init)?;
     let positional = lua.create_table().map_err(RunError::Init)?;

@@ -1,60 +1,49 @@
-//! The user config file (spec §5/§12): a TOML file that sets the default
-//! profile and standing capability grants. The CLI layer unions these grants
-//! with per-run flags (additive) and lets flags override scalar settings
-//! (last-wins). v1 parses the `default_profile` scalar and the `[allow]` table.
+//! The user config file (spec §5/§12): `default_profile` plus standing
+//! `[allow]` grants, which the CLI unions with per-run flags.
 
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-/// The capability profile selected by config or flags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Profile {
-    /// Deny by default — the shipped default (secure by default).
+    /// Deny by default; the shipped default.
     Strict,
-    /// Permissive — full access.
+    /// Full access.
     Loose,
 }
 
-/// Standing grants and the default profile read from the user config file.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Config {
-    /// `default_profile` — selects the base profile unless a flag overrides it.
     pub default_profile: Option<Profile>,
-    /// `[allow].net` — standing network host grants.
     pub net: Vec<String>,
-    /// `[allow].fs_read` — standing readable roots (may contain `~`).
+    /// May contain `~`.
     pub fs_read: Vec<PathBuf>,
-    /// `[allow].fs_write` — standing writable roots (may contain `~`).
+    /// May contain `~`.
     pub fs_write: Vec<PathBuf>,
-    /// `[allow].env` — standing environment-variable name grants.
     pub env: Vec<String>,
 }
 
-/// Why a config file could not be loaded.
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    /// The file could not be read.
     #[error("cannot read config {}: {source}", path.display())]
     Read {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    /// The file is not valid TOML, or a field has the wrong shape.
+    /// Malformed TOML or a bad `default_profile`.
     #[error("invalid config {}: {message}", path.display())]
     Parse { path: PathBuf, message: String },
 }
 
 impl Config {
-    /// An empty config (no profile, no grants) — the `--no-config` / no-file
-    /// state.
     pub fn empty() -> Self {
         Self::default()
     }
 
-    /// Parse a TOML config string. Unknown keys and a missing `[allow]` table
-    /// are tolerated; a bad `default_profile` value or malformed TOML errors.
+    /// Only malformed TOML or a bad `default_profile` errors; unknown keys and
+    /// non-string `[allow]` entries are silently ignored.
     pub fn parse(src: &str) -> Result<Self, String> {
         let table: toml::Table = toml::from_str(src).map_err(|e| e.message().to_string())?;
 
@@ -93,7 +82,6 @@ impl Config {
         })
     }
 
-    /// Read and parse the config file at `path`.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let src = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
             path: path.to_path_buf(),
@@ -106,8 +94,7 @@ impl Config {
     }
 }
 
-/// Expand a leading `~` / `~/…` against `home`. A path with no leading tilde,
-/// or any tilde when `home` is unknown, is returned unchanged.
+/// Expand a leading `~` / `~/…`; unchanged if there is none or `home` is `None`.
 pub fn expand_tilde(path: &Path, home: Option<&Path>) -> PathBuf {
     let Some(home) = home else {
         return path.to_path_buf();

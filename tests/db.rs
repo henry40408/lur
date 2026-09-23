@@ -113,10 +113,8 @@ fn tx_rolls_back_on_error() {
 
 #[test]
 fn kv_incr_is_atomic_under_concurrent_writers() {
-    // kv.incr is a single guarded upsert, so concurrent writers (each its own
-    // Runtime + pool over one db file) under WAL must not lose an update: the final
-    // counter has to equal THREADS * PER_THREAD exactly. Retry-with-jitter on the
-    // upsert absorbs the SQLITE_BUSY herd a bare busy_timeout would surface.
+    // Separate Runtimes/pools over one WAL db must not lose an increment;
+    // retry-with-jitter absorbs the SQLITE_BUSY herd busy_timeout alone would surface.
     const THREADS: i64 = 4;
     const PER_THREAD: i64 = 200;
 
@@ -126,9 +124,8 @@ fn kv_incr_is_atomic_under_concurrent_writers() {
         ..Default::default()
     };
 
-    // Establish the db file (WAL + lur_kv table) and seed the counter at 0 in
-    // one thread first, so the workers contend on writes — not on the cold-open
-    // WAL-mode switch, which is a startup race distinct from incr atomicity.
+    // Create db + WAL + seed first so workers contend on writes, not on the
+    // cold-open WAL switch (a separate startup race).
     Runtime::with_config(config.clone())
         .expect("runtime builds")
         .run("lur.kv.incr('c', 0)")
@@ -187,8 +184,7 @@ fn tx_uses_a_write_lock_and_still_commits_and_rolls_back() {
 
 #[test]
 fn kv_get_reads_an_integer_cell_as_decimal_bytes() {
-    // A counter (INTEGER affinity) written into lur_kv must read back through
-    // kv.get as its decimal-string bytes, not crash on a Vec<u8> type mismatch.
+    // INTEGER cells read back as decimal bytes, not a Vec<u8> decode error.
     let dir = tempfile::tempdir().unwrap();
     let rt = db_runtime(dir.path().join("test.db"));
     rt.run(
@@ -251,9 +247,8 @@ fn kv_update_read_modify_write() {
 
 #[test]
 fn kv_update_no_leaked_transaction_after_transform_error() {
-    // A transform that errors must not leave an open (IMMEDIATE) transaction on
-    // the pooled connection.  If it did, the next update would deadlock or fail
-    // because SQLite only permits one writer at a time.
+    // An erroring transform must not leak an open IMMEDIATE tx on the pooled
+    // connection, or the next update would block on SQLite's single writer.
     let dir = tempfile::tempdir().unwrap();
     let rt = db_runtime(dir.path().join("test.db"));
     rt.run(
@@ -269,9 +264,7 @@ fn kv_update_no_leaked_transaction_after_transform_error() {
 
 #[test]
 fn kv_get_reads_a_real_cell_as_decimal_bytes() {
-    // A REAL (floating-point) value inserted directly into lur_kv must read back
-    // through kv.get as its decimal-string bytes via the "REAL" branch of
-    // value_to_bytes — not crash on a Vec<u8> type mismatch.
+    // REAL cells read back as decimal bytes, not a Vec<u8> decode error.
     let dir = tempfile::tempdir().unwrap();
     let rt = db_runtime(dir.path().join("test.db"));
     rt.run(
@@ -319,8 +312,7 @@ fn kv_incr_decr_counters() {
 
 #[test]
 fn db_exec_survives_concurrent_writers() {
-    // Many writers INSERTing into one table over separate pools must all succeed
-    // with no "database is locked" surfacing — the retry-with-jitter guarantee.
+    // Retry-with-jitter: no "database is locked" across separate pools.
     const THREADS: i64 = 4;
     const PER_THREAD: i64 = 100;
 
@@ -330,7 +322,6 @@ fn db_exec_survives_concurrent_writers() {
         ..Default::default()
     };
 
-    // Create the table + WAL file up front so workers contend on writes only.
     Runtime::with_config(config.clone())
         .expect("runtime builds")
         .run("lur.db.exec('CREATE TABLE hits (id INTEGER PRIMARY KEY AUTOINCREMENT)')")
@@ -363,9 +354,7 @@ fn db_exec_survives_concurrent_writers() {
 
 #[test]
 fn db_tx_survives_concurrent_writers() {
-    // Each tx takes the write lock via BEGIN IMMEDIATE; many concurrent writers
-    // must not surface a busy error. begin_immediate's retry covers this because
-    // a busy failure happens before the user body runs.
+    // BEGIN IMMEDIATE fails busy before the body runs, so retrying it is safe.
     const THREADS: i64 = 4;
     const PER_THREAD: i64 = 60;
 
@@ -414,10 +403,8 @@ fn db_tx_survives_concurrent_writers() {
 
 #[test]
 fn kv_update_writes_bytes_that_cas_can_match() {
-    // Regression: kv.update must store its string value with the same storage
-    // class as set/add/cas (opaque bytes), so a value written via update is
-    // CAS-able. Routing the write through the generic bind path stored it as
-    // TEXT, which never equals a BLOB-bound operand in SQLite.
+    // Regression: update must store a BLOB like set/add/cas; a TEXT value never
+    // equals a BLOB-bound CAS operand in SQLite.
     let dir = tempfile::tempdir().unwrap();
     let config = RuntimeConfig {
         db_path: Some(dir.path().join("u.db")),
@@ -435,10 +422,8 @@ fn kv_update_writes_bytes_that_cas_can_match() {
 
 #[test]
 fn kv_update_guard_does_not_reject_concurrent_siblings() {
-    // Regression: the IN_KV_UPDATE guard must be held only around the user
-    // transform, NOT across kv.update's transaction I/O awaits. Otherwise a
-    // sibling lur.kv call interleaved by lur.async while kv.update is parked on
-    // DB I/O is spuriously rejected as re-entry. One VM = one shared thread-local.
+    // Regression: the IN_KV_UPDATE guard wraps only the transform, not the tx
+    // I/O awaits, or a sibling lur.async kv call is rejected as re-entry.
     let dir = tempfile::tempdir().unwrap();
     let config = RuntimeConfig {
         db_path: Some(dir.path().join("g.db")),

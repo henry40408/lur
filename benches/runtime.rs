@@ -1,17 +1,12 @@
-//! Performance baseline for the runtime core (spec §13).
-//!
-//! Guards the perf-sensitive paths that exist today: VM cold start, the
-//! load+exec boundary for a trivial script, and the interrupt/sandbox-hook
-//! overhead on a compute-bound loop. New perf-sensitive features should add a
-//! benchmark here as they land, so regressions are caught continuously.
+//! Runtime core performance baseline (spec §13). Add a benchmark here for each
+//! new perf-sensitive path.
 
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use lur::runtime::Runtime;
 
-/// Cost of building a fresh sandboxed VM (sandbox + capability injection +
-/// interrupt + memory cap).
+/// Building a fresh sandboxed VM.
 fn vm_cold_start(c: &mut Criterion) {
     c.bench_function("vm_cold_start", |b| {
         b.iter(|| black_box(Runtime::new().expect("runtime builds")));
@@ -26,8 +21,7 @@ fn trivial_script(c: &mut Criterion) {
     });
 }
 
-/// A bounded numeric loop: the interrupt hook fires on back-edges, so this
-/// captures sandbox-hook overhead over raw computation.
+/// Interrupt-hook overhead on a compute loop (the hook fires on back-edges).
 fn compute_loop_hook_overhead(c: &mut Criterion) {
     let rt = Runtime::new().expect("runtime builds");
     let src = "local s = 0 for i = 1, 10000 do s = s + i end return s";

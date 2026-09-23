@@ -1,6 +1,5 @@
-//! `lur.kv` — key/value storage over the shared `lur_kv(key TEXT, value BLOB)`
-//! table (spec §6). Keys are strings, values raw bytes. Atomic operations
-//! (add/cas/incr/decr/update) use `SQLite`'s own atomicity; see the design spec.
+//! `lur.kv` — string keys, raw-byte values in the backend's internal `lur_kv`
+//! table (spec §6). Atomic ops rely on the backend's own atomicity.
 
 use std::cell::Cell;
 
@@ -11,9 +10,8 @@ use crate::capabilities::storage::Shared;
 use crate::runtime::RunError;
 
 thread_local! {
-    /// Set while a kv.update transform runs, so a nested lur.kv/lur.db call on
-    /// the same stack raises a clear error instead of deadlocking on the pinned
-    /// transaction connection.
+    /// Set during a `kv.update` transform so a nested `lur.kv` call errors
+    /// instead of blocking on the transaction's write lock.
     static IN_KV_UPDATE: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -26,10 +24,8 @@ fn reject_kv_reentry(fname: &str) -> mlua::Result<()> {
     Ok(())
 }
 
-/// RAII guard for `IN_KV_UPDATE`. `enter` sets the flag and remembers the prior
-/// value; `Drop` restores it — so a transform that returns, errors, or is
-/// cancelled (its future dropped mid-await) always restores the flag instead of
-/// leaving it stuck `true` and poisoning later kv/db calls on the pooled VM.
+/// Sets `IN_KV_UPDATE`, restoring the prior value on drop — including
+/// cancellation, so the flag can't stay stuck on a pooled VM.
 struct KvUpdateGuard(bool);
 
 impl KvUpdateGuard {
@@ -44,7 +40,6 @@ impl Drop for KvUpdateGuard {
     }
 }
 
-/// Install `lur.kv` sharing `db`'s lazily-opened backend.
 pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), RunError> {
     let kv = lua.create_table().map_err(RunError::Init)?;
 
@@ -170,15 +165,11 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
                 async move {
                     reject_kv_reentry("lur.kv.update")?;
                     let backend = shared.ensure().await?;
-                    // Held only around the user transform, not the transaction's
-                    // own I/O awaits — otherwise a sibling lur.async kv/db call that
-                    // interleaves while this update parks on DB I/O is spuriously
-                    // rejected as re-entry.
+                    // Guard only the transform, not the tx's own I/O, so sibling
+                    // lur.async kv calls aren't rejected as re-entry.
                     let wrapped = lua.create_async_function(move |_, cur: Value| {
                         let func = func.clone();
                         async move {
-                            // Guard restores IN_KV_UPDATE on every exit path,
-                            // including cancellation (future dropped mid-await).
                             let _guard = KvUpdateGuard::enter();
                             func.call_async::<Value>(cur).await
                         }
@@ -199,9 +190,6 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    // A guard entered inside a future that is then cancelled mid-await must still
-    // restore IN_KV_UPDATE to false, or the flag poisons every later kv/db call on
-    // the pooled VM.
     #[test]
     fn kv_update_guard_restores_flag_on_cancellation() {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -215,8 +203,7 @@ mod tests {
                 assert!(IN_KV_UPDATE.with(Cell::get), "flag set inside guard");
                 std::future::pending::<()>().await;
             };
-            // The zero-duration timeout polls `parked` once (entering the guard),
-            // then fires and drops it while parked — exactly the cancellation path.
+            // Polls once (entering the guard), then drops it mid-await.
             let _ = tokio::time::timeout(Duration::ZERO, parked).await;
             assert!(
                 !IN_KV_UPDATE.with(Cell::get),

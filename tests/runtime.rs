@@ -11,8 +11,7 @@ fn runs_a_trivial_script_to_completion() {
 #[test]
 fn require_is_removed_from_the_sandbox() {
     let rt = Runtime::new().expect("runtime builds");
-    // `sandbox(true)` alone leaves `require`, which loads on-disk .luau files
-    // and bypasses lur.fs. The global must be gone entirely.
+    // `sandbox(true)` keeps `require`, which reads disk and bypasses lur.fs.
     rt.run("assert(require == nil, 'require must be removed')")
         .expect("require should be nil");
 }
@@ -20,9 +19,7 @@ fn require_is_removed_from_the_sandbox() {
 #[test]
 fn global_env_escapes_are_removed_from_the_sandbox() {
     let rt = Runtime::new().expect("runtime builds");
-    // getfenv/setfenv reach the writable global env directly, and loadstring
-    // compiles a chunk whose env is that same global env — each bypasses the
-    // per-call handler environment that isolates server requests (§3/§5.1).
+    // Each reaches the writable global env, bypassing per-request isolation (spec §3/§5).
     rt.run(
         "assert(getfenv == nil, 'getfenv must be removed')\n\
          assert(setfenv == nil, 'setfenv must be removed')\n\
@@ -34,8 +31,7 @@ fn global_env_escapes_are_removed_from_the_sandbox() {
 #[test]
 fn dangerous_lua_stdlib_is_absent_under_strict() {
     let rt = Runtime::new().expect("runtime builds");
-    // Locks the Luau-backend security posture (spec §9 sandbox blocking): the
-    // Lua 5.x escape hatches are not present at all.
+    // Lua 5.x escape hatches are absent (spec §9 sandbox blocking).
     rt.run(
         "for _, name in ipairs({ 'io', 'package', 'loadfile', 'dofile', 'load' }) do\n\
          \tassert(_G[name] == nil, name .. ' must be absent')\n\
@@ -50,9 +46,7 @@ fn dangerous_lua_stdlib_is_absent_under_strict() {
 #[test]
 fn readonly_globals_reject_raw_writes() {
     let rt = Runtime::new().expect("runtime builds");
-    // `sandbox(true)` freezes the global table; even `rawset` (which bypasses
-    // `__newindex`) must not inject a global — otherwise it would be a
-    // cross-request isolation bypass on a pooled VM (spec §3).
+    // Frozen globals must resist even `rawset`, or pooled VMs leak across requests (spec §3).
     rt.run(
         "assert(not pcall(function() rawset(_G, 'INJECTED', 1) end),\n\
          \t'rawset must not bypass the readonly global table')\n\
@@ -64,9 +58,7 @@ fn readonly_globals_reject_raw_writes() {
 #[test]
 fn debug_escape_members_are_absent_but_traceback_kept() {
     let rt = Runtime::new().expect("runtime builds");
-    // The debug library can reach upvalues / the registry — those members must
-    // be gone; only the harmless traceback formatter and bytecode-free string
-    // library remain (spec §9 sandbox blocking).
+    // Only harmless debug members (traceback) remain; upvalue/registry access is gone (spec §9).
     rt.run(
         "assert(type(debug) == 'table', 'debug table present')\n\
          for _, name in ipairs({ 'getupvalue', 'setupvalue', 'getregistry', 'getinfo' }) do\n\
@@ -94,7 +86,6 @@ fn lur_log_exposes_level_functions() {
 
 #[test]
 fn memory_limit_aborts_a_runaway_allocation() {
-    // 2 MiB cap; the script tries to allocate far more.
     let rt = Runtime::with_memory_limit(2 * 1024 * 1024).expect("runtime builds");
     let err = rt
         .run("local t = {} for i = 1, 1e9 do t[i] = string.rep('x', 1024) end")
@@ -139,8 +130,7 @@ fn async_sleep_completes_within_budget() {
 
 #[test]
 fn io_park_is_killed_by_the_wall_clock_layer() {
-    // While parked on sleep no Lua runs, so the interrupt can't fire — only the
-    // tokio wall-clock layer can cut this off (spec §5 second timeout layer).
+    // Parked on sleep, the interrupt can't fire; only the wall-clock layer can (spec §5).
     let rt = Runtime::new().expect("runtime builds");
     let started = std::time::Instant::now();
     let err = rt
@@ -165,8 +155,7 @@ fn deadline_interrupt_aborts_an_infinite_loop() {
 #[test]
 fn timeout_cannot_be_swallowed_by_a_pcall_loop() {
     let rt = Runtime::new().expect("runtime builds");
-    // The whole point of keep-raising: a script that re-enters pcall forever
-    // still cannot outlive the deadline.
+    // Keep-raising: re-entering pcall forever still can't outlive the deadline.
     let err = rt
         .run_with_timeout(
             "while true do pcall(function() while true do end end) end",

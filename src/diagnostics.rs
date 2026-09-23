@@ -1,14 +1,11 @@
 //! Human-readable, rustc-style rendering of script errors against their source.
 
-/// ANSI styles for the rendered diagnostic. All fields are empty strings when
-/// color is off, so the colored and plain code paths are identical save for the
-/// (then-empty) escape sequences.
+/// All fields are empty when color is off, so one code path serves both.
 struct Palette {
-    /// Bold red — the `error:` label and the caret.
+    /// `error:` label and caret.
     err: &'static str,
-    /// Bold blue — the gutter (`|`, line numbers) and the `-->` arrow.
+    /// Gutter and `-->` arrow.
     gutter: &'static str,
-    /// Reset back to the terminal default.
     reset: &'static str,
 }
 
@@ -30,13 +27,10 @@ impl Palette {
     }
 }
 
-/// Render `displayed` (an mlua error's `Display`) against `source`, rustc-style.
-/// `chunk_name` is the bare path used as the chunk name (no `@`). `color` enables
-/// ANSI styling (callers pass [`stderr_color`]). Falls back to `lur: <body>` (the
-/// label-stripped message) whenever a source snippet can't be rendered — whether
-/// the location is unparsable or out of range. Never panics.
+/// Render an mlua error's `Display` against `source`, rustc-style. `chunk_name`
+/// has no `@`. Falls back to `lur: <body>` when no snippet can be rendered.
 pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> String {
-    // Split off the traceback (runtime errors append one; syntax errors don't).
+    // Runtime errors carry a traceback; syntax errors don't.
     let (head, traceback) = match displayed.split_once("\nstack traceback:") {
         Some((h, t)) => (h, Some(t)),
         None => (displayed, None),
@@ -52,8 +46,7 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> S
         return format!("lur: {body}");
     };
     let Some(src_line) = source.lines().nth(line - 1) else {
-        // Location parsed but points past the source: fall back to the same
-        // `lur: {body}` form as the unparsable case, keeping the location text.
+        // Location points past the source.
         return format!("lur: {body}");
     };
 
@@ -72,10 +65,9 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> S
     let pad = " ".repeat(gutter.len());
     let _ = writeln!(out, "{g}{pad} |{r}");
     let _ = writeln!(out, "{g}{gutter} |{r} {src_line}");
-    // Caret: under `col` when known, else under the first non-whitespace char.
-    // The pad mirrors the source prefix character-for-character — tabs stay tabs
-    // so the caret lands at the same terminal tab stop; everything else becomes a
-    // space (char-counted, so multibyte prefixes don't shift it).
+    // Caret under `col`, else the first non-whitespace char. The pad keeps the
+    // prefix's tabs and turns every other char into one space, so the caret
+    // lines up at the terminal's tab stops and past multibyte chars.
     let prefix_end = match col {
         Some(c) => src_line
             .char_indices()
@@ -107,9 +99,8 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> S
     out.trim_end().to_string()
 }
 
-/// Parse `<chunk_name>:<line>[:<col>]: <message>` out of `body`. Anchors on the
-/// known `chunk_name` prefix so paths containing `:` are safe. Returns
-/// `(line, col, message)`.
+/// Parse `<chunk_name>:<line>[:<col>]: <message>`, anchored on `chunk_name` so
+/// paths containing `:` are safe.
 fn parse_location(body: &str, chunk_name: &str) -> Option<(usize, Option<usize>, String)> {
     let needle = format!("{chunk_name}:");
     let idx = body.find(&needle)?;

@@ -1,8 +1,5 @@
-//! `lur.stdin` / `lur.stdout` — the script's byte-oriented data channels (§4).
-//!
-//! These are the fixed pipes the host opens and hands to the script; the script
-//! cannot choose a file or fd, so they stay safe to provide under strict.
-//! All reads/writes are raw bytes — no encoding, no implicit newline.
+//! `lur.stdin` / `lur.stdout` — raw-byte data channels (§4). The script can't
+//! pick a file or fd, so these are safe under `strict`.
 
 use std::io::{BufRead, Read, Write};
 
@@ -11,20 +8,16 @@ use mlua::{Error, Lua, Table, Value};
 use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
-/// Install `lur.stdin` and `lur.stdout`.
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     install_stdin(lua, lur)?;
     install_stdout(lua, lur)?;
     Ok(())
 }
 
-/// Install `lur.stdin` — `read([n])` and `lines()`.
 fn install_stdin(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let stdin = lua.create_table().map_err(RunError::Init)?;
 
-    // read()  → all remaining bytes (empty string at EOF).
-    // read(n) → up to n bytes, or nil once stdin is exhausted (so a byte loop
-    //           can terminate on nil).
+    // read() → rest of stdin ("" at EOF); read(n) → up to n bytes, nil at EOF.
     let read = lua
         .create_function(|lua, n: Value| {
             let n: Option<usize> = argcheck::arg(lua, n, "lur.stdin.read", 1, "number")?;
@@ -52,8 +45,7 @@ fn install_stdin(lua: &Lua, lur: &Table) -> Result<(), RunError> {
         .map_err(RunError::Init)?;
     stdin.set("read", read).map_err(RunError::Init)?;
 
-    // lines() → an iterator function yielding each newline-stripped line, nil
-    // at EOF: `for line in lur.stdin.lines() do ... end`.
+    // lines() → iterator of lines with `\n` / `\r\n` stripped.
     let lines = lua
         .create_function(|lua, ()| {
             let iter = lua.create_function(|lua, ()| {
@@ -82,8 +74,7 @@ fn install_stdin(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     Ok(())
 }
 
-/// Read up to `buf.len()` bytes, retrying short reads until the buffer is full
-/// or EOF is reached. Returns the number of bytes read.
+/// Fill `buf` across short reads until full or EOF; returns bytes read.
 fn read_up_to(r: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
     let mut filled = 0;
     while filled < buf.len() {
@@ -97,7 +88,6 @@ fn read_up_to(r: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
     Ok(filled)
 }
 
-/// Install `lur.stdout`.
 fn install_stdout(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let stdout = lua.create_table().map_err(RunError::Init)?;
 

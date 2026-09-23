@@ -55,7 +55,7 @@ impl Drop for Reaper {
     }
 }
 
-/// Send SIGTERM to a child process (no extra deps — shells out to `kill`).
+/// SIGTERM via `kill`, avoiding a signal crate.
 fn send_sigterm(pid: u32) {
     Command::new("kill")
         .arg("-TERM")
@@ -64,8 +64,7 @@ fn send_sigterm(pid: u32) {
         .expect("send SIGTERM");
 }
 
-/// Spawn `lur serve` on a fresh port with `app_src` as the app. Returns the
-/// bound address, the reaper, and the tempdir (kept alive for the app file).
+/// Spawn `lur serve` on a fresh port; keep the returned tempdir alive.
 fn spawn_server(app_src: &str) -> (String, Reaper, tempfile::TempDir) {
     spawn_server_args(app_src, &[])
 }
@@ -143,8 +142,7 @@ fn serve_threads_param_query_and_header_to_the_handler() {
 
 #[test]
 fn cron_fires_on_schedule_over_http() {
-    // A 1-second cron increments a lur.kv counter; an HTTP route reads it. After
-    // a few seconds the counter must have advanced, proving the scheduler fires.
+    // A 1s cron bumps a kv counter that an HTTP route reads back.
     let db_dir = tempfile::tempdir().unwrap();
     let db = db_dir.path().join("cron.db");
     let (addr, _reaper, _dir) = spawn_server_args(
@@ -219,8 +217,7 @@ fn oversize_body_is_rejected_with_413_over_http() {
 
 #[test]
 fn sigterm_drains_in_flight_request_then_exits_cleanly() {
-    // SIGTERM arrives while a 400 ms handler is in flight: the request must still
-    // complete, and the process must then exit 0 rather than die on the signal.
+    // SIGTERM mid-request: the request completes, then the process exits 0.
     let (addr, mut reaper, _dir) = spawn_server(
         "lur.serve.http('GET', '/slow', function()\n\
          \tlur.async.sleep(400)\n\
@@ -232,7 +229,6 @@ fn sigterm_drains_in_flight_request_then_exits_cleanly() {
         .write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
         .unwrap();
 
-    // Let the handler start, then ask the server to shut down.
     std::thread::sleep(Duration::from_millis(120));
     send_sigterm(reaper.pid());
 
@@ -254,8 +250,7 @@ fn sigterm_drains_in_flight_request_then_exits_cleanly() {
 
 #[test]
 fn pool_serves_concurrent_requests_in_parallel() {
-    // Each request sleeps 200ms. With a 2-VM pool, two concurrent requests run
-    // on separate VMs and finish together (~200ms), not serialized (~400ms).
+    // 2-VM pool: two 200ms requests finish in ~200ms, not ~400ms.
     let (addr, _reaper, _dir) = spawn_server_args(
         "lur.serve.http('GET', '/slow', function(req)\n\
          \tlur.async.sleep(200)\n\
@@ -263,7 +258,6 @@ fn pool_serves_concurrent_requests_in_parallel() {
          end)",
         &["--pool-size", "2"],
     );
-    // Make sure the server is up before timing.
     drop(wait_until_up(&addr));
 
     let request = "GET /slow HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";

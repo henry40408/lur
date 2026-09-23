@@ -1,8 +1,6 @@
-//! `lur.http` — policy-gated async HTTP client (spec §4/§5).
-//!
-//! Every request, and every redirect hop, is validated against the network
-//! allowlist + private-network deny. Bodies are raw bytes in and out (no
-//! auto-decompression); UTF-8 is assumed only at the `json` opt and `res.json()`.
+//! `lur.http` — policy-gated async HTTP client (spec §4/§5). Every request and
+//! redirect hop is checked against the allowlist and private-network deny.
+//! Bodies are raw bytes, not auto-decompressed.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, OnceLock};
@@ -16,12 +14,9 @@ use super::json;
 use crate::policy::Policy;
 use crate::runtime::RunError;
 
-/// Cap on a redirect chain.
 const MAX_REDIRECTS: usize = 10;
 
-/// Install `lur.http.request` and the method sugar. The reqwest client (whose
-/// rustls setup dominates VM cold start) is built lazily on the first call, so
-/// a script that never touches `lur.http` pays nothing for it.
+/// The client is built on first use: its rustls setup dominates VM cold start.
 pub fn install(
     lua: &Lua,
     lur: &Table,
@@ -78,7 +73,6 @@ pub fn install(
     Ok(())
 }
 
-/// Get the shared client, building it on first use (deferred rustls setup).
 fn ensure_client(cell: &OnceLock<Client>, policy: &Arc<Policy>) -> mlua::Result<Client> {
     if let Some(client) = cell.get() {
         return Ok(client.clone());
@@ -88,8 +82,7 @@ fn ensure_client(cell: &OnceLock<Client>, policy: &Arc<Policy>) -> mlua::Result<
     Ok(cell.get().expect("client just set").clone())
 }
 
-/// Build a reqwest client whose redirect policy re-checks each hop and whose
-/// DNS resolver drops private IPs (SSRF deny). TLS verification is always on.
+/// Redirects re-check each hop; the resolver drops private IPs (SSRF).
 fn build_client(policy: &Arc<Policy>) -> reqwest::Result<Client> {
     let redirect_policy = {
         let policy = Arc::clone(policy);
@@ -113,8 +106,8 @@ fn build_client(policy: &Arc<Policy>) -> reqwest::Result<Client> {
         .build()
 }
 
-/// A DNS resolver that refuses to hand reqwest any private/loopback IP unless
-/// the policy permits it — defeating DNS-rebinding to internal hosts.
+/// Filters private/loopback IPs out of DNS answers unless allowed, defeating
+/// DNS rebinding to internal hosts.
 struct SsrfResolver {
     policy: Arc<Policy>,
 }
@@ -137,8 +130,7 @@ impl Resolve for SsrfResolver {
     }
 }
 
-/// Whether a URL's host:port is permitted (allowlist + IP-literal private deny).
-/// Hostnames that resolve to private IPs are caught later by [`SsrfResolver`].
+/// Allowlist + IP-literal private deny; hostnames are checked by [`SsrfResolver`].
 fn url_allowed(policy: &Policy, url: &Url) -> bool {
     let Some(host) = url.host_str() else {
         return false;
@@ -189,7 +181,6 @@ async fn do_request(
     build_response(lua, resp, max_body).await
 }
 
-/// Apply the `opts` table (headers / query / body | json / timeout) to a request.
 fn apply_opts(
     mut req: reqwest::RequestBuilder,
     opts: &Table,
@@ -248,10 +239,8 @@ fn value_to_string(v: &Value) -> mlua::Result<String> {
     }
 }
 
-/// Build the `{ status, body, headers, headers_all, json() }` response table.
-/// The body is buffered with a hard cap so an untrusted script can't be served
-/// a response large enough to blow past the VM memory limit (which does not
-/// cover reqwest's Rust-side allocation).
+/// Build the response table. The body is capped at `max_body` because the VM
+/// memory limit doesn't cover Rust-side buffering.
 async fn build_response(
     lua: &Lua,
     mut resp: reqwest::Response,
@@ -276,13 +265,12 @@ async fn build_response(
         arr.raw_set(next as i64, &val)?;
     }
 
-    // Reject early if the advertised length already exceeds the cap.
     if resp.content_length().is_some_and(|n| n as usize > max_body) {
         return Err(Error::runtime(format!(
             "lur.http: response body exceeds the {max_body}-byte limit"
         )));
     }
-    // Stream so a chunked response without a length is also bounded.
+    // Also bounds chunked responses without a length.
     let mut buf: Vec<u8> = Vec::new();
     while let Some(chunk) = resp
         .chunk()
@@ -304,7 +292,6 @@ async fn build_response(
     res.set("headers", headers)?;
     res.set("headers_all", headers_all)?;
 
-    // res.json() — explicit shorthand; decodes the body only when called.
     let body_for_json = body.clone();
     let json_fn = lua.create_function(move |lua, ()| {
         let parsed: serde_json::Value = serde_json::from_slice(&body_for_json.as_bytes())

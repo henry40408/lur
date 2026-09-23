@@ -1,10 +1,6 @@
-//! `lur.state` — short-term, host-side, cross-VM shared state (spec §6).
-//!
-//! A process-scoped concurrent KV holding **primitives only** (nil / boolean /
-//! number / string-bytes), shared by every VM in the pool. Because many VMs
-//! touch it concurrently it offers atomic `incr` and an optimistic,
-//! version-stamped `update` (the Clojure-`atom`/`swap!` model) — no host lock is
-//! ever held across user code.
+//! `lur.state` — process-wide primitive KV shared by every pooled VM (spec §6).
+//! `update` is optimistic (version-checked retry), so no lock is held across
+//! user code.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -15,7 +11,7 @@ use mlua::{Lua, Table, Value};
 use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
-/// A stored primitive value (nil is represented by absence).
+/// A stored primitive; nil is absence.
 #[derive(Debug, Clone, PartialEq)]
 enum Prim {
     Bool(bool),
@@ -23,22 +19,19 @@ enum Prim {
     Str(Vec<u8>),
 }
 
-/// A value plus its monotonic per-key version (bumped on every write, including
-/// deletes, so conflict detection never compares values — sidestepping f64
-/// equality traps and the ABA problem).
+/// Value plus per-key version, bumped on every write including deletes, so
+/// `update` detects conflicts without comparing values (no ABA).
 #[derive(Debug, Clone)]
 struct Versioned {
     value: Option<Prim>,
     version: u64,
 }
 
-/// Why an integer counter operation failed.
 enum IncrError {
     NotInteger,
     Overflow,
 }
 
-/// The host-side store shared across all VMs in a runtime/pool.
 #[derive(Debug, Default)]
 pub struct StateStore {
     map: Mutex<HashMap<Vec<u8>, Versioned>>,
@@ -59,19 +52,16 @@ impl StateStore {
         map.insert(key, Versioned { value, version });
     }
 
-    /// Atomic integer `+n` fast path. Errors if the existing value is not a
-    /// whole number, or on i64 overflow.
     fn incr(&self, key: Vec<u8>, n: i64) -> Result<i64, IncrError> {
         let mut map = self.lock();
         let base: i64 = match map.get(&key).and_then(|v| v.value.as_ref()) {
             None => 0,
             Some(Prim::Num(x))
-                if x.fract() == 0.0 && *x >= i64::MIN as f64 && *x <= i64::MAX as f64 =>
+                if x.fract() == 0.0 && *x >= i64::MIN as f64 && *x < i64::MAX as f64 =>
             {
                 *x as i64
             }
             Some(_) => return Err(IncrError::NotInteger),
-            // Some(Prim::Num(non-whole)) also falls through to NotInteger.
         };
         let new = base.checked_add(n).ok_or(IncrError::Overflow)?;
         let version = map.get(&key).map_or(0, |v| v.version) + 1;
@@ -85,7 +75,6 @@ impl StateStore {
         Ok(new)
     }
 
-    /// Snapshot `(value, version)` under a brief lock for the optimistic loop.
     fn snapshot(&self, key: &[u8]) -> (Option<Prim>, u64) {
         match self.lock().get(key) {
             Some(v) => (v.value.clone(), v.version),
@@ -93,8 +82,7 @@ impl StateStore {
         }
     }
 
-    /// Store `value` iff the key's version is still `expected`; returns whether
-    /// it applied (else the caller retries from a fresh snapshot).
+    /// Store `value` iff the key's version is still `expected`.
     fn compare_and_set(&self, key: &[u8], expected: u64, value: Option<Prim>) -> bool {
         let mut map = self.lock();
         let current = map.get(key).map_or(0, |v| v.version);
@@ -111,17 +99,10 @@ impl StateStore {
         true
     }
 
-    /// Value-based compare-and-set: succeeds iff the current value equals
-    /// `expected` (by value, not version). Avoids float-equality traps for
-    /// strings and booleans; the caller accepts those semantics for numbers.
-    /// `None` means "absent". Returns true if the swap was applied.
-    #[allow(
-        clippy::ref_option,
-        reason = "trait method; `&Option<Prim>` matches the CAS call convention across all state backends"
-    )]
-    fn cas_value(&self, key: &[u8], expected: &Option<Prim>, new: Option<Prim>) -> bool {
+    /// Compare-and-set by value (`None` = absent); numbers compare as f64.
+    fn cas_value(&self, key: &[u8], expected: Option<&Prim>, new: Option<Prim>) -> bool {
         let (current, version) = self.snapshot(key);
-        if &current != expected {
+        if current.as_ref() != expected {
             return false;
         }
         self.compare_and_set(key, version, new)
@@ -129,8 +110,7 @@ impl StateStore {
 }
 
 thread_local! {
-    /// Set while an `update` transform runs, so a re-entrant `lur.state` call on
-    /// the same call stack raises a clear error instead of deadlocking.
+    /// Set during an `update` transform so re-entrant `lur.state` calls error.
     static IN_UPDATE: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -143,7 +123,6 @@ fn reject_reentry() -> mlua::Result<()> {
     Ok(())
 }
 
-/// Convert a stored primitive (or absence) into a Lua value.
 fn to_lua(lua: &Lua, p: Option<Prim>) -> mlua::Result<Value> {
     Ok(match p {
         None => Value::Nil,
@@ -153,8 +132,7 @@ fn to_lua(lua: &Lua, p: Option<Prim>) -> mlua::Result<Value> {
     })
 }
 
-/// Convert a Lua value into a storable primitive (nil → delete). Tables,
-/// functions, and other non-primitives are rejected (spec §6).
+/// Lua value → primitive (nil → delete); non-primitives are rejected.
 fn from_lua(value: &Value) -> mlua::Result<Option<Prim>> {
     Ok(match value {
         Value::Nil => None,
@@ -246,8 +224,7 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
             loop {
                 let (old, version) = s.snapshot(&key);
                 let old_lua = to_lua(lua, old)?;
-                // The transform runs with NO host lock held; the guard makes a
-                // re-entrant lur.state call error rather than deadlock.
+                // No host lock is held while the transform runs.
                 IN_UPDATE.with(|f| f.set(true));
                 let result = func.call::<Value>(old_lua);
                 IN_UPDATE.with(|f| f.set(false));
@@ -256,7 +233,7 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
                 if s.compare_and_set(&key, version, new) {
                     return Ok(new_lua);
                 }
-                // version moved under contention → retry from a fresh snapshot.
+                // Lost a race; retry from a fresh snapshot.
             }
         })
         .map_err(RunError::Init)?;
@@ -269,7 +246,7 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
             reject_reentry()?;
             let expected_prim = from_lua(&expected)?;
             let new_prim = from_lua(&new)?;
-            Ok(s.cas_value(&key.as_bytes(), &expected_prim, new_prim))
+            Ok(s.cas_value(&key.as_bytes(), expected_prim.as_ref(), new_prim))
         })
         .map_err(RunError::Init)?;
     state.set("cas", cas).map_err(RunError::Init)?;
@@ -280,7 +257,7 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
             let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.add", 1, "string")?;
             reject_reentry()?;
             let new_prim = from_lua(&value)?;
-            Ok(s.cas_value(&key.as_bytes(), &None, new_prim))
+            Ok(s.cas_value(&key.as_bytes(), None, new_prim))
         })
         .map_err(RunError::Init)?;
     state.set("add", add).map_err(RunError::Init)?;
@@ -303,7 +280,6 @@ mod tests {
         let (_, v1) = store.snapshot(b"k");
         assert_eq!(v1, 1);
 
-        // A stale expected-version is rejected (someone else wrote).
         assert!(!store.compare_and_set(b"k", 0, Some(Prim::Num(9.0))));
         assert!(store.compare_and_set(b"k", 1, Some(Prim::Num(2.0))));
         assert_eq!(store.snapshot(b"k").1, 2);
@@ -315,7 +291,16 @@ mod tests {
         store.set(b"k".to_vec(), Some(Prim::Num(5.0)));
         store.set(b"k".to_vec(), None); // delete
         assert!(store.get(b"k").is_none());
-        // Version persisted past the delete, so a CAS against version 0 fails.
         assert!(!store.compare_and_set(b"k", 0, Some(Prim::Num(5.0))));
+    }
+
+    #[test]
+    fn incr_rejects_two_pow_63_instead_of_saturating() {
+        let store = StateStore::default();
+        store.set(b"k".to_vec(), Some(Prim::Num(2f64.powi(63))));
+        assert!(matches!(
+            store.incr(b"k".to_vec(), -1),
+            Err(IncrError::NotInteger)
+        ));
     }
 }

@@ -7,9 +7,8 @@ on:
     types: [published]
   workflow_dispatch:
 
-# One run per ref at a time. A newer push supersedes the run it interrupted;
-# a tag does not — a tagged build publishes one specific version and nothing
-# should quietly cancel it.
+# A newer push cancels the in-progress run on the same ref; release (tag)
+# builds are never cancelled.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
@@ -26,8 +25,7 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # No qemu: the Dockerfile builder is pinned to the native platform and zig
-      # cross-compiles both musl targets, so the arm64 image needs no emulation.
+      # No qemu: the Dockerfile cross-compiles with zig.
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -38,17 +36,13 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # default branch → :main (rolling dev image, named after the branch
-          # itself); release → :X.Y.Z, :X.Y, and :latest (the latter added
-          # automatically for a semver tag via flavor latest=auto).
+          # main → :main; release → :X.Y.Z, :X.Y, :latest (auto for semver).
           tags: |
             type=raw,value={{branch}},enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-      # Resolve the `lur --version` stamp: the published tag for a release,
-      # otherwise a `<ref>-<short-sha>` marker (e.g. `main-1a2b3c4`). The Docker
-      # context excludes .git, so build.rs can't run `git describe` in-image —
-      # the value is computed here and injected as a build-arg.
+      # `lur --version` stamp: release tag or `<ref>-<sha7>`. Computed here
+      # because the Docker context has no .git for `git describe`.
       - id: version
         run: |
           if [ "${{ github.event_name }}" = "release" ]; then
@@ -63,12 +57,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Stamp `lur --version` (see the version step above).
           build-args: |
             GIT_VERSION=${{ steps.version.outputs.value }}
-          # Persist BuildKit layer cache across runs via the GitHub Actions cache
-          # backend. This caches image layers (apt install, cargo-zigbuild build,
-          # zig download) — not the in-Dockerfile cargo/target cache mounts, which
-          # are local to an ephemeral runner and don't survive between runs.
+          # Caches image layers only; the Dockerfile's cache mounts don't survive
+          # ephemeral runners.
           cache-from: type=gha
           cache-to: type=gha,mode=max

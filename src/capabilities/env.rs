@@ -1,8 +1,5 @@
-//! `lur.env` — allowlisted environment-variable access (spec §4/§5).
-//!
-//! `lur.env(name)` returns the value if the name is on the policy allowlist,
-//! else `nil` — indistinguishable from unset, so it can't be used as an oracle
-//! for which variables exist.
+//! `lur.env(name)` — allowlisted env vars (spec §4/§5). Denied and unset both
+//! return `nil`, so it can't probe which variables exist.
 
 use std::sync::Arc;
 
@@ -12,7 +9,6 @@ use crate::capabilities::argcheck;
 use crate::policy::Policy;
 use crate::runtime::RunError;
 
-/// Install `lur.env`, gated by `policy`.
 pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunError> {
     let env = lua
         .create_function(move |lua, name: Value| {

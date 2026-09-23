@@ -1,8 +1,5 @@
-//! `lur.crypto` — hashing, HMAC, secure random, and constant-time compare.
-//!
-//! Pure-compute capability with no policy gate, in the spirit of `lur.base64`:
-//! raw bytes in, raw digest bytes out. `lur.crypto.hex` bridges a raw digest to
-//! the lowercase hex string most signatures are compared against.
+//! `lur.crypto` — hashing, HMAC, secure random, constant-time compare. Digests
+//! are raw bytes; `lur.crypto.hex` converts to lowercase hex.
 
 use hmac::{Hmac, KeyInit, Mac};
 use md5::Md5;
@@ -14,11 +11,9 @@ use subtle::ConstantTimeEq;
 use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
-/// Upper bound on a single `random_bytes` draw (1 MiB) — a guard against a
-/// script accidentally requesting an enormous allocation.
+/// Cap on one `random_bytes` draw.
 const MAX_RANDOM_BYTES: i64 = 1 << 20;
 
-/// Install the flat `lur.crypto` table.
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let crypto = lua.create_table().map_err(RunError::Init)?;
 

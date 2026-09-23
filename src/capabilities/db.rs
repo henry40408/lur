@@ -1,6 +1,4 @@
-//! `lur.db` — long-term `SQLite` storage. This file only wires the Lua `lur.db`
-//! table to the backend-neutral `storage::Backend`; all SQL/dialect lives in
-//! `storage`.
+//! `lur.db` — Lua wiring over `storage::Backend` (`SQLite` or Postgres).
 
 use mlua::{Error, Function, Lua, MultiValue, Table, Value, Variadic};
 use std::path::PathBuf;
@@ -65,13 +63,10 @@ pub(crate) fn install(
     Ok(shared)
 }
 
-/// Build the Lua `tx` handle over a pinned-connection transaction, run
-/// `func(tx)`, then commit on normal return / roll back and re-raise on error.
+/// Run `func(tx)`, committing on return and rolling back on error.
 ///
-/// `run_tx` holds the sole strong `Arc<Transaction>`; the `exec`/`query`
-/// closures capture `Weak` refs. On cancellation mid-transform the strong ref
-/// drops with this frame, firing `Transaction::Drop` (the detached rollback)
-/// synchronously rather than deferring it to Luau GC.
+/// The `tx` closures hold only `Weak` refs, so on cancellation the sole strong
+/// ref drops with this frame and rolls back now, not at Luau GC.
 async fn run_tx(lua: Lua, shared: &Shared, func: Function) -> mlua::Result<()> {
     let backend = shared.ensure().await?;
     let tx = Arc::new(backend.begin().await?);
@@ -131,11 +126,7 @@ mod tests {
     use std::time::Duration;
     use tokio::sync::Notify;
 
-    // A db.tx cancelled mid-transform must roll back synchronously: the sole
-    // pooled connection is released promptly (a fresh begin does not hang) and the
-    // written row is gone. Without the Weak refs, the Arc clones in the Lua
-    // exec/query closures keep the transaction alive until GC, so the connection
-    // stays checked out and the second begin blocks until the pool acquire timeout.
+    // Cancelling db.tx rolls back immediately, not at GC (see `run_tx`).
     #[test]
     fn db_tx_cancellation_rolls_back_synchronously() {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -173,8 +164,7 @@ mod tests {
             }
             drop(fut); // cancel mid-transform → strong Arc drops → rollback fires
 
-            // Bounded so an unfixed regression fails fast instead of hanging the
-            // suite for the full pool-acquire timeout.
+            // Bounded so a regression fails fast instead of waiting out acquire.
             let tx2 = tokio::time::timeout(Duration::from_secs(5), backend.begin())
                 .await
                 .expect("second begin must not hang: the connection must be released")

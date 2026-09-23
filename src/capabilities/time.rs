@@ -1,8 +1,5 @@
-//! `lur.time` — millisecond clocks and timestamp parsing. Pure-compute
-//! capability, no policy gate. Fills the gaps Luau's `os.*` cannot: sub-second
-//! and monotonic timing, and parsing RFC 3339 / HTTP-date strings into numbers.
-//! Formatting stays with `os.date` (which already emits both). All values are
-//! integer milliseconds.
+//! `lur.time` — what `os.*` lacks: millisecond wall/monotonic clocks and
+//! RFC 3339 / HTTP-date parsing. Formatting stays with `os.date`.
 
 use std::sync::LazyLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -12,11 +9,9 @@ use mlua::{Error, Lua, Table, Value};
 use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
-/// Process-fixed reference for `monotonic_ms`, captured on first use. Only the
-/// difference between two readings is meaningful.
+/// `monotonic_ms` epoch; only differences are meaningful.
 static MONOTONIC_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
-/// Install the flat `lur.time` table.
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let time = lua.create_table().map_err(RunError::Init)?;
 
