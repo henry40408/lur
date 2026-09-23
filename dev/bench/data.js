@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790042349227,
+  "lastUpdate": 1790147645969,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3065,6 +3065,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207674,
             "range": "± 4158",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d6c61cccdda5b69c200968dfb948e69d43c4f904",
+          "message": "docs: trim verbose docs and comments, fix errors found along the way (#114)\n\nDocs (README, GUIDE, ARCHITECTURE, CLAUDE.md) and code comments are\ncondensed; stale or wrong statements corrected against the source.\n\nBug fixes:\n- policy: reject writes through a dangling symlink, which previously\n  passed the allowlist check and created the target outside the root\n- 2^63 boundary: `i64::MAX as f64` rounds up to 2^63, so integer_arg,\n  state incr, json and storage conversions silently saturated; now\n  rejected or kept as f64\n- kv.update: begin errors were prefixed `lur.db.tx`\n- serve: handler error message no longer mentions unsupported `headers`\n- cli: `--db` help mentions postgres URLs; `--allow-all` / `--no-config`\n  help described them wrongly\n\nCo-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-23T15:12:43+08:00",
+          "tree_id": "5cfaf380c432b905eef370a63f8e8cec6664df5b",
+          "url": "https://github.com/henry40408/lur/commit/d6c61cccdda5b69c200968dfb948e69d43c4f904"
+        },
+        "date": 1790147644846,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 312966,
+            "range": "± 2562",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5803,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 211957,
+            "range": "± 5419",
             "unit": "ns/iter"
           }
         ]
