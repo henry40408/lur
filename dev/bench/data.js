@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790149068075,
+  "lastUpdate": 1790479998088,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3275,6 +3275,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208601,
             "range": "± 5671",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0941077fba1bcc1fac5ca27a18b070632e0c8cdf",
+          "message": "chore(deps): bump the github-actions group with 5 updates (#120)\n\nBumps the github-actions group with 5 updates:\n\n| Package | From | To |\n| --- | --- | --- |\n| [taiki-e/install-action](https://github.com/taiki-e/install-action) | `2.87.12` | `2.87.16` |\n| [codecov/codecov-action](https://github.com/codecov/codecov-action) | `7.0.0` | `7.1.1` |\n| [benchmark-action/github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark) | `1.22.1` | `1.22.2` |\n| [docker/setup-buildx-action](https://github.com/docker/setup-buildx-action) | `4.3.0` | `4.4.1` |\n| [docker/build-push-action](https://github.com/docker/build-push-action) | `7.3.0` | `7.4.0` |\n\n\nUpdates `taiki-e/install-action` from 2.87.12 to 2.87.16\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/3f74d7c16a4242f1c95561e98edc25d36adb4375...9114bf4d891761788c546334fd37538eae1bf8b3)\n\nUpdates `codecov/codecov-action` from 7.0.0 to 7.1.1\n- [Release notes](https://github.com/codecov/codecov-action/releases)\n- [Changelog](https://github.com/codecov/codecov-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/codecov/codecov-action/compare/fb8b3582c8e4def4969c97caa2f19720cb33a72f...303a32d7a59b442fa8d48b6a1cc6825c09c847a5)\n\nUpdates `benchmark-action/github-action-benchmark` from 1.22.1 to 1.22.2\n- [Release notes](https://github.com/benchmark-action/github-action-benchmark/releases)\n- [Changelog](https://github.com/benchmark-action/github-action-benchmark/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/benchmark-action/github-action-benchmark/compare/52576c92bccf6ac60c8223ec7eb2565637cae9ba...4322e5726e6334590d251fc4f92bec0efafc45dc)\n\nUpdates `docker/setup-buildx-action` from 4.3.0 to 4.4.1\n- [Release notes](https://github.com/docker/setup-buildx-action/releases)\n- [Commits](https://github.com/docker/setup-buildx-action/compare/37fe631027851001ddb9b187196cc803df7f5f0e...f87e5991a6d7451dcb8d9637bfbc97413f497069)\n\nUpdates `docker/build-push-action` from 7.3.0 to 7.4.0\n- [Release notes](https://github.com/docker/build-push-action/releases)\n- [Commits](https://github.com/docker/build-push-action/compare/53b7df96c91f9c12dcc8a07bcb9ccacbed38856a...c3c9e263c25d99ce0380d002d59b67737d91b0dc)\n\n---\nupdated-dependencies:\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.87.16\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: github-actions\n- dependency-name: codecov/codecov-action\n  dependency-version: 7.1.1\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: github-actions\n- dependency-name: benchmark-action/github-action-benchmark\n  dependency-version: 1.22.2\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: github-actions\n- dependency-name: docker/setup-buildx-action\n  dependency-version: 4.4.1\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: github-actions\n- dependency-name: docker/build-push-action\n  dependency-version: 7.4.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: github-actions\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-27T11:26:39+08:00",
+          "tree_id": "ea892f7852ae5635025c5c2d086faa89abf03a36",
+          "url": "https://github.com/henry40408/lur/commit/0941077fba1bcc1fac5ca27a18b070632e0c8cdf"
+        },
+        "date": 1790479997185,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 318278,
+            "range": "± 2575",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5801,
+            "range": "± 56",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208933,
+            "range": "± 1223",
             "unit": "ns/iter"
           }
         ]
