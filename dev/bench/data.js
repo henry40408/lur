@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791036989529,
+  "lastUpdate": 1791037418717,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3359,6 +3359,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208473,
             "range": "± 956",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5b3dbc9fc2251c60e8d4f7211a994b188c169917",
+          "message": "docs: remove superpowers plans/specs, keep rationale in docs/decisions.md (#121)\n\nDelete docs/superpowers (plans and specs). Design rationale, rejected\nalternatives, and known limitations that existed only there move to a new\nconcise docs/decisions.md. Drop \"(spec §N)\" references from code comments,\nARCHITECTURE.md, and CLAUDE.md.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-03T22:22:15+08:00",
+          "tree_id": "fdba7a881daf69e228835b5124ed170f807f7188",
+          "url": "https://github.com/henry40408/lur/commit/5b3dbc9fc2251c60e8d4f7211a994b188c169917"
+        },
+        "date": 1791037418006,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 286025,
+            "range": "± 4569",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5412,
+            "range": "± 55",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 209449,
+            "range": "± 4324",
             "unit": "ns/iter"
           }
         ]
