@@ -99,6 +99,20 @@ fn net_allowlist_matches_host_and_port() {
 }
 
 #[test]
+fn net_allowlist_matches_ipv6_by_address() {
+    let p = Policy::strict().with_net(vec!["::1".to_string(), "[fd00::5]:6379".to_string()]);
+    assert!(p.allows_net("[::1]", 80)); // Url::host_str form
+    assert!(p.allows_net("::1", 80));
+    assert!(p.allows_net("[0:0:0:0:0:0:0:1]", 80)); // same address, other spelling
+    assert!(p.allows_net("[FD00::5]", 6379));
+    assert!(!p.allows_net("[fd00::5]", 5432));
+    assert!(!p.allows_net("[::2]", 80));
+    // An IPv4 rule does not match its IPv4-mapped IPv6 form, or vice versa.
+    let v4 = Policy::strict().with_net(vec!["127.0.0.1".to_string()]);
+    assert!(!v4.allows_net("[::ffff:7f00:1]", 80));
+}
+
+#[test]
 fn net_wildcard_allows_any_host() {
     let p = Policy::strict().with_net(vec!["*".to_string()]);
     assert!(p.allows_net("anything.example", 443));
@@ -114,13 +128,56 @@ fn private_ip_ranges_are_detected() {
         "172.16.5.5",
         "169.254.169.254",
         "::1",
+        // IPv4 special-purpose ranges.
+        "0.0.0.0",
+        "0.1.2.3",
+        "100.64.0.1",
+        "100.100.100.200", // Alibaba Cloud metadata
+        "100.127.255.255",
+        "192.0.0.192", // Oracle Cloud metadata
+        "198.18.0.1",
+        "198.19.255.255",
+        "224.0.0.1",
+        "239.255.255.250",
+        "240.0.0.1",
+        "255.255.255.255",
+        // IPv6 native ranges.
+        "::",
+        "fc00::1",
+        "fd00:ec2::254", // AWS IPv6 metadata
+        "fe80::1",
+        "fec0::1",
+        "ff02::1",
+        "64:ff9b:1::1",
+        // IPv6 forms embedding a private IPv4 address.
+        "::ffff:127.0.0.1",
+        "::ffff:169.254.169.254",
+        "::127.0.0.1",
+        "::10.0.0.1",
+        "64:ff9b::127.0.0.1",
+        "64:ff9b::a9fe:a9fe",
+        "2002:7f00:1::",
+        "2002:a9fe:a9fe::1",
     ] {
         assert!(
             Policy::is_private_ip(s.parse::<IpAddr>().unwrap()),
             "{s} should be private"
         );
     }
-    for s in ["8.8.8.8", "1.1.1.1", "93.184.216.34"] {
+    for s in [
+        "8.8.8.8",
+        "1.1.1.1",
+        "93.184.216.34",
+        "100.63.255.255",
+        "100.128.0.1",
+        "198.17.255.255",
+        "198.20.0.1",
+        "223.255.255.255",
+        "2606:4700:4700::1111",
+        "::ffff:8.8.8.8",
+        "64:ff9b::808:808",
+        "2002:808:808::1",
+    ] {
         assert!(
             !Policy::is_private_ip(s.parse::<IpAddr>().unwrap()),
             "{s} should be public"

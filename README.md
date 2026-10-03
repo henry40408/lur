@@ -126,8 +126,8 @@ lur docs                               # print the embedded usage guide
 | `--allow-fs-write` | PATH | | Add a writable root (repeatable). |
 | `--allow-fs` | PATH | | Add a read + write root (repeatable). |
 | `--allow-env` | NAME | | Allow reading an environment variable (repeatable). |
-| `--allow-net` | HOST | | Allow a host or `host:port` (repeatable). |
-| `--allow-private` | — | off | Permit loopback/private/link-local addresses (SSRF guard off). |
+| `--allow-net` | HOST | | Allow a host or `host:port`; IPv6 as `::1`, `[::1]`, or `[::1]:port` (repeatable). |
+| `--allow-private` | — | off | Permit loopback/private/link-local/CGNAT/multicast addresses, incl. IPv6 forms embedding them (SSRF guard off). |
 | `--memory` | SIZE | `256m` | Per-VM memory cap; `0` = unlimited. |
 | `--max-http-body` | SIZE | `16m` | Cap on a buffered `lur.http` response body. |
 | `--max-concurrency` | N | unbounded | Cap on in-flight `lur.async.*` tasks per VM. |
@@ -217,7 +217,8 @@ Lua error (catch with `pcall`).
   `delete`/`head(url, opts?)`. `opts`: `headers`, `query`, `body` **or** `json`, `timeout`
   (ms). Returns `{ status, body, headers, headers_all, json() }`. Every request and
   redirect hop is checked against the allowlist and the private-IP (SSRF) guard; TLS is
-  always verified; the body is capped by `--max-http-body`.
+  always verified; the body is capped by `--max-http-body`. Proxy environment variables
+  (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) are ignored.
 - **`lur.env`** — `lur.env(name) → string | nil`; `nil` for both denied and unset, so it
   is not an oracle.
 

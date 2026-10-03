@@ -29,7 +29,21 @@ enum Resp {
 
 /// A tiny one-request-per-connection HTTP/1.1 server in a background thread.
 fn spawn(resp: Resp) -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    spawn_on(TcpListener::bind("127.0.0.1:0").unwrap(), resp)
+}
+
+/// Like [`spawn`] on IPv6 loopback; `None` if the host has no `::1`.
+fn spawn_v6(resp: Resp) -> Option<u16> {
+    match TcpListener::bind("[::1]:0") {
+        Ok(l) => Some(spawn_on(l, resp)),
+        Err(e) => {
+            eprintln!("skipping: cannot bind [::1]: {e}");
+            None
+        }
+    }
+}
+
+fn spawn_on(listener: TcpListener, resp: Resp) -> u16 {
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
         for stream in listener.incoming() {
@@ -207,4 +221,147 @@ fn http_redirect_to_disallowed_host_is_blocked() {
             .is_err(),
         "redirect to a disallowed host must be blocked"
     );
+}
+
+/// Asserts the script fails at the policy gate, not at connect time, so a
+/// closed port cannot make a bypass look like a deny.
+fn assert_policy_denied(rt: &Runtime, script: &str) {
+    let err = rt
+        .run(script)
+        .expect_err("request must be denied")
+        .to_string();
+    assert!(
+        err.contains("not allowed by the policy"),
+        "expected a policy denial, got: {err}"
+    );
+}
+
+#[test]
+fn http_ipv6_loopback_literal_denied_by_default() {
+    // IP literals skip the DNS resolver, so url_allowed is the only gate.
+    let rt = runtime_with(Policy::strict().with_net(vec!["*".to_string()]));
+    for host in ["[::1]", "[::]", "[0:0:0:0:0:0:0:1]"] {
+        assert_policy_denied(&rt, &format!("lur.http.get('http://{host}:9/')"));
+    }
+}
+
+#[test]
+fn http_ipv4_mapped_ipv6_literal_denied_by_default() {
+    let port = spawn(Resp::Fixed(200, "x"));
+    let rt = runtime_with(Policy::strict().with_net(vec!["*".to_string()]));
+    for host in [
+        "[::ffff:127.0.0.1]",
+        "[::ffff:169.254.169.254]",
+        "[::127.0.0.1]",
+        "[64:ff9b::127.0.0.1]",
+        "[2002:7f00:1::]",
+    ] {
+        assert_policy_denied(&rt, &format!("lur.http.get('http://{host}:{port}/')"));
+    }
+}
+
+#[test]
+fn http_ipv6_allowlist_entry_matches_url_literal() {
+    let Some(port) = spawn_v6(Resp::Fixed(200, "v6")) else {
+        return;
+    };
+    for rule in [
+        "::1".to_string(),
+        "[::1]".to_string(),
+        format!("[::1]:{port}"),
+    ] {
+        let rt = runtime_with(
+            Policy::strict()
+                .with_net(vec![rule.clone()])
+                .allow_private(),
+        );
+        rt.run(&format!(
+            "local r = lur.http.get('http://[::1]:{port}/')\n\
+             assert(r.status == 200 and r.body == 'v6', 'response')",
+        ))
+        .unwrap_or_else(|e| panic!("rule {rule:?} should permit [::1]: {e}"));
+    }
+}
+
+#[test]
+fn http_ipv6_allowlist_entry_still_needs_allow_private() {
+    let rt = runtime_with(Policy::strict().with_net(vec!["::1".to_string()]));
+    assert_policy_denied(&rt, "lur.http.get('http://[::1]:9/')");
+}
+
+#[test]
+fn http_redirect_to_ipv6_literal_is_checked() {
+    let Some(v6) = spawn_v6(Resp::Fixed(200, "v6")) else {
+        return;
+    };
+    let target = format!("http://[::1]:{v6}/");
+
+    // Not on the allowlist → the redirect hop is refused.
+    let origin = spawn(Resp::Redirect(target.clone()));
+    let rt = runtime_with(loopback_policy());
+    let err = rt
+        .run(&format!("lur.http.get('http://127.0.0.1:{origin}/')"))
+        .expect_err("redirect to a non-allowlisted IPv6 literal must be blocked")
+        .to_string();
+    // reqwest's Display hides the policy's message; the target is live, so a
+    // failed redirect here can only come from the redirect policy.
+    assert!(err.contains("error following redirect"), "got: {err}");
+
+    // Allowlisted (and private allowed) → followed.
+    let origin = spawn(Resp::Redirect(target));
+    let rt = runtime_with(
+        Policy::strict()
+            .with_net(vec!["127.0.0.1".to_string(), "::1".to_string()])
+            .allow_private(),
+    );
+    rt.run(&format!(
+        "local r = lur.http.get('http://127.0.0.1:{origin}/')\n\
+         assert(r.status == 200 and r.body == 'v6', 'followed')",
+    ))
+    .expect("allowlisted IPv6 redirect target is followed");
+}
+
+#[test]
+fn http_proxy_env_is_ignored() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // A "proxy" on loopback that records whether anything connected to it.
+    let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy_url = format!("http://{}", proxy.local_addr().unwrap());
+    let hit = Arc::new(AtomicBool::new(false));
+    {
+        let hit = Arc::clone(&hit);
+        thread::spawn(move || {
+            for stream in proxy.incoming() {
+                hit.store(true, Ordering::SeqCst);
+                let mut s = stream.unwrap();
+                let _ = s.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nproxied",
+                );
+            }
+        });
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("proxy.lua");
+    // `.invalid` never resolves, so only a proxy could make this succeed.
+    std::fs::write(&script, "lur.http.get('http://lur-proxy-test.invalid/')").unwrap();
+    let out = assert_cmd::Command::cargo_bin("lur")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", dir.path())
+        .env("HTTP_PROXY", &proxy_url)
+        .env("http_proxy", &proxy_url)
+        .env("ALL_PROXY", &proxy_url)
+        .env("all_proxy", &proxy_url)
+        .env_remove("NO_PROXY")
+        .env_remove("no_proxy")
+        .args(["--no-config", "--allow-net", "*"])
+        .arg(&script)
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "request must not go through the proxy"
+    );
+    assert!(!hit.load(Ordering::SeqCst), "proxy must never be contacted");
 }
