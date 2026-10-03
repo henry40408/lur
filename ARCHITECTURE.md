@@ -90,6 +90,8 @@ grants nothing; `loose()` grants everything. Enforced at each capability:
 - **`lur.http`** checks every request and redirect hop against the net allowlist, uses a DNS
   resolver rejecting loopback/private/link-local IPs unless `--allow-private` (SSRF guard),
   caps redirects (10) and the buffered body (`--max-http-body`), and always verifies TLS.
+  IP literals bypass the resolver, so `url_allowed` is their sole private-IP check; system
+  proxy env vars are ignored. See [docs/decisions.md](docs/decisions.md).
 - **`lur.env`** returns `nil` for both denied and unset, so it isn't an existence oracle.
 
 ## One-shot mode
