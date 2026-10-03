@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791037418717,
+  "lastUpdate": 1791037650522,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3401,6 +3401,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 209449,
             "range": "± 4324",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f01d6415dc20da6aa68a0573cfc763de3054bdf7",
+          "message": "docs: record lur.http SSRF guard design decisions (#123)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-03T22:26:23+08:00",
+          "tree_id": "f8420f9ff7c449565d790a6980d9c503210383dd",
+          "url": "https://github.com/henry40408/lur/commit/f01d6415dc20da6aa68a0573cfc763de3054bdf7"
+        },
+        "date": 1791037649965,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 148063,
+            "range": "± 6027",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3230,
+            "range": "± 66",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 280480,
+            "range": "± 17506",
             "unit": "ns/iter"
           }
         ]
