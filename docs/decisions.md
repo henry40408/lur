@@ -35,6 +35,18 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   `os.date("!…")` already covers RFC 3339 / IMF-fixdate.
 - **Server responses**: no `Content-Type` inference ("explicit over magic"); an invalid
   header fails the whole response (500) instead of being dropped.
+- **`lur.http` SSRF guard**:
+  - The private-address list is curated (loopback, private, link-local, unique-local,
+    CGNAT, cloud-metadata ranges, multicast, …), not the full IANA special-purpose
+    registry. IPv6 forms embedding an IPv4 address (mapped, compatible, NAT64, 6to4) are
+    judged by the embedded address; Teredo `2001::/32` is not unpacked.
+  - IP literals skip `SsrfResolver` (the connector dials them directly), so `url_allowed`
+    is their only private-address gate, for the first request and every redirect hop.
+    Hostnames are filtered by the resolver, which also pins the connection to the vetted IP.
+  - System proxy env vars (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) are ignored on
+    purpose: through a proxy the name is resolved remotely and bypasses the resolver.
+  - Allowlist rules match IPs by address, strictly: an IPv4 rule does not match its
+    IPv4-mapped IPv6 spelling, nor the reverse.
 - **Diagnostics**: chunk name is the CLI path as typed (not canonicalized or
   basenamed). Exit codes deliberately not split per error kind.
 - **`lur docs`**: hand-rolled ANSI renderer over `pulldown-cmark` (no default features);
