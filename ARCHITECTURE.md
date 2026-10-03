@@ -1,7 +1,7 @@
 # Architecture
 
-For developers working *on* `lur`; for usage see the [README](README.md). "(spec §N)" refers
-to [`docs/superpowers/specs/2026-06-26-lur-lua-runtime-design.md`](docs/superpowers/specs/2026-06-26-lur-lua-runtime-design.md).
+For developers working *on* `lur`; for usage see the [README](README.md).
+Design rationale and known limitations: [docs/decisions.md](docs/decisions.md).
 
 ## Overview
 
@@ -56,7 +56,7 @@ Both modes build VMs via [`runtime::build_lua`](src/runtime.rs). Order is load-b
    deadline it raises on *every* interrupt, so a `pcall` loop can't swallow it.
 5. **Memory cap last**, so construction allocations don't count against it.
 
-### Two-layer timeout (spec §5)
+### Two-layer timeout
 
 - The **deadline interrupt** aborts CPU-bound Lua.
 - **`tokio::time::timeout`** kills code parked on async I/O, where the interrupt never fires.
@@ -96,7 +96,7 @@ grants nothing; `loose()` grants everything. Enforced at each capability:
 
 [`Runtime`](src/runtime.rs) owns one VM and a current-thread tokio runtime.
 `main.rs::run_one_shot` builds a `RuntimeConfig` and calls `run_to_exit_code`, which maps the
-chunk's top-level `return` to an exit code (spec §8): number → that code, `nil`/`false` → 1,
+chunk's top-level `return` to an exit code: number → that code, `nil`/`false` → 1,
 anything else or no return → 0.
 
 ## Server mode
@@ -136,7 +136,7 @@ rejected at load. Params are percent-decoded to raw bytes as `req.params`.
 4. Returned table → `response_from` (`status` default 200, must be 100–599; `headers`
    expanded to validated pairs, CR/LF and framing headers rejected; `body` default
    empty); timeout → **503**; Lua error or bad return → logged, **500**. Handler errors never
-   bring the server down (spec §8).
+   bring the server down.
 
 Chunks are named from the CLI path (`script` if unnamed), so errors read `app.lua:2:`.
 Handler and cron errors go through the same `diagnostics::render` as one-shot.
@@ -148,8 +148,7 @@ The body is a one-shot cursor (`BodyStream`): once `req.read(n)` streams it, `re
 
 `fresh_env` makes a throwaway table whose `__index` is the frozen globals and sets it as the
 handler/cron env: reads fall through, writes are discarded after the call. Together with
-stripping `getfenv`/`setfenv`/`loadstring`, this prevents cross-request global bleed
-(spec §3, §5.1).
+stripping `getfenv`/`setfenv`/`loadstring`, this prevents cross-request global bleed.
 
 ### Cron
 

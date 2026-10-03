@@ -52,7 +52,7 @@ pub struct RuntimeConfig {
     /// *serve*: per-request limit (a timed-out request gets a 503); also the
     /// default for cron jobs without their own `timeout`.
     pub per_event_timeout: Option<Duration>,
-    /// Shared by every VM built from this config so `lur.state` spans the pool (spec §6).
+    /// Shared by every VM built from this config so `lur.state` spans the pool.
     pub state: Arc<crate::capabilities::state::StateStore>,
     /// *serve*: drain window on shutdown before remaining work is aborted.
     pub shutdown_grace: Duration,
@@ -95,7 +95,7 @@ pub(crate) fn build_lua(
     let lua = Lua::new();
     // These survive `sandbox(true)`: `require` reads files bypassing lur.fs;
     // `getfenv`/`setfenv`/`loadstring` reach the writable global env, bypassing
-    // the per-call environment that isolates server requests (spec §3, §5.1).
+    // the per-call environment that isolates server requests.
     for name in ["require", "getfenv", "setfenv", "loadstring"] {
         lua.globals()
             .set(name, mlua::Value::Nil)
@@ -184,7 +184,7 @@ impl Runtime {
         )
     }
 
-    /// Map the top-level `return` to an exit code (spec §8): a number → that
+    /// Map the top-level `return` to an exit code: a number → that
     /// code, `nil`/`false` → 1, anything else (including no `return`) → 0.
     pub fn run_to_exit_code(
         &self,
@@ -201,7 +201,7 @@ impl Runtime {
         Ok(exit_code_of(values))
     }
 
-    /// Drive `fut` under both timeout layers (spec §5): the interrupt kills
+    /// Drive `fut` under both timeout layers: the interrupt kills
     /// CPU-bound code, `tokio::time::timeout` kills code parked on async I/O.
     fn guarded<T>(
         &self,

@@ -1,4 +1,4 @@
-//! Server mode (spec §3): a pool of pre-warmed VMs, each request run on an
+//! Server mode: a pool of pre-warmed VMs, each request run on an
 //! exclusively-borrowed VM. The host owns the route table (`(method, path) →
 //! handler id`); each VM holds its own handler closures under the same ids.
 
@@ -183,7 +183,7 @@ pub struct RawRequest {
     pub body: Vec<u8>,
 }
 
-/// A handler's reply (spec §3).
+/// A handler's reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
     pub status: u16,
@@ -298,7 +298,7 @@ impl Server {
         self.rt.block_on(self.dispatch_async(req))
     }
 
-    /// Serve on `addr` until SIGTERM/SIGINT, then drain (spec §3/§5).
+    /// Serve on `addr` until SIGTERM/SIGINT, then drain.
     pub fn run(self, addr: SocketAddr) -> std::io::Result<()> {
         self.run_with_shutdown(addr, wait_for_signal())
     }
@@ -371,7 +371,7 @@ impl Server {
         })
     }
 
-    /// A handler error becomes a logged 500, never a crash (§8).
+    /// A handler error becomes a logged 500, never a crash.
     async fn handle(
         &self,
         req: Request<Incoming>,
@@ -427,7 +427,7 @@ impl Server {
     }
 
     async fn dispatch_async(&self, req: &RawRequest) -> Result<Response, RunError> {
-        // Reject before routing so the VM never allocates the body (spec §3).
+        // Reject before routing so the VM never allocates the body.
         if matches!(self.max_body, Some(max) if req.body.len() > max) {
             return Ok(oversize_response());
         }
@@ -453,7 +453,7 @@ impl Server {
         }
     }
 
-    /// Errors and timeouts are logged, never propagated (§8).
+    /// Errors and timeouts are logged, never propagated.
     async fn run_cron(&self, job: &CronJob) {
         let checked = self.pool.checkout().await;
         let vm = checked.vm();
@@ -486,7 +486,7 @@ enum CallError {
     Lua(mlua::Error),
 }
 
-/// Run `handler` in a fresh environment under the two-layer timeout (spec §5):
+/// Run `handler` in a fresh environment under the two-layer timeout:
 /// the deadline interrupt stops CPU-bound code, `tokio::time::timeout` drops
 /// code parked on async I/O.
 async fn call_handler(
@@ -525,7 +525,7 @@ async fn call_handler(
 
 /// Sleep to each next fire and run the job. Single-flight by default (a tick
 /// is skipped while the previous run is in flight); missed ticks are never
-/// replayed (spec §3).
+/// replayed.
 async fn cron_loop(
     server: Arc<Server>,
     job: CronJob,
@@ -593,7 +593,7 @@ fn oversize_response() -> Response {
 }
 
 /// Per-call environment: writes land here and are discarded; reads fall
-/// through to the readonly globals. Prevents cross-request global bleed (spec §3).
+/// through to the readonly globals. Prevents cross-request global bleed.
 fn fresh_env(lua: &mlua::Lua) -> mlua::Result<mlua::Table> {
     let env = lua.create_table()?;
     let meta = lua.create_table()?;
@@ -749,8 +749,8 @@ fn build_req(
     }
     table.set("cookies", cookies)?;
 
-    // `req.body` / `req.json()` become unavailable once `req.read(n)` has run
-    // (spec §3). The mutex makes the closures `Send`.
+    // `req.body` / `req.json()` become unavailable once `req.read(n)` has run.
+    // The mutex makes the closures `Send`.
     let state = Arc::new(Mutex::new(BodyStream {
         body: req.body.clone(),
         cursor: 0,

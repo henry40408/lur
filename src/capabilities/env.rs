@@ -1,4 +1,4 @@
-//! `lur.env(name)` — allowlisted env vars (spec §4/§5). Denied and unset both
+//! `lur.env(name)` — allowlisted env vars. Denied and unset both
 //! return `nil`, so it can't probe which variables exist.
 
 use std::sync::Arc;

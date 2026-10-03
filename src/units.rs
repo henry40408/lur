@@ -1,4 +1,4 @@
-//! CLI size and duration parsing (spec §12), case-insensitive. Sizes are
+//! CLI size and duration parsing, case-insensitive. Sizes are
 //! binary (`k`/`m`/`g`); durations take `ms`/`s`/`m`/`h`. A bare number is
 //! bytes or seconds.
 

@@ -137,7 +137,7 @@ fn crypto_verifies_a_webhook_signature_end_to_end() {
 
 #[test]
 fn json_encode_rejects_non_utf8_string() {
-    // \255 is invalid UTF-8 — must error at the JSON boundary (§4).
+    // \255 is invalid UTF-8 — must error at the JSON boundary.
     run(
         "assert(type(lur.json.encode) == 'function', 'encode must exist')\n\
          local ok = pcall(function() return lur.json.encode('\\255') end)\n\

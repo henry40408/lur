@@ -1,4 +1,4 @@
-//! `lur.state` — process-wide primitive KV shared by every pooled VM (spec §6).
+//! `lur.state` — process-wide primitive KV shared by every pooled VM.
 //! `update` is optimistic (version-checked retry), so no lock is held across
 //! user code.
 

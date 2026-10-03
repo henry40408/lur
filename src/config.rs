@@ -1,4 +1,4 @@
-//! The user config file (spec §5/§12): `default_profile` plus standing
+//! The user config file: `default_profile` plus standing
 //! `[allow]` grants, which the CLI unions with per-run flags.
 
 use std::path::{Path, PathBuf};

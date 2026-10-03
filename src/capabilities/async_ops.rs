@@ -1,4 +1,4 @@
-//! `lur.async` (spec §7): `sleep` plus `all`/`race`/`settled`/`any`, mirroring
+//! `lur.async`: `sleep` plus `all`/`race`/`settled`/`any`, mirroring
 //! JS `Promise.*`. Tasks interleave on one VM only at await points; when a
 //! combinator settles early the rest are dropped (cancelled).
 

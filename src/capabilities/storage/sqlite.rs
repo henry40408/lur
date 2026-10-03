@@ -64,7 +64,7 @@ where
     }
 }
 
-/// Convert a result row to a Lua table keyed by column name (spec §6 read map).
+/// Convert a result row to a Lua table keyed by column name.
 pub(crate) fn read_row(lua: &Lua, row: &SqliteRow) -> mlua::Result<Table> {
     let t = lua.create_table()?;
     for col in row.columns() {
@@ -78,7 +78,7 @@ pub(crate) fn read_row(lua: &Lua, row: &SqliteRow) -> mlua::Result<Table> {
             match raw.type_info().name() {
                 "INTEGER" => Value::Integer(get::<i64>(row, i)?),
                 "REAL" => Value::Number(get::<f64>(row, i)?),
-                // TEXT and BLOB both come back as raw bytes (§4 byte semantics).
+                // TEXT and BLOB both come back as raw bytes.
                 _ => Value::String(lua.create_string(get::<Vec<u8>>(row, i)?)?),
             }
         };
@@ -122,7 +122,7 @@ pub(crate) async fn open_pool(path: &Path) -> sqlx::Result<SqlitePool> {
     Ok(pool)
 }
 
-/// Bind each Lua value as a positional parameter (spec §6 write mapping).
+/// Bind each Lua value as a positional parameter.
 pub(crate) fn bind_all<'q>(mut q: Query<'q>, params: &[Value]) -> mlua::Result<Query<'q>> {
     for v in params {
         q = bind_one(q, v)?;

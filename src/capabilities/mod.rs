@@ -1,4 +1,4 @@
-//! The flat `lur.*` capability table (spec §4). [`install`] must run before
+//! The flat `lur.*` capability table. [`install`] must run before
 //! `sandbox(true)` freezes the globals.
 
 pub(crate) mod argcheck;

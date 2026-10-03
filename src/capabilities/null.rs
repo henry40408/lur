@@ -1,4 +1,4 @@
-//! `lur.null` — sentinel for SQL/JSON null (spec §4/§6), distinct from `nil`
+//! `lur.null` — sentinel for SQL/JSON null, distinct from `nil`
 //! (which means absent).
 
 use mlua::{Lua, Table, UserData, Value};

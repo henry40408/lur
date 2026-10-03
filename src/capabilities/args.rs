@@ -1,4 +1,4 @@
-//! `lur.args` (spec §4): `flags.NAME` from `--name value` / `--name=value` (bare
+//! `lur.args`: `flags.NAME` from `--name value` / `--name=value` (bare
 //! `--flag` → `true`), `positional` for the rest.
 
 use mlua::{Lua, Table, Value};

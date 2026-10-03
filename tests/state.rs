@@ -145,7 +145,7 @@ fn state_incr_is_integer_and_has_decr() {
 
 #[test]
 fn state_is_shared_across_vms_from_the_same_config() {
-    // The store is host-side, shared by VMs built from one config (spec §6).
+    // The store is host-side, shared by VMs built from one config.
     let config = RuntimeConfig::default();
     let writer = Runtime::with_config(config.clone()).expect("runtime builds");
     let reader = Runtime::with_config(config).expect("runtime builds");
