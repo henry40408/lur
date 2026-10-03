@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790479998088,
+  "lastUpdate": 1791036989529,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3317,6 +3317,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208933,
             "range": "± 1223",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7acc24cc78cd8f9144745dec8267bdeffc81855f",
+          "message": "fix(http): close SSRF bypasses via IPv6 literals and proxy env (#122)\n\nurl_allowed parsed Url::host_str, which keeps IPv6 brackets, so IPv6\nliterals ([::1], [::ffff:127.0.0.1], ...) skipped the private-IP check.\nIP literals never reach SsrfResolver, so this was a full bypass of\nthe SSRF guard, including on redirect hops.\n\n- Strip brackets before parsing the host as an IP.\n- Match IPv6 allowlist entries by address (they never matched before).\n- Judge IPv4-mapped/compatible, NAT64, and 6to4 IPv6 by the embedded\n  IPv4; add 0/8, 100.64/10, 192.0.0/24, 198.18/15, multicast, 240/4,\n  fec0::/10, 64:ff9b:1::/48 to the deny set.\n- Ignore HTTP_PROXY/HTTPS_PROXY/ALL_PROXY, which bypassed the resolver.\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-03T22:15:08+08:00",
+          "tree_id": "fdb4c066ebf4ce2dfdfba2396c627d59c987ee38",
+          "url": "https://github.com/henry40408/lur/commit/7acc24cc78cd8f9144745dec8267bdeffc81855f"
+        },
+        "date": 1791036989090,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 313143,
+            "range": "± 4353",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5813,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208473,
+            "range": "± 956",
             "unit": "ns/iter"
           }
         ]
