@@ -1,5 +1,5 @@
 //! `lur.log` — leveled diagnostic logging to stderr (stdout is the data
-//! channel). `lur.log.info/warn/error(msg)` (spec §4).
+//! channel). `lur.log.info/warn/error(msg)`.
 
 use std::io::Write;
 
@@ -15,7 +15,7 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
         let f = lua
             .create_function(move |lua, msg: Value| {
                 let msg: mlua::LuaString = argcheck::arg(lua, msg, &fname, 1, "string")?;
-                // Bytes pass through verbatim (§4); no UTF-8 validation.
+                // Bytes pass through verbatim; no UTF-8 validation.
                 let mut err = std::io::stderr().lock();
                 let _ = write!(err, "{level}: ");
                 let _ = err.write_all(&msg.as_bytes());

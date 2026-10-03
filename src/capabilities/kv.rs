@@ -1,5 +1,5 @@
 //! `lur.kv` — string keys, raw-byte values in the backend's internal `lur_kv`
-//! table (spec §6). Atomic ops rely on the backend's own atomicity.
+//! table. Atomic ops rely on the backend's own atomicity.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

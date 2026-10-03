@@ -44,4 +44,5 @@ Violating these compiles but breaks the sandbox or the pool.
 - Edition 2024; toolchain pinned in `rust-toolchain.toml`. No `rust-version` is declared —
   don't add one on a toolchain bump.
 - Integration tests: one file per surface under `tests/`; unit tests inline.
-- "(spec §N)" → `docs/superpowers/specs/2026-06-26-lur-lua-runtime-design.md`.
+- Design rationale, rejected alternatives, and known limitations live in
+  [docs/decisions.md](docs/decisions.md); update it when making a non-obvious design call.

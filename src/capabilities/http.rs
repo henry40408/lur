@@ -1,4 +1,4 @@
-//! `lur.http` — policy-gated async HTTP client (spec §4/§5). Every request and
+//! `lur.http` — policy-gated async HTTP client. Every request and
 //! redirect hop is checked against the allowlist and private-network deny.
 //! Bodies are raw bytes, not auto-decompressed.
 

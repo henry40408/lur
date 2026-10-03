@@ -1,4 +1,4 @@
-//! Runtime core performance baseline (spec §13). Add a benchmark here for each
+//! Runtime core performance baseline. Add a benchmark here for each
 //! new perf-sensitive path.
 
 use std::hint::black_box;

@@ -1,5 +1,5 @@
 //! `lur.serve.*` — collects route/cron registrations into a [`Registry`] while
-//! `app.lua` runs (spec §3). Raises in one-shot mode, where there is none.
+//! `app.lua` runs. Raises in one-shot mode, where there is none.
 
 use std::sync::{Arc, Mutex};
 

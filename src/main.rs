@@ -220,7 +220,7 @@ fn default_config_path() -> Option<PathBuf> {
 }
 
 /// Flags override the config's profile; allowlists are the union of config
-/// and flags (§5/§12).
+/// and flags.
 fn build_policy(flags: &CommonFlags, config: &Config) -> Result<Policy, String> {
     let profile = if flags.allow_all || flags.loose {
         Profile::Loose

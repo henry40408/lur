@@ -1,11 +1,11 @@
-//! The capability policy: fs, env, and network allowlists (spec §5).
+//! The capability policy: fs, env, and network allowlists.
 //!
 //! Fs read and write are separate lists. Requested paths are canonicalized
 //! before the prefix check, so `..` or a symlink cannot escape a granted root;
 //! a directory root grants its subtree, a file root only that file.
 //!
 //! Known limitation: canonicalize-then-open has a TOCTOU window (a symlink
-//! swapped after the check); mitigation is deferred to §5 Layer-B OS hardening.
+//! swapped after the check); mitigation is deferred to future OS-level hardening.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
@@ -95,7 +95,7 @@ pub struct Policy {
     env_allow: Vec<String>,
     env_allow_all: bool,
     net_allow: Vec<HostRule>,
-    /// Off by default (SSRF guard, §5).
+    /// Off by default (SSRF guard).
     allow_private_net: bool,
 }
 
@@ -115,12 +115,12 @@ pub enum PolicyError {
 }
 
 impl Policy {
-    /// No access at all (the default profile, §5).
+    /// No access at all (the default profile).
     pub fn strict() -> Self {
         Self::default()
     }
 
-    /// Full fs read/write, every env var, any host, private IPs included (§5).
+    /// Full fs read/write, every env var, any host, private IPs included.
     pub fn loose() -> std::io::Result<Self> {
         let root = vec![PathBuf::from("/")];
         Ok(Self::from_roots(&root, &root)?
@@ -181,7 +181,7 @@ impl Policy {
         self.allow_private_net
     }
 
-    /// The SSRF deny set (§5): addresses a script must not reach without
+    /// The SSRF deny set: addresses a script must not reach without
     /// `--allow-private`.
     ///
     /// This is a curated list of ranges that lead to the local host, internal

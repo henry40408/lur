@@ -1,4 +1,4 @@
-//! `lur.json` — JSON encode/decode (spec §4). The one place lur requires UTF-8
+//! `lur.json` — JSON encode/decode. The one place lur requires UTF-8
 //! (base64 binary first). `lur.null` ↔ JSON `null`; `nil` means absent.
 
 use mlua::{Error, Lua, Table, Value};

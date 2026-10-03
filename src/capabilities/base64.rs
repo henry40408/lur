@@ -1,4 +1,4 @@
-//! `lur.base64` — standard base64 (spec §4); how binary crosses UTF-8-only JSON.
+//! `lur.base64` — standard base64; how binary crosses UTF-8-only JSON.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;

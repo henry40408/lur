@@ -1,4 +1,4 @@
-//! `lur.stdin` / `lur.stdout` — raw-byte data channels (§4). The script can't
+//! `lur.stdin` / `lur.stdout` — raw-byte data channels. The script can't
 //! pick a file or fd, so these are safe under `strict`.
 
 use std::io::{BufRead, Read, Write};

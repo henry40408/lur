@@ -19,7 +19,7 @@ fn require_is_removed_from_the_sandbox() {
 #[test]
 fn global_env_escapes_are_removed_from_the_sandbox() {
     let rt = Runtime::new().expect("runtime builds");
-    // Each reaches the writable global env, bypassing per-request isolation (spec §3/§5).
+    // Each reaches the writable global env, bypassing per-request isolation.
     rt.run(
         "assert(getfenv == nil, 'getfenv must be removed')\n\
          assert(setfenv == nil, 'setfenv must be removed')\n\
@@ -31,7 +31,7 @@ fn global_env_escapes_are_removed_from_the_sandbox() {
 #[test]
 fn dangerous_lua_stdlib_is_absent_under_strict() {
     let rt = Runtime::new().expect("runtime builds");
-    // Lua 5.x escape hatches are absent (spec §9 sandbox blocking).
+    // Lua 5.x escape hatches are absent.
     rt.run(
         "for _, name in ipairs({ 'io', 'package', 'loadfile', 'dofile', 'load' }) do\n\
          \tassert(_G[name] == nil, name .. ' must be absent')\n\
@@ -46,7 +46,7 @@ fn dangerous_lua_stdlib_is_absent_under_strict() {
 #[test]
 fn readonly_globals_reject_raw_writes() {
     let rt = Runtime::new().expect("runtime builds");
-    // Frozen globals must resist even `rawset`, or pooled VMs leak across requests (spec §3).
+    // Frozen globals must resist even `rawset`, or pooled VMs leak across requests.
     rt.run(
         "assert(not pcall(function() rawset(_G, 'INJECTED', 1) end),\n\
          \t'rawset must not bypass the readonly global table')\n\
@@ -58,7 +58,7 @@ fn readonly_globals_reject_raw_writes() {
 #[test]
 fn debug_escape_members_are_absent_but_traceback_kept() {
     let rt = Runtime::new().expect("runtime builds");
-    // Only harmless debug members (traceback) remain; upvalue/registry access is gone (spec §9).
+    // Only harmless debug members (traceback) remain; upvalue/registry access is gone.
     rt.run(
         "assert(type(debug) == 'table', 'debug table present')\n\
          for _, name in ipairs({ 'getupvalue', 'setupvalue', 'getregistry', 'getinfo' }) do\n\
@@ -130,7 +130,7 @@ fn async_sleep_completes_within_budget() {
 
 #[test]
 fn io_park_is_killed_by_the_wall_clock_layer() {
-    // Parked on sleep, the interrupt can't fire; only the wall-clock layer can (spec §5).
+    // Parked on sleep, the interrupt can't fire; only the wall-clock layer can.
     let rt = Runtime::new().expect("runtime builds");
     let started = std::time::Instant::now();
     let err = rt

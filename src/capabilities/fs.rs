@@ -1,5 +1,5 @@
 //! `lur.fs` — filesystem access gated by the [`Policy`] allowlists, which
-//! canonicalize paths before checking (spec §4/§5). Data and paths are raw bytes.
+//! canonicalize paths before checking. Data and paths are raw bytes.
 
 use std::path::PathBuf;
 use std::sync::Arc;
