@@ -83,6 +83,11 @@ fn ensure_client(cell: &OnceLock<Client>, policy: &Arc<Policy>) -> mlua::Result<
 }
 
 /// Redirects re-check each hop; the resolver drops private IPs (SSRF).
+///
+/// `no_proxy` disables reqwest's `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`
+/// pickup: through a proxy, the target host is never resolved locally, so
+/// [`SsrfResolver`] would be bypassed and the proxy itself could sit on a
+/// private address. Proxy support is intentionally not implemented.
 fn build_client(policy: &Arc<Policy>) -> reqwest::Result<Client> {
     let redirect_policy = {
         let policy = Arc::clone(policy);
@@ -103,6 +108,7 @@ fn build_client(policy: &Arc<Policy>) -> reqwest::Result<Client> {
     Client::builder()
         .redirect(redirect_policy)
         .dns_resolver(resolver)
+        .no_proxy()
         .build()
 }
 
@@ -131,6 +137,10 @@ impl Resolve for SsrfResolver {
 }
 
 /// Allowlist + IP-literal private deny; hostnames are checked by [`SsrfResolver`].
+///
+/// IP-literal hosts never reach the resolver (the connector dials them
+/// directly), so this is the *only* private-address gate for them — both on
+/// the initial request and on every redirect hop.
 fn url_allowed(policy: &Policy, url: &Url) -> bool {
     let Some(host) = url.host_str() else {
         return false;
@@ -141,7 +151,13 @@ fn url_allowed(policy: &Policy, url: &Url) -> bool {
     if !policy.allows_net(host, port) {
         return false;
     }
-    if let Ok(ip) = host.parse::<IpAddr>()
+    // `host_str` keeps IPv6 brackets (`[::1]`), which `IpAddr` won't parse.
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    let ip = bare.parse::<IpAddr>().ok();
+    if let Some(ip) = ip
         && !policy.allows_private_net()
         && Policy::is_private_ip(ip)
     {
