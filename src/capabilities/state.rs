@@ -32,7 +32,8 @@ struct Versioned {
 #[derive(Debug, Default)]
 struct Inner {
     map: HashMap<Vec<u8>, Versioned>,
-    clock: u64,
+    /// Last version handed out; only ever increases.
+    last_version: u64,
 }
 
 impl Inner {
@@ -44,8 +45,8 @@ impl Inner {
     fn put(&mut self, key: Vec<u8>, value: Option<Prim>) {
         match value {
             Some(value) => {
-                self.clock += 1;
-                let version = self.clock;
+                self.last_version += 1;
+                let version = self.last_version;
                 self.map.insert(key, Versioned { value, version });
             }
             None => {
