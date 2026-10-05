@@ -170,7 +170,7 @@ fn every_runtime_function_has_an_example() {
 fn every_capability_is_documented() {
     const CAPS: &[&str] = &[
         "json", "base64", "crypto", "cookie", "time", "log", "args", "state", "io", "fs", "env",
-        "http", "db", "kv", "async", "serve", "url", "html", "feed",
+        "http", "db", "kv", "async", "serve", "url", "charset", "html", "feed",
     ];
     let missing: Vec<&str> = CAPS
         .iter()
