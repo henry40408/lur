@@ -25,10 +25,19 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## Capabilities
 
-- **Pure-compute capabilities** (`json`, `base64`, `crypto`, `cookie`, `time`, `url`, `html`, `feed`) are not
+- **Pure-compute capabilities** (`json`, `base64`, `crypto`, `cookie`, `time`, `url`, `charset`, `html`, `feed`) are not
   policy-gated and take/return raw bytes; callers bridge with `hex`/`base64`.
 - **`lur.crypto`**: `hmac_md5` and `random_hex` omitted on purpose (extinct /
   composable). `constant_eq` returns early on length mismatch (length isn't secret).
+- **`lur.charset`**: `encoding_rs` (the Encoding Standard's labels and BOM/replacement rules,
+  as browsers behave), not `chardet`-style guessing: an unlabeled page decodes as UTF-8 and
+  the script says otherwise, so output never depends on a heuristic. Explicit, not automatic
+  in `lur.http`/`lur.html.parse`: both stay byte-oriented, and decoding is one call
+  (`lur.charset.decode(res.body, res.headers["content-type"])`). A bare label or a whole
+  `Content-Type` is accepted as the hint, so callers don't parse the header. An unknown
+  label raises rather than guessing (wrap in `pcall` to fall back). `<meta>` sniffing only
+  looks at `charset=` in the first 1 KiB and ignores a UTF-16 declaration, as browsers do.
+  Not done: encoding detection, streaming decode, UTF-16 targets for `encode`.
 - **`lur.html`**: `scraper::Html` (and `dom_query`) are `!Send` because tendril uses
   non-atomic refcounts, while mlua's `send` mode needs `Send` userdata. A node stores the
   source text plus an `ego_tree::NodeId`; parsed trees live in an 8-slot per-thread LRU and

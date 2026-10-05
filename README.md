@@ -213,7 +213,13 @@ Lua error (catch with `pcall`).
   `encode_query(table) → string` (keys sorted; an array value repeats the key; string,
   number and boolean values) and `decode_query(text) → table` (leading `?` optional, last
   duplicate wins, `+` is a space).
-- **`lur.html`** — `parse(html) → doc` (invalid UTF-8 is replaced). Nodes (the doc and its
+- **`lur.charset`** — `decode(bytes, hint?) → string` and `encode(text, label) → bytes` for
+  non-UTF-8 pages (Big5, GBK, Shift_JIS, … via `encoding_rs`, WHATWG labels). `hint` is a
+  charset label or a whole `Content-Type` value. Precedence: BOM, then `hint`, then a
+  `<meta charset>` in the first 1 KiB, then UTF-8; invalid bytes become U+FFFD; an unknown
+  label raises. `encode` writes unmappable characters as `&#NNN;` and refuses UTF-16.
+- **`lur.html`** — `parse(html) → doc` (invalid UTF-8 is replaced; decode other encodings with
+  `lur.charset` first). Nodes (the doc and its
   elements) share methods: `select(css) → array`, `select_one(css) → node | nil`
   (descendants only; invalid selector raises), `text()`, `html()`, `inner_html()`, `tag()`,
   `attr(name) → string | nil`, `attrs()`, `parent()`, `children()` (elements only).

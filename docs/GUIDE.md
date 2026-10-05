@@ -64,6 +64,23 @@ assert(set:find("sid=xyz", 1, true) == 1)
 assert(set:find("HttpOnly", 1, true))
 ```
 
+### lur.charset
+
+Pages that aren't UTF-8 (Big5, GBK, Shift_JIS, …) must be decoded before `lur.html` sees them.
+`decode(bytes, hint?)` takes a charset label or a whole `Content-Type` header value; with no
+usable hint it looks for a `<meta charset>` in the first 1 KiB and otherwise assumes UTF-8.
+A BOM always wins, invalid bytes become U+FFFD, and an unknown label raises.
+
+```lua
+local big5 = "\xA7\x41\xA6\x6E"                       -- 你好
+assert(lur.charset.decode(big5, "big5") == "你好")
+assert(lur.charset.decode(big5, "text/html; charset=Big5") == "你好")
+assert(lur.charset.decode('<meta charset="big5">' .. big5):find("你好", 1, true))
+
+-- from a response: lur.charset.decode(res.body, res.headers["content-type"])
+assert(lur.charset.encode("你好", "big5") == big5)        -- unmappable chars become &#N;
+```
+
 ### lur.html / lur.feed
 
 Scrape with CSS selectors; emit a feed.

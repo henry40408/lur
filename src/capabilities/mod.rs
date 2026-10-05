@@ -5,6 +5,7 @@ pub(crate) mod argcheck;
 pub mod args;
 pub mod async_ops;
 pub mod base64;
+pub mod charset;
 pub mod cookie;
 pub mod crypto;
 pub mod db;
@@ -44,6 +45,7 @@ pub fn install(
     cookie::install(lua, &lur)?;
     time::install(lua, &lur)?;
     url::install(lua, &lur)?;
+    charset::install(lua, &lur)?;
     html::install(lua, &lur)?;
     feed::install(lua, &lur)?;
     io::install(lua, &lur)?;
