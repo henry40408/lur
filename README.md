@@ -253,7 +253,8 @@ Lua error (catch with `pcall`).
 ### Capabilities (policy-gated)
 
 - **`lur.fs`** — `read(path) → bytes`, `write(path, bytes)`. Paths are canonicalized
-  before the allowlist check, defeating `..` and symlink escapes.
+  before the allowlist check, defeating `..` and symlink escapes, and files are opened
+  confined to the granted root, so a symlink swapped in mid-call cannot escape either.
 - **`lur.http`** — `request(method, url, opts?)` plus `get`/`post`/`put`/`patch`/
   `delete`/`head(url, opts?)`. `opts`: `headers`, `query`, `body` **or** `json`, `timeout`
   (ms), `cache`. Returns `{ status, body, headers, headers_all, json() }`. Every request and

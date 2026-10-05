@@ -1,5 +1,6 @@
-//! `lur.fs` — filesystem access gated by the [`Policy`] allowlists, which
-//! canonicalize paths before checking. Data and paths are raw bytes.
+//! `lur.fs` — filesystem access gated by the [`Policy`] allowlists: paths are
+//! canonicalized to pick a root, then opened confined beneath that root's
+//! directory handle. Data and paths are raw bytes.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,10 +19,11 @@ pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunErr
         .create_function(move |lua, path: Value| {
             let path: mlua::LuaString = argcheck::arg(lua, path, "lur.fs.read", 1, "string")?;
             let requested = bytes_to_path(&path.as_bytes());
-            let resolved = read_policy
-                .allows_read(&requested)
+            let file = read_policy
+                .open_read(&requested)
                 .map_err(|e| Error::runtime(e.to_string()))?;
-            let data = std::fs::read(&resolved)
+            let data = file
+                .read()
                 .map_err(|e| Error::runtime(format!("lur.fs.read: {e}")))?;
             lua.create_string(&data)
         })
@@ -34,10 +36,10 @@ pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunErr
             let path: mlua::LuaString = argcheck::arg(lua, path, "lur.fs.write", 1, "string")?;
             let data: mlua::LuaString = argcheck::arg(lua, data, "lur.fs.write", 2, "string")?;
             let requested = bytes_to_path(&path.as_bytes());
-            let resolved = write_policy
-                .allows_write(&requested)
+            let file = write_policy
+                .open_write(&requested)
                 .map_err(|e| Error::runtime(e.to_string()))?;
-            std::fs::write(&resolved, data.as_bytes())
+            file.write(&data.as_bytes())
                 .map_err(|e| Error::runtime(format!("lur.fs.write: {e}")))?;
             Ok(())
         })
