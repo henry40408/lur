@@ -24,6 +24,7 @@ pub mod state;
 mod storage;
 pub mod time;
 pub mod url;
+pub mod xml;
 
 use mlua::Lua;
 
@@ -47,6 +48,7 @@ pub fn install(
     url::install(lua, &lur)?;
     charset::install(lua, &lur)?;
     html::install(lua, &lur)?;
+    xml::install(lua, &lur)?;
     feed::install(lua, &lur)?;
     io::install(lua, &lur)?;
     fs::install(lua, &lur, config.policy.clone())?;

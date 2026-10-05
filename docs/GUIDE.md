@@ -101,6 +101,29 @@ assert(lur.json.decode(lur.feed.json(meta, items)).items[1].title == "A")
 
 `lur.feed.rss` / `.atom` / `.json` take `(meta, items)`; item `date` is epoch milliseconds.
 
+### lur.xml
+
+Read RSS, Atom, sitemaps and other XML with slash paths (`a/b` children, `//a` descendants,
+`*` any name). Names match as written, so a prefixed tag is `dc:creator`.
+
+```lua
+local doc = lur.xml.parse([==[<rss xmlns:dc="http://purl.org/dc/elements/1.1/"><channel>
+  <item><title>A</title><link>https://e.com/a</link><dc:creator>Ann</dc:creator></item>
+  <item><title><![CDATA[B & C]]></title><link href="https://e.com/b"/></item>
+</channel></rss>]==])
+local items = doc:select("rss/channel/item")
+assert(#items == 2)
+assert(items[1]:select_one("dc:creator"):text() == "Ann")
+assert(items[2]:select_one("title"):text() == "B & C")
+assert(items[2]:select_one("link"):attr("href") == "https://e.com/b")
+assert(#doc:select("//title") == 2)
+assert(items[1]:tag() == "item" and items[1]:parent():tag() == "channel")
+assert(#items[1]:children() == 3)
+assert(doc:select_one("//link"):attrs() ~= nil)
+```
+
+Pair it with `lur.charset` only for non-XML text; an XML declaration's `encoding` is honored.
+
 ### lur.time
 
 Clocks and timestamp parsing missing from `os.*`, in integer milliseconds.

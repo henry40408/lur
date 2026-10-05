@@ -224,6 +224,13 @@ Lua error (catch with `pcall`).
   (descendants only; invalid selector raises), `text()`, `html()`, `inner_html()`, `tag()`,
   `attr(name) → string | nil`, `attrs()`, `parent()`, `children()` (elements only).
   Call with `:`. Parsing follows the HTML5 algorithm, so `<td>` outside a `<table>` is dropped.
+- **`lur.xml`** — `parse(xml) → doc`. Same node methods as `lur.html` (`select`, `select_one`,
+  `text`, `tag`, `attr`, `attrs`, `parent`, `children`) but selection takes a slash path:
+  `a/b` (children), `//a` (descendants, also mid-path), `*` (any name); results are in document
+  order and deduplicated. Names match exactly as written (`dc:creator`); namespaces are not
+  resolved. Malformed XML raises with line/column; unknown entities such as `&nbsp;` are kept
+  as text; `DOCTYPE` is ignored, so custom entities are not expanded. A BOM or the
+  declaration's `encoding` selects the charset; otherwise invalid UTF-8 is replaced.
 - **`lur.feed`** — `rss(meta, items)`, `atom(meta, items)`, `json(meta, items)` → string
   (RSS 2.0 / Atom 1.0 / JSON Feed 1.1). `meta`: `title` (required), `link`, `feed_url`,
   `description`, `language`, `id`, `updated`. Each item: `title` (required), `link`, `guid`,
