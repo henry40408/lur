@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791162903861,
+  "lastUpdate": 1791168158713,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3569,6 +3569,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 301734,
             "range": "± 15540",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ac9834a1c69615e3926a522c109b7629375a3e61",
+          "message": "feat: add kv TTL and lur.http cache (#129)\n\n* feat: add kv TTL and lur.http cache\n\nPer-key expires_at for lur.kv (set/add/incr/decr/cas/update opts, expire, ttl) and a db-backed cache option for lur.http.get/GET requests.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* refactor: keep the lur.http cache in memory instead of lur.kv\n\nThe cache no longer needs --db. It is a process-wide HttpCache held in RuntimeConfig and shared by the pool, with lur.http.cache_clear() to flush it. Total size is left to the script (ttl_ms, --max-http-body per entry, opt-in per call); expired entries are freed on lookup and swept once a minute.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T10:41:27+08:00",
+          "tree_id": "6147b530f652c0ddecdb46fe142b2fddf552491c",
+          "url": "https://github.com/henry40408/lur/commit/ac9834a1c69615e3926a522c109b7629375a3e61"
+        },
+        "date": 1791168157552,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 152607,
+            "range": "± 8186",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3152,
+            "range": "± 69",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 272429,
+            "range": "± 5635",
             "unit": "ns/iter"
           }
         ]
