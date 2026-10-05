@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791168158713,
+  "lastUpdate": 1791170032113,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3611,6 +3611,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 272429,
             "range": "± 5635",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d054b0d7f53e8c7998b73d57085a549991e1516d",
+          "message": "chore: shrink the release binary with strip, fat LTO and one codegen unit (#131)\n\n19.0 MB -> 13.2 MB on macOS arm64 with no benchmark regression and identical error output. panic = abort is deliberately not set: mlua unwinds Lua errors through Rust callbacks, so it turns every error into a crash.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T11:10:17+08:00",
+          "tree_id": "7acb541386bc3bdcfee4d47040337734dc3cead2",
+          "url": "https://github.com/henry40408/lur/commit/d054b0d7f53e8c7998b73d57085a549991e1516d"
+        },
+        "date": 1791170031485,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 156851,
+            "range": "± 7477",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 2921,
+            "range": "± 213",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 272892,
+            "range": "± 12368",
             "unit": "ns/iter"
           }
         ]
