@@ -19,12 +19,41 @@ enum Prim {
     Str(Vec<u8>),
 }
 
-/// Value plus per-key version, bumped on every write including deletes, so
-/// `update` detects conflicts without comparing values (no ABA).
+/// A live value and the version it was written at. Versions come from one
+/// store-wide counter that only goes up, so a key deleted and recreated always
+/// gets a newer version than any a reader could still hold (no ABA), and a
+/// deleted key needs no entry. An absent key reads as version 0.
 #[derive(Debug, Clone)]
 struct Versioned {
-    value: Option<Prim>,
+    value: Prim,
     version: u64,
+}
+
+#[derive(Debug, Default)]
+struct Inner {
+    map: HashMap<Vec<u8>, Versioned>,
+    /// Last version handed out; only ever increases.
+    last_version: u64,
+}
+
+impl Inner {
+    fn version(&self, key: &[u8]) -> u64 {
+        self.map.get(key).map_or(0, |v| v.version)
+    }
+
+    /// Write `value` (`None` deletes) under a fresh version.
+    fn put(&mut self, key: Vec<u8>, value: Option<Prim>) {
+        match value {
+            Some(value) => {
+                self.last_version += 1;
+                let version = self.last_version;
+                self.map.insert(key, Versioned { value, version });
+            }
+            None => {
+                self.map.remove(&key);
+            }
+        }
+    }
 }
 
 enum IncrError {
@@ -34,27 +63,25 @@ enum IncrError {
 
 #[derive(Debug, Default)]
 pub struct StateStore {
-    map: Mutex<HashMap<Vec<u8>, Versioned>>,
+    inner: Mutex<Inner>,
 }
 
 impl StateStore {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<Vec<u8>, Versioned>> {
-        self.map.lock().expect("state mutex poisoned")
+    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.inner.lock().expect("state mutex poisoned")
     }
 
     fn get(&self, key: &[u8]) -> Option<Prim> {
-        self.lock().get(key).and_then(|v| v.value.clone())
+        self.lock().map.get(key).map(|v| v.value.clone())
     }
 
     fn set(&self, key: Vec<u8>, value: Option<Prim>) {
-        let mut map = self.lock();
-        let version = map.get(&key).map_or(0, |v| v.version) + 1;
-        map.insert(key, Versioned { value, version });
+        self.lock().put(key, value);
     }
 
     fn incr(&self, key: Vec<u8>, n: i64) -> Result<i64, IncrError> {
-        let mut map = self.lock();
-        let base: i64 = match map.get(&key).and_then(|v| v.value.as_ref()) {
+        let mut inner = self.lock();
+        let base: i64 = match inner.map.get(&key).map(|v| &v.value) {
             None => 0,
             Some(Prim::Num(x))
                 if x.fract() == 0.0 && *x >= i64::MIN as f64 && *x < i64::MAX as f64 =>
@@ -64,38 +91,24 @@ impl StateStore {
             Some(_) => return Err(IncrError::NotInteger),
         };
         let new = base.checked_add(n).ok_or(IncrError::Overflow)?;
-        let version = map.get(&key).map_or(0, |v| v.version) + 1;
-        map.insert(
-            key,
-            Versioned {
-                value: Some(Prim::Num(new as f64)),
-                version,
-            },
-        );
+        inner.put(key, Some(Prim::Num(new as f64)));
         Ok(new)
     }
 
     fn snapshot(&self, key: &[u8]) -> (Option<Prim>, u64) {
-        match self.lock().get(key) {
-            Some(v) => (v.value.clone(), v.version),
+        match self.lock().map.get(key) {
+            Some(v) => (Some(v.value.clone()), v.version),
             None => (None, 0),
         }
     }
 
     /// Store `value` iff the key's version is still `expected`.
     fn compare_and_set(&self, key: &[u8], expected: u64, value: Option<Prim>) -> bool {
-        let mut map = self.lock();
-        let current = map.get(key).map_or(0, |v| v.version);
-        if current != expected {
+        let mut inner = self.lock();
+        if inner.version(key) != expected {
             return false;
         }
-        map.insert(
-            key.to_vec(),
-            Versioned {
-                value,
-                version: current + 1,
-            },
-        );
+        inner.put(key.to_vec(), value);
         true
     }
 
@@ -278,20 +291,46 @@ mod tests {
 
         assert!(store.compare_and_set(b"k", 0, Some(Prim::Num(1.0))));
         let (_, v1) = store.snapshot(b"k");
-        assert_eq!(v1, 1);
+        assert!(v1 > 0);
 
         assert!(!store.compare_and_set(b"k", 0, Some(Prim::Num(9.0))));
-        assert!(store.compare_and_set(b"k", 1, Some(Prim::Num(2.0))));
-        assert_eq!(store.snapshot(b"k").1, 2);
+        assert!(store.compare_and_set(b"k", v1, Some(Prim::Num(2.0))));
+        assert!(
+            store.snapshot(b"k").1 > v1,
+            "every write gets a newer version"
+        );
     }
 
     #[test]
-    fn delete_keeps_a_bumped_version_to_avoid_aba() {
+    fn recreating_a_deleted_key_never_reuses_an_old_version() {
         let store = StateStore::default();
         store.set(b"k".to_vec(), Some(Prim::Num(5.0)));
+        let (_, held) = store.snapshot(b"k");
         store.set(b"k".to_vec(), None); // delete
         assert!(store.get(b"k").is_none());
-        assert!(!store.compare_and_set(b"k", 0, Some(Prim::Num(5.0))));
+        store.set(b"k".to_vec(), Some(Prim::Num(5.0))); // same value again
+        assert!(
+            !store.compare_and_set(b"k", held, Some(Prim::Num(6.0))),
+            "a version held across delete + recreate must be stale"
+        );
+    }
+
+    #[test]
+    fn deleting_frees_the_entry() {
+        let store = StateStore::default();
+        for i in 0..100u32 {
+            store.set(i.to_be_bytes().to_vec(), Some(Prim::Bool(true)));
+            store.set(i.to_be_bytes().to_vec(), None);
+        }
+        assert!(store.lock().map.is_empty(), "no tombstones are kept");
+    }
+
+    #[test]
+    fn an_absent_key_stays_at_version_zero() {
+        let store = StateStore::default();
+        store.set(b"k".to_vec(), None); // deleting nothing is a no-op
+        assert_eq!(store.snapshot(b"k"), (None, 0));
+        assert!(store.compare_and_set(b"k", 0, Some(Prim::Bool(true))));
     }
 
     #[test]
