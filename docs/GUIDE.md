@@ -64,6 +64,26 @@ assert(set:find("sid=xyz", 1, true) == 1)
 assert(set:find("HttpOnly", 1, true))
 ```
 
+### lur.html / lur.feed
+
+Scrape with CSS selectors; emit a feed.
+
+```lua
+local doc = lur.html.parse([[<ul><li><a href="/a">A</a></li><li><a href="/b">B</a></li></ul>]])
+local items = {}
+for _, a in ipairs(doc:select("li a")) do
+  items[#items + 1] = { title = a:text(), link = "https://e.com" .. a:attr("href") }
+end
+local xml = lur.feed.atom({ title = "E", link = "https://e.com" }, items)
+assert(xml:find("<title>A</title>", 1, true))
+
+local meta = { title = "E", link = "https://e.com" }
+assert(lur.feed.rss(meta, items):find("<rss", 1, true))
+assert(lur.json.decode(lur.feed.json(meta, items)).items[1].title == "A")
+```
+
+`lur.feed.rss` / `.atom` / `.json` take `(meta, items)`; item `date` is epoch milliseconds.
+
 ### lur.time
 
 Clocks and timestamp parsing missing from `os.*`, in integer milliseconds.
