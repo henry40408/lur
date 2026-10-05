@@ -55,6 +55,7 @@ assert_cmd = "2.2.2"
 criterion = "0.8.2"
 predicates = "3.1.4"
 tempfile = "3.27.0"
+wiremock = "0.6.5"
 
 [[bench]]
 name = "runtime"
