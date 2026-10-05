@@ -185,13 +185,21 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   Rejected: Postgres server-side timeouts (Postgres-only, and would kill legitimately slow
   transforms). `db.tx` closures hold `Weak` refs so cancellation drops the transaction
   immediately instead of waiting for Luau GC.
+- **`lur.fs` opens files beneath a root's directory handle (`cap-std`)** instead of
+  canonicalize-then-`std::fs::open`, which had a TOCTOU window (a symlink swapped in after
+  the check). Canonicalizing still picks the granting root, but the open is confined to that
+  root by the OS, so losing the race can only reach files inside it. Rejected: hand-rolled
+  `openat2` (`unsafe`, no macOS equivalent). Consequences: a file root is a handle on its
+  parent plus the one allowed name; `--loose` is a handle on `/` (one code path); a dangling
+  symlink that points inside the root can be written through, one pointing out is refused
+  at open time. Cost: +17 KB binary.
 - **`db.tx` takes the write lock on SQLite even when read-only** (`BEGIN IMMEDIATE`) —
   deliberate.
 
 ## Known limitations / deferred
 
-- Sandbox: no OS-level hardening (landlock/seccomp); `lur.fs` has a canonicalize-then-open
-  TOCTOU window (needs `openat2`/`O_NOFOLLOW`).
+- Sandbox: no OS-level hardening (landlock/seccomp). The SQLite `--db` path is opened
+  outside `lur.fs`'s confinement.
 - Allowlists: no subdomain wildcards, CIDR ranges, path globs, or env-name prefixes.
 - A `lur.db` write inside a `kv.update` transform blocks on the lock; on Postgres it hangs
   unless `--timeout` is set.

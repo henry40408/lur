@@ -86,7 +86,9 @@ validate their own arguments.
 [`Policy`](src/policy.rs) is deny-by-default, shared into callbacks via `Arc`. `strict()`
 grants nothing; `loose()` grants everything. Enforced at each capability:
 
-- **`lur.fs`** canonicalizes before the allowlist check, defeating `..` and symlink escapes.
+- **`lur.fs`** canonicalizes to pick the granting root (defeating `..` and symlink escapes),
+  then opens the file beneath that root's `cap-std` directory handle, so a symlink swapped in
+  after the check cannot lead out of the root.
 - **`lur.http`** checks every request and redirect hop against the net allowlist, uses a DNS
   resolver rejecting loopback/private/link-local IPs unless `--allow-private` (SSRF guard),
   caps redirects (10) and the buffered body (`--max-http-body`), and always verifies TLS.

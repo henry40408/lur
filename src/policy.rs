@@ -4,12 +4,17 @@
 //! before the prefix check, so `..` or a symlink cannot escape a granted root;
 //! a directory root grants its subtree, a file root only that file.
 //!
-//! Known limitation: canonicalize-then-open has a TOCTOU window (a symlink
-//! swapped after the check); mitigation is deferred to future OS-level hardening.
+//! Each root is held as an open directory handle (`cap-std`). `lur.fs` opens
+//! files through [`Beneath`], so a symlink swapped in after the check cannot lead
+//! out of the root: the check only picks which root, the OS enforces confinement.
 
+use std::ffi::{OsStr, OsString};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use cap_std::ambient_authority;
+use cap_std::fs::Dir;
 use thiserror::Error;
 
 /// `host` (any port) or `host:port`; `*` matches any host (still subject to
@@ -87,16 +92,80 @@ impl HostRule {
 
 #[derive(Clone, Debug, Default)]
 pub struct Policy {
-    /// Canonicalized.
-    fs_read: Vec<PathBuf>,
-    /// Canonicalized.
-    fs_write: Vec<PathBuf>,
+    fs_read: Vec<FsRoot>,
+    fs_write: Vec<FsRoot>,
     /// Exact names.
     env_allow: Vec<String>,
     env_allow_all: bool,
     net_allow: Vec<HostRule>,
     /// Off by default (SSRF guard).
     allow_private_net: bool,
+}
+
+/// A granted root: its canonical path plus an open directory handle, so access
+/// can be confined to it by the OS rather than by re-resolving a path string.
+#[derive(Clone, Debug)]
+struct FsRoot {
+    /// Canonicalized.
+    path: PathBuf,
+    /// The root itself, or for a file root the file's parent directory.
+    dir: Arc<Dir>,
+    /// Set for a file root: the only name reachable through `dir`.
+    file: Option<OsString>,
+}
+
+impl FsRoot {
+    fn open(path: &Path) -> std::io::Result<Self> {
+        let path = std::fs::canonicalize(path)?;
+        let (dir_path, file) = if path.is_dir() {
+            (path.as_path(), None)
+        } else {
+            let parent = path.parent().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "root has no parent")
+            })?;
+            (parent, path.file_name().map(OsStr::to_os_string))
+        };
+        let dir = Arc::new(Dir::open_ambient_dir(dir_path, ambient_authority())?);
+        Ok(Self { path, dir, file })
+    }
+
+    fn beneath(&self, resolved: &Path) -> Beneath {
+        Beneath {
+            dir: Arc::clone(&self.dir),
+            rel: self.relative(resolved),
+        }
+    }
+
+    /// `resolved` (canonical, already known to be under this root) relative to
+    /// the directory handle.
+    fn relative(&self, resolved: &Path) -> PathBuf {
+        match &self.file {
+            Some(name) => PathBuf::from(name),
+            None => match resolved.strip_prefix(&self.path) {
+                Ok(rel) if !rel.as_os_str().is_empty() => rel.to_path_buf(),
+                _ => PathBuf::from("."),
+            },
+        }
+    }
+}
+
+/// A path confined beneath a granted root's directory handle. The OS refuses to
+/// follow `..` or symlinks out of the root, so swapping a path component after
+/// the policy check cannot reach outside it.
+#[derive(Debug)]
+pub struct Beneath {
+    dir: Arc<Dir>,
+    rel: PathBuf,
+}
+
+impl Beneath {
+    pub fn read(&self) -> std::io::Result<Vec<u8>> {
+        self.dir.read(&self.rel)
+    }
+
+    pub fn write(&self, data: &[u8]) -> std::io::Result<()> {
+        self.dir.write(&self.rel, data)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -132,8 +201,8 @@ impl Policy {
     /// Roots are canonicalized; a missing root is an error.
     pub fn from_roots(read: &[PathBuf], write: &[PathBuf]) -> std::io::Result<Self> {
         Ok(Self {
-            fs_read: canonicalize_all(read)?,
-            fs_write: canonicalize_all(write)?,
+            fs_read: open_roots(read)?,
+            fs_write: open_roots(write)?,
             ..Default::default()
         })
     }
@@ -196,25 +265,41 @@ impl Policy {
         }
     }
 
-    /// Returns the canonicalized path to open.
+    /// Returns the canonicalized path that was checked.
     pub fn allows_read(&self, path: &Path) -> Result<PathBuf, PolicyError> {
         let resolved = resolve_existing(path)?;
-        gate("read", &self.fs_read, resolved)
+        gate("read", &self.fs_read, resolved).map(|(resolved, _)| resolved)
     }
 
     /// A new file resolves through its parent. Returns the canonicalized path.
     pub fn allows_write(&self, path: &Path) -> Result<PathBuf, PolicyError> {
         let resolved = resolve_for_write(path)?;
-        gate("write", &self.fs_write, resolved)
+        gate("write", &self.fs_write, resolved).map(|(resolved, _)| resolved)
+    }
+
+    /// Like [`allows_read`](Self::allows_read), but returns a handle that opens
+    /// the file confined to the granting root (no check-then-open window).
+    pub fn open_read(&self, path: &Path) -> Result<Beneath, PolicyError> {
+        let resolved = resolve_existing(path)?;
+        gate("read", &self.fs_read, resolved).map(|(resolved, root)| root.beneath(&resolved))
+    }
+
+    /// Write counterpart of [`open_read`](Self::open_read).
+    pub fn open_write(&self, path: &Path) -> Result<Beneath, PolicyError> {
+        let resolved = resolve_for_write(path)?;
+        gate("write", &self.fs_write, resolved).map(|(resolved, root)| root.beneath(&resolved))
     }
 }
 
 /// `starts_with` is component-wise, so root `/a/b` does not match `/a/bc`.
-fn gate(op: &'static str, roots: &[PathBuf], resolved: PathBuf) -> Result<PathBuf, PolicyError> {
-    if roots.iter().any(|root| resolved.starts_with(root)) {
-        Ok(resolved)
-    } else {
-        Err(PolicyError::Denied { op, path: resolved })
+fn gate<'a>(
+    op: &'static str,
+    roots: &'a [FsRoot],
+    resolved: PathBuf,
+) -> Result<(PathBuf, &'a FsRoot), PolicyError> {
+    match roots.iter().find(|root| resolved.starts_with(&root.path)) {
+        Some(root) => Ok((resolved, root)),
+        None => Err(PolicyError::Denied { op, path: resolved }),
     }
 }
 
@@ -280,8 +365,8 @@ fn is_link_local(ip: Ipv6Addr) -> bool {
     ip.segments()[0] & 0xffc0 == 0xfe80
 }
 
-fn canonicalize_all(roots: &[PathBuf]) -> std::io::Result<Vec<PathBuf>> {
-    roots.iter().map(std::fs::canonicalize).collect()
+fn open_roots(roots: &[PathBuf]) -> std::io::Result<Vec<FsRoot>> {
+    roots.iter().map(|r| FsRoot::open(r)).collect()
 }
 
 fn resolve_existing(path: &Path) -> Result<PathBuf, PolicyError> {
@@ -296,17 +381,8 @@ fn resolve_for_write(path: &Path) -> Result<PathBuf, PolicyError> {
     if let Ok(existing) = std::fs::canonicalize(path) {
         return Ok(existing);
     }
-    // A dangling symlink fails canonicalize, but writing through it would
-    // create its target outside the granted root.
-    if std::fs::symlink_metadata(path).is_ok() {
-        return Err(PolicyError::Resolve {
-            path: path.to_path_buf(),
-            source: std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "path is a dangling symlink",
-            ),
-        });
-    }
+    // A dangling symlink lands here and is checked as the link itself; the
+    // directory handle then refuses to follow it out of the root.
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
     let file_name = path.file_name();
     match (parent, file_name) {
@@ -341,7 +417,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn write_through_dangling_symlink_is_rejected() {
+    fn write_through_dangling_symlink_out_of_root_is_rejected() {
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let target = outside.path().join("escaped.txt");
@@ -349,10 +425,56 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
         let p = Policy::from_roots(&[], &[root.path().to_path_buf()]).unwrap();
-        assert!(matches!(
-            p.allows_write(&link),
-            Err(PolicyError::Resolve { .. })
-        ));
+        let file = p.open_write(&link).unwrap();
+        assert!(file.write(b"x").is_err());
+        assert!(!target.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_through_dangling_symlink_inside_root_is_allowed() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("made.txt");
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink("made.txt", &link).unwrap();
+
+        let p = Policy::from_roots(&[], &[root.path().to_path_buf()]).unwrap();
+        p.open_write(&link).unwrap().write(b"x").unwrap();
+        assert_eq!(std::fs::read(target).unwrap(), b"x");
+    }
+
+    /// The race the handle closes: a path that passed the check is swapped for a
+    /// symlink out of the root before the open.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_swapped_in_after_the_check_cannot_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), b"s").unwrap();
+        let sub = root.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("f"), b"ok").unwrap();
+
+        let p = Policy::from_roots(&[root.path().to_path_buf()], &[]).unwrap();
+        let file = p.open_read(&sub.join("f")).unwrap(); // check passes here
+        std::fs::remove_dir_all(&sub).unwrap();
+        std::os::unix::fs::symlink(outside.path(), &sub).unwrap();
+        std::fs::write(outside.path().join("f"), b"leaked").unwrap();
+
+        assert!(file.read().is_err());
+    }
+
+    #[test]
+    fn file_root_reaches_only_that_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+
+        let p = Policy::from_roots(std::slice::from_ref(&a), &[]).unwrap();
+        assert_eq!(p.open_read(&a).unwrap().read().unwrap(), b"a");
+        assert!(matches!(p.open_read(&b), Err(PolicyError::Denied { .. })));
     }
 
     #[test]
