@@ -237,9 +237,11 @@ would sit idle-in-transaction holding locks). Explicit COMMIT/ROLLBACK disarms t
 ### `lur.state`
 
 [`capabilities/state.rs`](src/capabilities/state.rs): a process-wide host-side `StateStore`
-shared by all pooled VMs (via `RuntimeConfig::state`), **primitives only**. Each key carries a
-version bumped on every write, including deletes (prevents ABA). `update` is an optimistic
-CAS loop whose user function runs with no host lock held; conflicts retry.
+shared by all pooled VMs (via `RuntimeConfig::state`), **primitives only**. Each write takes
+a fresh version from one store-wide counter that only goes up, so a key deleted and recreated
+never reuses a version a reader might hold (prevents ABA) and deleted keys leave no entry
+behind (an absent key is version 0). `update` is an optimistic CAS loop whose user function
+runs with no host lock held; conflicts retry.
 
 ## Async core
 
