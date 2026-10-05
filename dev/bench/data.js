@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791170032113,
+  "lastUpdate": 1791171136373,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3653,6 +3653,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 272892,
             "range": "± 12368",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3c65d02f5d44fc37d38b20325a643cac92123688",
+          "message": "feat: add lur.xml for parsing RSS, Atom and other XML (#132)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T11:30:14+08:00",
+          "tree_id": "8c616abe0f82a200d78c26a3eba081839c950c99",
+          "url": "https://github.com/henry40408/lur/commit/3c65d02f5d44fc37d38b20325a643cac92123688"
+        },
+        "date": 1791171135609,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 157334,
+            "range": "± 8619",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 2979,
+            "range": "± 221",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 281713,
+            "range": "± 8303",
             "unit": "ns/iter"
           }
         ]
