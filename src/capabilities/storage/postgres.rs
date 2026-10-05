@@ -6,7 +6,6 @@
 use std::str::FromStr;
 
 use mlua::{Error, Function, Lua, Table, Value};
-use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgArguments, PgConnectOptions, PgPool, PgPoolOptions, PgRow};
 use sqlx::{Column, Postgres, Row, TypeInfo, ValueRef};
 
@@ -456,17 +455,13 @@ impl PgBackend {
     /// 40001 (at a statement or at COMMIT) and are not retried: the body may have
     /// external side effects.
     pub(crate) async fn begin(&self) -> mlua::Result<PgTransaction> {
-        let mut conn = self
+        let tx = self
             .pool
-            .acquire()
-            .await
-            .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
-        sqlx::query("BEGIN ISOLATION LEVEL SERIALIZABLE")
-            .execute(&mut *conn)
+            .begin_with("BEGIN ISOLATION LEVEL SERIALIZABLE")
             .await
             .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
         Ok(PgTransaction {
-            conn: tokio::sync::Mutex::new(Some(conn)),
+            tx: tokio::sync::Mutex::new(Some(tx)),
         })
     }
 
@@ -479,19 +474,14 @@ impl PgBackend {
         func: Function,
         ttl_ms: Option<i64>,
     ) -> mlua::Result<Value> {
-        let conn = self
+        let mut tx = self
             .pool
-            .acquire()
-            .await
-            .map_err(|e| Error::runtime(format!("lur.kv.update: begin: {e}")))?;
-        let mut tx = PinnedTx::new(conn);
-        sqlx::query("BEGIN ISOLATION LEVEL SERIALIZABLE")
-            .execute(&mut **tx.conn())
+            .begin_with("BEGIN ISOLATION LEVEL SERIALIZABLE")
             .await
             .map_err(|e| Error::runtime(format!("lur.kv.update: begin: {e}")))?;
 
-        // Cancellation anywhere in here drops `tx`, which rolls back.
-        let result: mlua::Result<Value> = async {
+        // Cancellation or an error anywhere in here drops `tx`, which rolls back.
+        async {
             // An expired row reads as absent; a live one keeps its expiry
             // unless `ttl_ms` replaces it.
             let (cur, cur_expiry): (Value, Option<i64>) = match sqlx::query(
@@ -500,7 +490,7 @@ impl PgBackend {
             )
             .bind(&key)
             .bind(now_ms())
-            .fetch_optional(&mut **tx.conn())
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| map_pg_error("lur.kv.update", &e))?
             {
@@ -522,7 +512,7 @@ impl PgBackend {
                 Value::Nil => {
                     sqlx::query("DELETE FROM lur_kv WHERE key = $1")
                         .bind(&key)
-                        .execute(&mut **tx.conn())
+                        .execute(&mut *tx)
                         .await
                         .map_err(|e| map_pg_error("lur.kv.update", &e))?;
                 }
@@ -537,7 +527,7 @@ impl PgBackend {
                     .bind(&key)
                     .bind(s.as_bytes().to_vec())
                     .bind(expires_at)
-                    .execute(&mut **tx.conn())
+                    .execute(&mut *tx)
                     .await
                     .map_err(|e| map_pg_error("lur.kv.update", &e))?;
                 }
@@ -548,76 +538,19 @@ impl PgBackend {
                     )));
                 }
             }
-            sqlx::query("COMMIT")
-                .execute(&mut **tx.conn())
+            tx.commit()
                 .await
                 .map_err(|e| map_pg_error("lur.kv.update: commit", &e))?;
             Ok(new)
         }
-        .await;
-
-        match result {
-            Ok(v) => {
-                tx.disarm();
-                Ok(v)
-            }
-            Err(e) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut **tx.conn()).await;
-                tx.disarm();
-                Err(e)
-            }
-        }
+        .await
     }
 }
 
-/// Detached best-effort ROLLBACK for a transaction left open by cancellation,
-/// so the connection doesn't sit idle-in-transaction holding locks. Without a
-/// runtime, closes the connection instead.
-fn spawn_rollback(conn: PoolConnection<Postgres>) {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            handle.spawn(async move {
-                let mut conn = conn;
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-            });
-        }
-        Err(_) => {
-            drop(conn.detach());
-        }
-    }
-}
-
-/// Pinned connection with an open transaction; rolls back on drop unless
-/// `disarm`ed after an explicit COMMIT/ROLLBACK.
-struct PinnedTx {
-    conn: Option<PoolConnection<Postgres>>,
-}
-
-impl PinnedTx {
-    fn new(conn: PoolConnection<Postgres>) -> Self {
-        Self { conn: Some(conn) }
-    }
-
-    fn conn(&mut self) -> &mut PoolConnection<Postgres> {
-        self.conn.as_mut().expect("connection present until disarm")
-    }
-
-    fn disarm(mut self) {
-        self.conn = None;
-    }
-}
-
-impl Drop for PinnedTx {
-    fn drop(&mut self) {
-        if let Some(conn) = self.conn.take() {
-            spawn_rollback(conn);
-        }
-    }
-}
-
-/// Pinned-connection write transaction; calls after commit/rollback error.
+/// Write transaction; calls after commit/rollback error. Dropping it (e.g. on
+/// cancellation) rolls back via sqlx.
 pub(crate) struct PgTransaction {
-    conn: tokio::sync::Mutex<Option<PoolConnection<Postgres>>>,
+    tx: tokio::sync::Mutex<Option<sqlx::Transaction<'static, Postgres>>>,
 }
 
 impl PgTransaction {
@@ -627,12 +560,12 @@ impl PgTransaction {
         sql: String,
         params: Vec<Value>,
     ) -> mlua::Result<super::ExecResult> {
-        let mut guard = self.conn.lock().await;
-        let conn = guard
+        let mut guard = self.tx.lock().await;
+        let tx = guard
             .as_mut()
             .ok_or_else(|| Error::runtime("lur.db.tx: transaction already finished"))?;
         let res = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql.as_str())), &params)?
-            .execute(&mut **conn)
+            .execute(&mut **tx)
             .await
             .map_err(|e| map_pg_error("lur.db.tx exec", &e))?;
         Ok(super::ExecResult {
@@ -647,12 +580,12 @@ impl PgTransaction {
         sql: String,
         params: Vec<Value>,
     ) -> mlua::Result<Table> {
-        let mut guard = self.conn.lock().await;
-        let conn = guard
+        let mut guard = self.tx.lock().await;
+        let tx = guard
             .as_mut()
             .ok_or_else(|| Error::runtime("lur.db.tx: transaction already finished"))?;
         let rows = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql.as_str())), &params)?
-            .fetch_all(&mut **conn)
+            .fetch_all(&mut **tx)
             .await
             .map_err(|e| map_pg_error("lur.db.tx query", &e))?;
         let out = lua.create_table()?;
@@ -663,29 +596,20 @@ impl PgTransaction {
     }
 
     pub(crate) async fn commit(&self) -> mlua::Result<()> {
-        let mut guard = self.conn.lock().await;
-        if let Some(mut conn) = guard.take()
-            && let Err(e) = sqlx::query("COMMIT").execute(&mut *conn).await
-        {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-            return Err(map_pg_error("lur.db.tx: commit", &e));
+        let mut guard = self.tx.lock().await;
+        if let Some(tx) = guard.take() {
+            // A failed commit drops `tx`, which rolls back.
+            tx.commit()
+                .await
+                .map_err(|e| map_pg_error("lur.db.tx: commit", &e))?;
         }
         Ok(())
     }
 
     pub(crate) async fn rollback(&self) {
-        let mut guard = self.conn.lock().await;
-        if let Some(mut conn) = guard.take() {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-        }
-    }
-}
-
-impl Drop for PgTransaction {
-    /// Roll back a transaction abandoned by cancellation.
-    fn drop(&mut self) {
-        if let Some(conn) = self.conn.get_mut().take() {
-            spawn_rollback(conn);
+        let mut guard = self.tx.lock().await;
+        if let Some(tx) = guard.take() {
+            let _ = tx.rollback().await;
         }
     }
 }

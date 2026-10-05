@@ -4,7 +4,6 @@ use std::future::Future;
 use std::path::Path;
 
 use mlua::{Error, Function, Lua, Table, Value};
-use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{
     SqliteArguments, SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions,
     SqliteRow,
@@ -278,15 +277,11 @@ impl SqliteBackend {
 
     /// `BEGIN IMMEDIATE` on a pinned connection, retrying on busy.
     pub(crate) async fn begin(&self) -> mlua::Result<SqliteTransaction> {
-        let conn = retry_busy(|| async {
-            let mut conn = self.pool.acquire().await?;
-            sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
-            Ok(conn)
-        })
-        .await
-        .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
+        let tx = retry_busy(|| self.pool.begin_with("BEGIN IMMEDIATE"))
+            .await
+            .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
         Ok(SqliteTransaction {
-            conn: tokio::sync::Mutex::new(Some(conn)),
+            tx: tokio::sync::Mutex::new(Some(tx)),
         })
     }
 
@@ -550,17 +545,13 @@ impl SqliteBackend {
         func: Function,
         ttl_ms: Option<i64>,
     ) -> mlua::Result<Value> {
-        let conn = retry_busy(|| async {
-            let mut conn = self.pool.acquire().await?;
-            sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
-            Ok(conn)
-        })
-        .await
-        .map_err(|e| Error::runtime(format!("lur.kv.update: begin: {e}")))?;
-        let mut tx = PinnedTx::new(conn);
+        let mut tx = retry_busy(|| self.pool.begin_with("BEGIN IMMEDIATE"))
+            .await
+            .map_err(|e| Error::runtime(format!("lur.kv.update: begin: {e}")))?;
 
-        // Cancellation anywhere in here drops `tx`, which rolls back.
-        let result: mlua::Result<Value> = async {
+        // An error return or a cancellation anywhere in here drops `tx`, which
+        // queues a rollback before the connection is used again.
+        async {
             // An expired row reads as absent; a live one keeps its expiry
             // unless `ttl_ms` replaces it.
             let (cur, cur_expiry): (Value, Option<i64>) = match sqlx::query(
@@ -569,7 +560,7 @@ impl SqliteBackend {
             )
             .bind(&key)
             .bind(now_ms())
-            .fetch_optional(&mut **tx.conn())
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?
             {
@@ -592,7 +583,7 @@ impl SqliteBackend {
                 Value::Nil => {
                     sqlx::query("DELETE FROM lur_kv WHERE key = ?")
                         .bind(&key)
-                        .execute(&mut **tx.conn())
+                        .execute(&mut *tx)
                         .await
                         .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
                 }
@@ -604,7 +595,7 @@ impl SqliteBackend {
                     .bind(&key)
                     .bind(s.as_bytes().to_vec())
                     .bind(expires_at)
-                    .execute(&mut **tx.conn())
+                    .execute(&mut *tx)
                     .await
                     .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
                 }
@@ -615,76 +606,19 @@ impl SqliteBackend {
                     )));
                 }
             }
-            sqlx::query("COMMIT")
-                .execute(&mut **tx.conn())
+            tx.commit()
                 .await
                 .map_err(|e| Error::runtime(format!("lur.kv.update: commit: {e}")))?;
             Ok(new)
         }
-        .await;
-
-        match result {
-            Ok(v) => {
-                tx.disarm();
-                Ok(v)
-            }
-            Err(e) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut **tx.conn()).await;
-                tx.disarm();
-                Err(e)
-            }
-        }
+        .await
     }
 }
 
-/// Detached best-effort ROLLBACK for a transaction left open by cancellation,
-/// so the connection doesn't return to the pool mid-`BEGIN`. Without a runtime,
-/// closes the connection instead (also releasing the lock).
-fn spawn_rollback(conn: PoolConnection<Sqlite>) {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            handle.spawn(async move {
-                let mut conn = conn;
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-            });
-        }
-        Err(_) => {
-            drop(conn.detach());
-        }
-    }
-}
-
-/// Pinned connection with an open transaction; rolls back on drop unless
-/// `disarm`ed after an explicit COMMIT/ROLLBACK.
-struct PinnedTx {
-    conn: Option<PoolConnection<Sqlite>>,
-}
-
-impl PinnedTx {
-    fn new(conn: PoolConnection<Sqlite>) -> Self {
-        Self { conn: Some(conn) }
-    }
-
-    fn conn(&mut self) -> &mut PoolConnection<Sqlite> {
-        self.conn.as_mut().expect("connection present until disarm")
-    }
-
-    fn disarm(mut self) {
-        self.conn = None;
-    }
-}
-
-impl Drop for PinnedTx {
-    fn drop(&mut self) {
-        if let Some(conn) = self.conn.take() {
-            spawn_rollback(conn);
-        }
-    }
-}
-
-/// Pinned-connection write transaction; calls after commit/rollback error.
+/// Write transaction held across Lua calls; calls after commit/rollback error.
+/// Dropping it (e.g. on cancellation) rolls back via sqlx.
 pub(crate) struct SqliteTransaction {
-    conn: tokio::sync::Mutex<Option<PoolConnection<Sqlite>>>,
+    tx: tokio::sync::Mutex<Option<sqlx::Transaction<'static, Sqlite>>>,
 }
 
 impl SqliteTransaction {
@@ -694,12 +628,12 @@ impl SqliteTransaction {
         sql: String,
         params: Vec<Value>,
     ) -> mlua::Result<super::ExecResult> {
-        let mut guard = self.conn.lock().await;
-        let conn = guard
+        let mut guard = self.tx.lock().await;
+        let tx = guard
             .as_mut()
             .ok_or_else(|| Error::runtime("lur.db.tx: transaction already finished"))?;
         let res = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql.as_str())), &params)?
-            .execute(&mut **conn)
+            .execute(&mut **tx)
             .await
             .map_err(|e| Error::runtime(format!("lur.db.tx exec: {e}")))?;
         Ok(super::ExecResult {
@@ -714,12 +648,12 @@ impl SqliteTransaction {
         sql: String,
         params: Vec<Value>,
     ) -> mlua::Result<Table> {
-        let mut guard = self.conn.lock().await;
-        let conn = guard
+        let mut guard = self.tx.lock().await;
+        let tx = guard
             .as_mut()
             .ok_or_else(|| Error::runtime("lur.db.tx: transaction already finished"))?;
         let rows = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql.as_str())), &params)?
-            .fetch_all(&mut **conn)
+            .fetch_all(&mut **tx)
             .await
             .map_err(|e| Error::runtime(format!("lur.db.tx query: {e}")))?;
         let out = lua.create_table()?;
@@ -730,29 +664,20 @@ impl SqliteTransaction {
     }
 
     pub(crate) async fn commit(&self) -> mlua::Result<()> {
-        let mut guard = self.conn.lock().await;
-        if let Some(mut conn) = guard.take()
-            && let Err(e) = sqlx::query("COMMIT").execute(&mut *conn).await
-        {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-            return Err(Error::runtime(format!("lur.db.tx: commit: {e}")));
+        let mut guard = self.tx.lock().await;
+        if let Some(tx) = guard.take() {
+            // A failed commit drops `tx`, which rolls back.
+            tx.commit()
+                .await
+                .map_err(|e| Error::runtime(format!("lur.db.tx: commit: {e}")))?;
         }
         Ok(())
     }
 
     pub(crate) async fn rollback(&self) {
-        let mut guard = self.conn.lock().await;
-        if let Some(mut conn) = guard.take() {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-        }
-    }
-}
-
-impl Drop for SqliteTransaction {
-    /// Roll back a transaction abandoned by cancellation.
-    fn drop(&mut self) {
-        if let Some(conn) = self.conn.get_mut().take() {
-            spawn_rollback(conn);
+        let mut guard = self.tx.lock().await;
+        if let Some(tx) = guard.take() {
+            let _ = tx.rollback().await;
         }
     }
 }
@@ -948,7 +873,7 @@ mod tests {
                 _ = &mut fut => panic!("kv_update should park in the transform"),
                 () = entered.notified() => {}
             }
-            drop(fut); // cancel mid-transform → PinnedTx::drop rolls back
+            drop(fut); // cancel mid-transform → dropping the sqlx Transaction rolls back
 
             // Blocks until the detached rollback frees the sole connection.
             let got = backend.kv_get(&lua, "k".to_string()).await.unwrap();
