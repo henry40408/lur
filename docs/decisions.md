@@ -139,6 +139,16 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   it.
   Not done: serve-stale-on-error, stampede protection (N concurrent misses fetch N times),
   honoring `Cache-Control`/`ETag`, per-key invalidation.
+- **Release profile: `strip`, `lto = "fat"`, `codegen-units = 1`, never `panic = "abort"`.**
+  Measured on macOS arm64: 19.0 MB default, 15.8 MB with `strip` alone, 14.2 MB with fat
+  LTO, 13.4 MB with `codegen-units = 1`; `lto = "thin"` alone made it larger (19.8 MB).
+  Compile time barely moved (~45–80 s clean) and the benchmarks stayed level or slightly
+  faster. A Lua error raised from a Rust callback (e.g. `lur.json.decode("{bad")`) must
+  unwind through the Rust frames to reach `pcall` and the diagnostics renderer; with
+  `panic = "abort"` it is `panic in a function that cannot unwind` and exit 134 instead
+  (also `-3.7 MB`, which is why it is tempting). `strip`/LTO/`codegen-units` produced
+  byte-identical error output and tracebacks. Stripping drops Rust symbols, so a Rust
+  panic backtrace is only addresses; Lua tracebacks are unaffected.
 - **TLS via rustls**, not native-tls: no OpenSSL system dependency.
 - **SQLite retry** wraps only lock acquisition and single statements; re-running a
   transaction body was rejected (duplicated side effects).

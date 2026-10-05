@@ -55,6 +55,13 @@ tempfile = "3.27.0"
 name = "runtime"
 harness = false
 
+# Size over compile time (~19 MB -> ~13 MB). Never add `panic = "abort"`: mlua unwinds Lua
+# errors through Rust callbacks, so abort turns every error into a crash (see decisions.md).
+[profile.release]
+strip = true
+lto = "fat"
+codegen-units = 1
+
 # Self-maintained lint set (originally seeded from Embark Studios' rust-ecosystem
 # list). The bulk of the old itemised pedantic lints are now covered by the
 # `pedantic` group; only the noisy/low-signal ones are opted back out, plus the
