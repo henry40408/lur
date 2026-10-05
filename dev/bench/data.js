@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791129611124,
+  "lastUpdate": 1791161549219,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3485,6 +3485,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 163025,
             "range": "± 4339",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bb98882369d4e3860546be0c9bd14ba456eec7b0",
+          "message": "feat: add lur.html and lur.feed (#127)\n\n* feat: add lur.html and lur.feed for RSSHub-style scripts\n\nlur.html parses HTML and queries it with CSS selectors; lur.feed\nserializes RSS 2.0, Atom 1.0 and JSON Feed 1.1.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* chore(deny): allow MPL-2.0 for scraper's selectors/cssparser\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* refactor(feed): write RSS/Atom with quick-xml instead of string building\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T08:50:36+08:00",
+          "tree_id": "8edc5123cd291cd86cf6ebd5f1298c2dcd5f6638",
+          "url": "https://github.com/henry40408/lur/commit/bb98882369d4e3860546be0c9bd14ba456eec7b0"
+        },
+        "date": 1791161548781,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 324310,
+            "range": "± 3044",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5902,
+            "range": "± 124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208954,
+            "range": "± 2075",
             "unit": "ns/iter"
           }
         ]
