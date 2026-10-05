@@ -201,6 +201,18 @@ Lua error (catch with `pcall`).
   `monotonic_ms()` (for elapsed-time differences), `parse_rfc3339(text)` (UTC offset
   such as `Z` required) and `parse_http_date(text)` → epoch ms; malformed input raises.
   Divide by `1000` for `os.date`.
+- **`lur.html`** — `parse(html) → doc` (invalid UTF-8 is replaced). Nodes (the doc and its
+  elements) share methods: `select(css) → array`, `select_one(css) → node | nil`
+  (descendants only; invalid selector raises), `text()`, `html()`, `inner_html()`, `tag()`,
+  `attr(name) → string | nil`, `attrs()`, `parent()`, `children()` (elements only).
+  Call with `:`. Parsing follows the HTML5 algorithm, so `<td>` outside a `<table>` is dropped.
+- **`lur.feed`** — `rss(meta, items)`, `atom(meta, items)`, `json(meta, items)` → string
+  (RSS 2.0 / Atom 1.0 / JSON Feed 1.1). `meta`: `title` (required), `link`, `feed_url`,
+  `description`, `language`, `id`, `updated`. Each item: `title` (required), `link`, `guid`,
+  `date`, `updated`, `summary`, `content` (HTML), `author`, `categories` (array of strings),
+  `enclosure` (`{ url, type?, length? }`). Dates are epoch ms. RSS needs `meta.link`; Atom
+  needs `meta.id` or `meta.link`; Atom/JSON items need `guid` or `link`. XML is escaped and
+  characters illegal in XML 1.0 are dropped.
 - **`lur.log`** — `info`/`warn`/`error(msg)` write `<level>: <msg>\n` to stderr (stdout is
   the data channel).
 - **`lur.stdin`** — `read()` drains all bytes, `read(n)` reads up to `n` (`nil` at EOF),

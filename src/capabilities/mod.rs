@@ -9,7 +9,9 @@ pub mod cookie;
 pub mod crypto;
 pub mod db;
 pub mod env;
+pub mod feed;
 pub mod fs;
+pub mod html;
 pub mod http;
 pub mod io;
 pub mod json;
@@ -40,6 +42,8 @@ pub fn install(
     crypto::install(lua, &lur)?;
     cookie::install(lua, &lur)?;
     time::install(lua, &lur)?;
+    html::install(lua, &lur)?;
+    feed::install(lua, &lur)?;
     io::install(lua, &lur)?;
     fs::install(lua, &lur, config.policy.clone())?;
     http::install(lua, &lur, config.policy.clone(), config.max_http_body)?;

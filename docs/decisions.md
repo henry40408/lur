@@ -25,10 +25,22 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## Capabilities
 
-- **Pure-compute capabilities** (`json`, `base64`, `crypto`, `cookie`, `time`) are not
+- **Pure-compute capabilities** (`json`, `base64`, `crypto`, `cookie`, `time`, `html`, `feed`) are not
   policy-gated and take/return raw bytes; callers bridge with `hex`/`base64`.
 - **`lur.crypto`**: `hmac_md5` and `random_hex` omitted on purpose (extinct /
   composable). `constant_eq` returns early on length mismatch (length isn't secret).
+- **`lur.html`**: `scraper::Html` (and `dom_query`) are `!Send` because tendril uses
+  non-atomic refcounts, while mlua's `send` mode needs `Send` userdata. A node stores the
+  source text plus an `ego_tree::NodeId`; parsed trees live in an 8-slot per-thread LRU and
+  are re-parsed on a miss. Parsing is deterministic, so ids stay valid; the cache only
+  affects speed. Rejected: `unsafe impl Send` (denied by lint, unsound), eager conversion
+  to Lua tables (loses `select` on sub-nodes; fragment re-parse drops `<td>`). Known cost:
+  holding many live docs on one thread re-parses on access. Invalid UTF-8 input is replaced
+  rather than rejected, since it is usually a raw HTTP body.
+- **`lur.feed`**: escaped text instead of CDATA (no `]]>` edge case); no feed parsing
+  (`lur.xml`), HTML sanitizing, or date formatting API yet — dates are epoch ms and the
+  serializers format them. Atom/JSON items without `guid`/`link` raise instead of
+  inventing an id.
 - **`lur.cookie`**: no percent-encoding (a value containing `%` would be ambiguous).
   `SameSite=None` without `secure` raises rather than silently adding `Secure`.
 - **`lur.time`**: integer milliseconds everywhere; no formatting API since

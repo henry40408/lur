@@ -69,7 +69,7 @@ out-of-memory → `RunError::OutOfMemory`, past-deadline → `Timeout`, else `Sc
 [`capabilities::install`](src/capabilities/mod.rs) fills the flat `lur` table in fixed order:
 
 ```
-null · log · json · base64 · crypto · cookie · time · io · fs · http · env · db · kv · async · args · serve · state
+null · log · json · base64 · crypto · cookie · time · html · feed · io · fs · http · env · db · kv · async · args · serve · state
 ```
 
 `fs`/`http`/`env` get an `Arc<Policy>`; `db` gets the `--db` target and passes the shared
