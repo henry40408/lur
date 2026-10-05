@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791171838605,
+  "lastUpdate": 1791174605409,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3737,6 +3737,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 160394,
             "range": "± 569",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "65fa5c4973e2cf55bdbe4e2ba6f1349d4c6473b5",
+          "message": "fix: close idle keep-alive on shutdown and cap request bodies while reading (#134)\n\nUse hyper-util GracefulShutdown and tokio-util TaskTracker for draining,\nhttp_body_util::Limited for --max-body, and percent-encoding for decoding.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T12:27:19+08:00",
+          "tree_id": "934d9374379a1ad84d2e300969714b71f601a159",
+          "url": "https://github.com/henry40408/lur/commit/65fa5c4973e2cf55bdbe4e2ba6f1349d4c6473b5"
+        },
+        "date": 1791174605039,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 324405,
+            "range": "± 9082",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5472,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 206291,
+            "range": "± 11290",
             "unit": "ns/iter"
           }
         ]
