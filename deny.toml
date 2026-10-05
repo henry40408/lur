@@ -29,6 +29,8 @@ allow = [
     "ISC",
     "MIT",
     "MIT-0",
+    # File-level weak copyleft; only via scraper -> selectors/cssparser (unmodified).
+    "MPL-2.0",
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
