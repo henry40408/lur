@@ -51,8 +51,7 @@ pub(crate) fn ttl_ms_opt(opts: &Table, fname: &str) -> mlua::Result<Option<i64>>
     let ms = match opts.get::<Value>("ttl_ms")? {
         Value::Nil => return Ok(None),
         Value::Integer(i) => i,
-        // Whole floats only: `i64::MAX as f64` rounds up to 2^63, out of range.
-        Value::Number(f) if f.fract() == 0.0 && f < i64::MAX as f64 => f as i64,
+        Value::Number(f) => argcheck::whole_f64_to_i64(f).ok_or_else(bad)?,
         _ => return Err(bad()),
     };
     if ms <= 0 {
