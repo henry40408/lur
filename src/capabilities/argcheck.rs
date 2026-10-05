@@ -53,7 +53,7 @@ pub(crate) fn arg<T: FromLua>(
 
 #[cfg(test)]
 mod tests {
-    use super::{arg, integer_arg};
+    use super::{arg, integer_arg, whole_f64_to_i64};
     use mlua::{Lua, Value};
 
     #[test]
