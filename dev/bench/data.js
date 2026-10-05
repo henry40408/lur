@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791187215267,
+  "lastUpdate": 1791187905128,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3947,6 +3947,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 207248,
             "range": "± 4987",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "191103483fb5c6cde1653860d20ece0ba21d34e0",
+          "message": "test: replace hand-rolled TCP test servers with wiremock (#139)\n\nA shared tests/common helper runs wiremock on its own runtime so the http and http_cache tests stay synchronous. The proxy test keeps its raw listener, since it only records connections.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T16:09:01+08:00",
+          "tree_id": "b7b23ad057273a9e6a2ee4a43d103722511e8b95",
+          "url": "https://github.com/henry40408/lur/commit/191103483fb5c6cde1653860d20ece0ba21d34e0"
+        },
+        "date": 1791187904765,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 326131,
+            "range": "± 8765",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5455,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 232166,
+            "range": "± 8893",
             "unit": "ns/iter"
           }
         ]
