@@ -239,10 +239,13 @@ Lua error (catch with `pcall`).
   before the allowlist check, defeating `..` and symlink escapes.
 - **`lur.http`** — `request(method, url, opts?)` plus `get`/`post`/`put`/`patch`/
   `delete`/`head(url, opts?)`. `opts`: `headers`, `query`, `body` **or** `json`, `timeout`
-  (ms). Returns `{ status, body, headers, headers_all, json() }`. Every request and
+  (ms), `cache`. Returns `{ status, body, headers, headers_all, json() }`. Every request and
   redirect hop is checked against the allowlist and the private-IP (SSRF) guard; TLS is
   always verified; the body is capped by `--max-http-body`. Proxy environment variables
   (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) are ignored.
+  `cache = { ttl_ms = 60000, vary? }` (GET only, requires `--db`) stores 2xx responses
+  in `lur.kv` and adds `res.cached`; requests with `Authorization`/`Cookie` bypass it
+  unless named in `vary`, and the policy check runs before the lookup.
 - **`lur.env`** — `lur.env(name) → string | nil`; `nil` for both denied and unset, so it
   is not an oracle.
 
@@ -260,7 +263,11 @@ native to the backend.
   `add(key, value) → bool` (set-if-absent), `cas(key, expected, new) → bool` (`nil`
   expected = must be absent, `nil` new = delete), `incr`/`decr(key, n?)` (integer
   counters, step 1; `get` returns them as decimal strings), and `update(key, fn)`
-  (read-modify-write; return `nil` to delete).
+  (read-modify-write; return `nil` to delete). Expiry: pass `{ ttl_ms = n }` (positive
+  milliseconds) as the last argument of `set`/`add`/`cas`/`update`/`incr`/`decr`; expired
+  keys read as absent. `set` without `ttl_ms` clears the expiry, `cas`/`update` keep it,
+  `incr`/`decr` set it only when the key has none (fixed window; `renew_ttl = true`
+  resets it every call). `expire(key, ms) → bool`; `ttl(key) → ms, exists`.
 - **SQLite contention** — write transactions use `BEGIN IMMEDIATE`; a 5 s `busy_timeout`
   plus up to 5 jittered attempts on single-statement writes, lock acquisition, and open
   absorb "database is locked".

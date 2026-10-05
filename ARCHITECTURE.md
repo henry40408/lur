@@ -69,7 +69,7 @@ out-of-memory → `RunError::OutOfMemory`, past-deadline → `Timeout`, else `Sc
 [`capabilities::install`](src/capabilities/mod.rs) fills the flat `lur` table in fixed order:
 
 ```
-null · log · json · base64 · crypto · cookie · time · url · html · feed · io · fs · http · env · db · kv · async · args · serve · state
+null · log · json · base64 · crypto · cookie · time · url · html · feed · io · fs · env · db · http · kv · async · args · serve · state
 ```
 
 `fs`/`http`/`env` get an `Arc<Policy>`; `db` gets the `--db` target and passes the shared
@@ -178,13 +178,24 @@ original remains, bounded by `--shutdown-grace`. Stragglers are aborted when the
 - **`lur.kv`.** `add`/`cas`/`incr`/`decr` are single statements; `update` (read-modify-write)
   uses the backend's `kv_update` transaction. `get` always returns bytes (counters as
   decimal strings).
+- **Expiry.** Every `lur_kv` row has a nullable `expires_at` (epoch ms; `NULL` = never). A row
+  with `expires_at <= now` is absent for every op, and `now` is read in Rust (`now_ms`), never
+  from the database clock, so SQLite and Postgres agree. Expired rows are deleted when the pool
+  opens and, at most hourly (`PurgeClock`), after a `set`/`add`/`incr`; reads don't delete.
+  `open` adds the column to older tables (SQLite: `pragma table_info` check, tolerating a lost
+  race; Postgres: `ADD COLUMN IF NOT EXISTS`). `incr` is one upsert that restarts an expired
+  row and sets the expiry only if the row has none (or `renew_ttl`).
+- **`lur.http` cache** reads/writes `kv_get`/`kv_set` directly (`http::install` gets the
+  `Shared` handle, so `db` installs before `http`). Policy check → build request → key →
+  lookup; the key is a SHA-256 of method, final URL and all request headers.
 - **Invariants:** kv counters are integers; `kv.get` returns bytes; `db.tx`/`kv.update` are
   write transactions; integer steps (`kv.incr`/`decr`, `state.incr`/`decr`) reject fractions.
 
 ### SQLite (`storage/sqlite.rs`)
 
 - `SqliteBackend` owns a lazily opened `sqlx` pool (WAL, file auto-created) and
-  `lur_kv(key TEXT PRIMARY KEY, value BLOB)` — counters are stored as SQLite integers.
+  `lur_kv(key TEXT PRIMARY KEY, value BLOB, expires_at INTEGER)` — counters are stored as
+  SQLite integers.
 - Write transactions (`db.tx`, `kv.update`) use `BEGIN IMMEDIATE`.
 - Lock contention has two complementary layers: a 5 s `busy_timeout` waits out ordinary
   write-lock contention; `retry_busy` (5 attempts, full-jitter backoff) covers locks the busy
@@ -197,7 +208,8 @@ original remains, bounded by `--shutdown-grace`. Stragglers are aborted when the
 
 - `PgBackend` owns the `PgPool`, `$n` binding, row→Lua mapping (core scalar types only; other
   columns raise a cast-to-text error), and `lur_kv(key TEXT PRIMARY KEY, kind SMALLINT,
-  bytes BYTEA, num BIGINT)` — `kind = 0` opaque bytes, `kind = 1` integer counter in `num`.
+  bytes BYTEA, num BIGINT, expires_at BIGINT)` — `kind = 0` opaque bytes, `kind = 1` integer
+  counter in `num`.
 - **Isolation:** single statements run at `READ COMMITTED` (atomic, no retry). `db.tx` and
   `kv.update` use `SERIALIZABLE` on a pinned connection; conflicts abort with SQLSTATE
   `40001`, surfaced with a stable, locale-independent message (`map_pg_error`) rather than

@@ -48,9 +48,15 @@ pub fn install(
     feed::install(lua, &lur)?;
     io::install(lua, &lur)?;
     fs::install(lua, &lur, config.policy.clone())?;
-    http::install(lua, &lur, config.policy.clone(), config.max_http_body)?;
     env::install(lua, &lur, config.policy.clone())?;
     let shared = db::install(lua, &lur, config.db_path.clone())?;
+    http::install(
+        lua,
+        &lur,
+        config.policy.clone(),
+        config.max_http_body,
+        &shared,
+    )?;
     kv::install(lua, &lur, &shared)?;
     async_ops::install(lua, &lur, config.max_concurrency)?;
     args::install(lua, &lur, &config.args)?;

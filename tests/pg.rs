@@ -212,6 +212,130 @@ fn pg_kv_incr_decr_and_integer_guard() {
 }
 
 #[test]
+fn pg_kv_ttl_set_add_and_ttl_report() {
+    let Some(rt) = pg_runtime() else { return };
+    let k = unique("pgttl");
+    let p = unique("pgperm");
+    rt.run(&format!(
+        "lur.kv.set('{k}', 'v', {{ ttl_ms = 100 }})\n\
+         assert(lur.kv.get('{k}') == 'v', 'live before expiry')\n\
+         local ms, exists = lur.kv.ttl('{k}')\n\
+         assert(exists == true and ms > 0 and ms <= 100, 'remaining')\n\
+         assert(lur.kv.add('{k}', 'x') == false, 'live key blocks add')\n\
+         lur.async.sleep(250)\n\
+         assert(lur.kv.get('{k}') == nil, 'gone after expiry')\n\
+         ms, exists = lur.kv.ttl('{k}')\n\
+         assert(ms == nil and exists == false, 'expired reads as absent')\n\
+         assert(lur.kv.add('{k}', 'y', {{ ttl_ms = 5000 }}) == true, 'add over expired')\n\
+         lur.kv.set('{k}', 'z')\n\
+         ms, exists = lur.kv.ttl('{k}')\n\
+         assert(ms == nil and exists == true, 'plain set clears the expiry')\n\
+         lur.kv.set('{p}', 'v')\n\
+         assert(lur.kv.expire('{p}', 5000) == true)\n\
+         assert(lur.kv.ttl('{p}') > 0)\n\
+         assert(lur.kv.expire('nope-{p}', 5000) == false)\n\
+         lur.kv.delete('{k}'); lur.kv.delete('{p}')"
+    ))
+    .expect("pg kv ttl on set/add/expire");
+}
+
+#[test]
+fn pg_kv_incr_ttl_fixed_window_renew_and_heal() {
+    let Some(rt) = pg_runtime() else { return };
+    let w = unique("pgwin");
+    let r = unique("pgren");
+    let h = unique("pgheal");
+    rt.run(&format!(
+        "assert(lur.kv.incr('{w}', 1, {{ ttl_ms = 600 }}) == 1)\n\
+         lur.async.sleep(300)\n\
+         assert(lur.kv.incr('{w}', 1, {{ ttl_ms = 600 }}) == 2, 'window not extended')\n\
+         lur.async.sleep(400)\n\
+         assert(lur.kv.incr('{w}', 1, {{ ttl_ms = 600 }}) == 1, 'window elapsed, restarts')\n\
+         local o = {{ ttl_ms = 400, renew_ttl = true }}\n\
+         assert(lur.kv.incr('{r}', 1, o) == 1)\n\
+         lur.async.sleep(250)\n\
+         assert(lur.kv.incr('{r}', 1, o) == 2)\n\
+         lur.async.sleep(250)\n\
+         assert(lur.kv.incr('{r}', 1, o) == 3, 'renewed')\n\
+         assert(lur.kv.incr('{h}') == 1)\n\
+         assert(lur.kv.incr('{h}', 1, {{ ttl_ms = 5000 }}) == 2, 'value carries over')\n\
+         assert(lur.kv.ttl('{h}') > 0, 'expiry healed in')\n\
+         lur.kv.set('{h}', 'text', {{ ttl_ms = 100 }})\n\
+         lur.async.sleep(250)\n\
+         assert(lur.kv.incr('{h}', 5, {{ ttl_ms = 5000 }}) == 5, 'expired text restarts')\n\
+         lur.kv.delete('{w}'); lur.kv.delete('{r}'); lur.kv.delete('{h}')"
+    ))
+    .expect("pg kv incr ttl");
+}
+
+#[test]
+fn pg_kv_cas_and_update_keep_or_replace_the_expiry() {
+    let Some(rt) = pg_runtime() else { return };
+    let k = unique("pgcasttl");
+    let e = unique("pgexp");
+    rt.run(&format!(
+        "lur.kv.set('{k}', 'a', {{ ttl_ms = 5000 }})\n\
+         assert(lur.kv.cas('{k}', 'a', 'b') == true)\n\
+         assert(lur.kv.ttl('{k}') <= 5000, 'cas keeps it')\n\
+         lur.kv.update('{k}', function(cur) return cur .. 'c' end)\n\
+         assert(lur.kv.get('{k}') == 'bc' and lur.kv.ttl('{k}') <= 5000, 'update keeps it')\n\
+         lur.kv.update('{k}', function(cur) return cur end, {{ ttl_ms = 60000 }})\n\
+         assert(lur.kv.ttl('{k}') > 5000, 'update with ttl_ms replaces it')\n\
+         lur.kv.set('{e}', 'old', {{ ttl_ms = 100 }})\n\
+         lur.async.sleep(250)\n\
+         assert(lur.kv.cas('{e}', 'old', 'x') == false, 'expired cannot match')\n\
+         assert(lur.kv.cas('{e}', nil, 'fresh') == true, 'nil matches expired')\n\
+         lur.kv.delete('{k}'); lur.kv.delete('{e}')"
+    ))
+    .expect("pg kv cas/update expiry");
+}
+
+#[test]
+fn pg_kv_table_from_before_ttls_is_upgraded() {
+    let Some(config) = pg_config() else { return };
+    let url = config
+        .db_path
+        .as_ref()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let schema = unique("lurmig");
+    // A private schema, so dropping `lur_kv` can't disturb parallel tests.
+    let admin = Runtime::with_config(config).expect("runtime builds");
+    admin
+        .run(&format!("lur.db.exec('CREATE SCHEMA {schema}')"))
+        .expect("schema");
+    let scoped = |url: &str| {
+        let sep = if url.contains('?') { '&' } else { '?' };
+        Runtime::with_config(RuntimeConfig {
+            db_path: Some(std::path::PathBuf::from(format!(
+                "{url}{sep}options=-csearch_path%3D{schema}"
+            ))),
+            ..Default::default()
+        })
+        .expect("runtime builds")
+    };
+    scoped(&url)
+        .run(
+            "lur.db.exec('DROP TABLE lur_kv')\n\
+             lur.db.exec('CREATE TABLE lur_kv (key TEXT PRIMARY KEY, kind SMALLINT NOT NULL, bytes BYTEA, num BIGINT)')\n\
+             lur.db.exec(\"INSERT INTO lur_kv (key, kind, bytes) VALUES ('old', 0, 'kept')\")",
+        )
+        .expect("old shape");
+    let upgraded = scoped(&url).run(
+        "assert(lur.kv.get('old') == 'kept', 'rows survive')\n\
+         local _, exists = lur.kv.ttl('old')\n\
+         assert(exists == true)\n\
+         lur.kv.set('new', 'v', { ttl_ms = 5000 })\n\
+         assert(lur.kv.ttl('new') > 0)",
+    );
+    admin
+        .run(&format!("lur.db.exec('DROP SCHEMA {schema} CASCADE')"))
+        .expect("cleanup");
+    upgraded.expect("upgraded in place");
+}
+
+#[test]
 fn pg_serializable_tx_conflict_is_fallible_and_catchable() {
     let Some(seed) = pg_runtime() else { return };
     let t = unique("pgssi");
