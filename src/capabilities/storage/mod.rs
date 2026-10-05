@@ -2,6 +2,7 @@
 //! scheme picks `SQLite` or `Postgres`.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use mlua::{Error, Function, Lua, Table, Value};
@@ -11,6 +12,42 @@ pub(crate) mod sqlite;
 
 use postgres::{PgBackend, PgTransaction};
 use sqlite::{SqliteBackend, SqliteTransaction};
+
+/// Wall clock in epoch milliseconds; the only clock kv expiry uses, so every
+/// backend agrees on "now" regardless of the database server's own clock.
+pub(crate) fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// Absolute expiry for a relative `ttl_ms`, saturating instead of overflowing.
+pub(crate) fn expiry_at(now: i64, ttl_ms: Option<i64>) -> Option<i64> {
+    ttl_ms.map(|t| now.saturating_add(t))
+}
+
+/// Rate-limits the expired-row sweep that piggybacks on kv writes.
+#[derive(Clone, Default)]
+pub(crate) struct PurgeClock(Arc<AtomicI64>);
+
+impl PurgeClock {
+    const INTERVAL_MS: i64 = 3_600_000;
+
+    /// Starts the interval at `now` (the sweep done when the pool opened).
+    pub(crate) fn started(now: i64) -> Self {
+        Self(Arc::new(AtomicI64::new(now)))
+    }
+
+    /// True at most once per interval; the winner claims the slot.
+    pub(crate) fn due(&self, now: i64) -> bool {
+        let last = self.0.load(Ordering::Relaxed);
+        now - last >= Self::INTERVAL_MS
+            && self
+                .0
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+    }
+}
 
 /// Result of a write statement.
 pub(crate) struct ExecResult {
@@ -79,10 +116,15 @@ impl Backend {
         }
     }
 
-    pub(crate) async fn kv_set(&self, key: String, value: Vec<u8>) -> mlua::Result<()> {
+    pub(crate) async fn kv_set(
+        &self,
+        key: String,
+        value: Vec<u8>,
+        ttl_ms: Option<i64>,
+    ) -> mlua::Result<()> {
         match self {
-            Backend::Sqlite(b) => b.kv_set(key, value).await,
-            Backend::Postgres(b) => b.kv_set(key, value).await,
+            Backend::Sqlite(b) => b.kv_set(key, value, ttl_ms).await,
+            Backend::Postgres(b) => b.kv_set(key, value, ttl_ms).await,
         }
     }
 
@@ -93,10 +135,15 @@ impl Backend {
         }
     }
 
-    pub(crate) async fn kv_add(&self, key: String, value: Vec<u8>) -> mlua::Result<bool> {
+    pub(crate) async fn kv_add(
+        &self,
+        key: String,
+        value: Vec<u8>,
+        ttl_ms: Option<i64>,
+    ) -> mlua::Result<bool> {
         match self {
-            Backend::Sqlite(b) => b.kv_add(key, value).await,
-            Backend::Postgres(b) => b.kv_add(key, value).await,
+            Backend::Sqlite(b) => b.kv_add(key, value, ttl_ms).await,
+            Backend::Postgres(b) => b.kv_add(key, value, ttl_ms).await,
         }
     }
 
@@ -105,10 +152,11 @@ impl Backend {
         key: String,
         expected: Option<Vec<u8>>,
         new: Option<Vec<u8>>,
+        ttl_ms: Option<i64>,
     ) -> mlua::Result<bool> {
         match self {
-            Backend::Sqlite(b) => b.kv_cas(key, expected, new).await,
-            Backend::Postgres(b) => b.kv_cas(key, expected, new).await,
+            Backend::Sqlite(b) => b.kv_cas(key, expected, new, ttl_ms).await,
+            Backend::Postgres(b) => b.kv_cas(key, expected, new, ttl_ms).await,
         }
     }
 
@@ -117,10 +165,27 @@ impl Backend {
         voice: &'static str,
         key: String,
         delta: i64,
+        ttl: Option<Ttl>,
     ) -> mlua::Result<i64> {
         match self {
-            Backend::Sqlite(b) => b.kv_incr(voice, key, delta).await,
-            Backend::Postgres(b) => b.kv_incr(voice, key, delta).await,
+            Backend::Sqlite(b) => b.kv_incr(voice, key, delta, ttl).await,
+            Backend::Postgres(b) => b.kv_incr(voice, key, delta, ttl).await,
+        }
+    }
+
+    /// `false` when the key is absent or already expired.
+    pub(crate) async fn kv_expire(&self, key: String, ttl_ms: i64) -> mlua::Result<bool> {
+        match self {
+            Backend::Sqlite(b) => b.kv_expire(key, ttl_ms).await,
+            Backend::Postgres(b) => b.kv_expire(key, ttl_ms).await,
+        }
+    }
+
+    /// `None`: absent/expired. `Some(None)`: no expiry. `Some(Some(ms))`: remaining.
+    pub(crate) async fn kv_ttl(&self, key: String) -> mlua::Result<Option<Option<i64>>> {
+        match self {
+            Backend::Sqlite(b) => b.kv_ttl(key).await,
+            Backend::Postgres(b) => b.kv_ttl(key).await,
         }
     }
 
@@ -129,12 +194,21 @@ impl Backend {
         lua: &Lua,
         key: String,
         func: Function,
+        ttl_ms: Option<i64>,
     ) -> mlua::Result<Value> {
         match self {
-            Backend::Sqlite(b) => b.kv_update(lua, key, func).await,
-            Backend::Postgres(b) => b.kv_update(lua, key, func).await,
+            Backend::Sqlite(b) => b.kv_update(lua, key, func, ttl_ms).await,
+            Backend::Postgres(b) => b.kv_update(lua, key, func, ttl_ms).await,
         }
     }
+}
+
+/// `ttl_ms` for `kv_incr`, with its renew mode.
+#[derive(Clone, Copy)]
+pub(crate) struct Ttl {
+    pub ms: i64,
+    /// Reset the expiry on every call, not only when the key has none.
+    pub renew: bool,
 }
 
 /// A write transaction over some backend.

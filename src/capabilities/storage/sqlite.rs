@@ -11,6 +11,7 @@ use sqlx::sqlite::{
 };
 use sqlx::{Column, Row, Sqlite, TypeInfo, ValueRef};
 
+use super::{PurgeClock, Ttl, expiry_at, now_ms};
 use crate::capabilities::null;
 
 /// A dynamically-bound `SQLite` query.
@@ -113,13 +114,47 @@ pub(crate) async fn open_pool(path: &Path) -> sqlx::Result<SqlitePool> {
         async move { SqlitePoolOptions::new().connect_with(opts).await }
     })
     .await?;
-    retry_busy(|| async {
-        sqlx::query("CREATE TABLE IF NOT EXISTS lur_kv (key TEXT PRIMARY KEY, value BLOB)")
-            .execute(&pool)
-            .await
-    })
-    .await?;
+    retry_busy(|| ensure_kv_schema(&pool)).await?;
+    retry_busy(|| purge_expired(&pool, now_ms())).await?;
     Ok(pool)
+}
+
+/// Create `lur_kv`, adding `expires_at` to tables that predate TTLs.
+async fn ensure_kv_schema(pool: &SqlitePool) -> sqlx::Result<()> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS lur_kv \
+         (key TEXT PRIMARY KEY, value BLOB, expires_at INTEGER)",
+    )
+    .execute(pool)
+    .await?;
+    let has_expiry: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('lur_kv') WHERE name = 'expires_at'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if has_expiry == 0 {
+        // SQLite has no ADD COLUMN IF NOT EXISTS: tolerate losing the race to
+        // another process opening the same file.
+        match sqlx::query("ALTER TABLE lur_kv ADD COLUMN expires_at INTEGER")
+            .execute(pool)
+            .await
+        {
+            Err(e) if !e.to_string().contains("duplicate column") => return Err(e),
+            _ => {}
+        }
+    }
+    sqlx::query("CREATE INDEX IF NOT EXISTS lur_kv_expires_at ON lur_kv (expires_at)")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn purge_expired(pool: &SqlitePool, now: i64) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM lur_kv WHERE expires_at IS NOT NULL AND expires_at <= ?")
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Bind each Lua value as a positional parameter.
@@ -188,6 +223,7 @@ where
 #[derive(Clone)]
 pub(crate) struct SqliteBackend {
     pool: SqlitePool,
+    purge: PurgeClock,
 }
 
 impl SqliteBackend {
@@ -195,7 +231,10 @@ impl SqliteBackend {
         let pool = open_pool(path)
             .await
             .map_err(|e| Error::runtime(format!("lur.db: opening {}: {e}", path.display())))?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            purge: PurgeClock::started(now_ms()),
+        })
     }
 
     pub(crate) async fn exec(
@@ -252,11 +291,14 @@ impl SqliteBackend {
     }
 
     pub(crate) async fn kv_get(&self, lua: &Lua, key: String) -> mlua::Result<Value> {
-        let row = sqlx::query("SELECT value FROM lur_kv WHERE key = ?")
-            .bind(key)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| Error::runtime(format!("lur.kv.get: {e}")))?;
+        let row = sqlx::query(
+            "SELECT value FROM lur_kv WHERE key = ?1 AND (expires_at IS NULL OR expires_at > ?2)",
+        )
+        .bind(key)
+        .bind(now_ms())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Error::runtime(format!("lur.kv.get: {e}")))?;
         match row {
             None => Ok(Value::Nil),
             Some(r) => match value_to_bytes(&r)? {
@@ -266,13 +308,29 @@ impl SqliteBackend {
         }
     }
 
-    pub(crate) async fn kv_set(&self, key: String, value: Vec<u8>) -> mlua::Result<()> {
-        sqlx::query("INSERT OR REPLACE INTO lur_kv (key, value) VALUES (?, ?)")
+    /// Sweeps expired rows at most once an hour; best-effort, so errors are dropped.
+    async fn maybe_purge(&self) {
+        let now = now_ms();
+        if self.purge.due(now) {
+            let _ = retry_busy(|| purge_expired(&self.pool, now)).await;
+        }
+    }
+
+    pub(crate) async fn kv_set(
+        &self,
+        key: String,
+        value: Vec<u8>,
+        ttl_ms: Option<i64>,
+    ) -> mlua::Result<()> {
+        let expires_at = expiry_at(now_ms(), ttl_ms);
+        sqlx::query("INSERT OR REPLACE INTO lur_kv (key, value, expires_at) VALUES (?, ?, ?)")
             .bind(key)
             .bind(value)
+            .bind(expires_at)
             .execute(&self.pool)
             .await
             .map_err(|e| Error::runtime(format!("lur.kv.set: {e}")))?;
+        self.maybe_purge().await;
         Ok(())
     }
 
@@ -285,37 +343,84 @@ impl SqliteBackend {
         Ok(())
     }
 
-    pub(crate) async fn kv_add(&self, key: String, value: Vec<u8>) -> mlua::Result<bool> {
+    /// Insert unless a live row exists; an expired row is taken over.
+    async fn insert_absent(
+        &self,
+        voice: &str,
+        key: &str,
+        value: &[u8],
+        ttl_ms: Option<i64>,
+    ) -> mlua::Result<bool> {
+        let now = now_ms();
+        let expires_at = expiry_at(now, ttl_ms);
         let res = retry_busy(|| async {
             sqlx::query(
-                "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
-                 ON CONFLICT(key) DO NOTHING",
+                "INSERT INTO lur_kv (key, value, expires_at) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(key) DO UPDATE SET \
+                   value = excluded.value, expires_at = excluded.expires_at \
+                 WHERE lur_kv.expires_at IS NOT NULL AND lur_kv.expires_at <= ?4",
             )
-            .bind(key.clone())
-            .bind(value.clone())
+            .bind(key)
+            .bind(value)
+            .bind(expires_at)
+            .bind(now)
             .execute(&self.pool)
             .await
         })
         .await
-        .map_err(|e| Error::runtime(format!("lur.kv.add: {e}")))?;
+        .map_err(|e| Error::runtime(format!("{voice}: {e}")))?;
         Ok(res.rows_affected() == 1)
     }
 
+    pub(crate) async fn kv_add(
+        &self,
+        key: String,
+        value: Vec<u8>,
+        ttl_ms: Option<i64>,
+    ) -> mlua::Result<bool> {
+        let added = self
+            .insert_absent("lur.kv.add", &key, &value, ttl_ms)
+            .await?;
+        self.maybe_purge().await;
+        Ok(added)
+    }
+
+    /// `ttl_ms` of `None` keeps the row's existing expiry.
     pub(crate) async fn kv_cas(
         &self,
         key: String,
         expected: Option<Vec<u8>>,
         new: Option<Vec<u8>>,
+        ttl_ms: Option<i64>,
     ) -> mlua::Result<bool> {
+        let now = now_ms();
         let applied = match (expected, new) {
-            (None, Some(v)) => {
+            (None, Some(v)) => self.insert_absent("lur.kv.cas", &key, &v, ttl_ms).await?,
+            (None, None) => {
+                let r = sqlx::query(
+                    "SELECT 1 FROM lur_kv WHERE key = ?1 \
+                     AND (expires_at IS NULL OR expires_at > ?2)",
+                )
+                .bind(key)
+                .bind(now)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?;
+                r.is_none()
+            }
+            (Some(e), Some(v)) => {
+                let expires_at = expiry_at(now, ttl_ms);
                 retry_busy(|| async {
                     sqlx::query(
-                        "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
-                         ON CONFLICT(key) DO NOTHING",
+                        "UPDATE lur_kv SET value = ?1, expires_at = COALESCE(?2, expires_at) \
+                         WHERE key = ?3 AND value = ?4 \
+                         AND (expires_at IS NULL OR expires_at > ?5)",
                     )
-                    .bind(key.clone())
                     .bind(v.clone())
+                    .bind(expires_at)
+                    .bind(key.clone())
+                    .bind(e.clone())
+                    .bind(now)
                     .execute(&self.pool)
                     .await
                 })
@@ -324,35 +429,17 @@ impl SqliteBackend {
                 .rows_affected()
                     == 1
             }
-            (None, None) => {
-                let r = sqlx::query("SELECT 1 FROM lur_kv WHERE key = ?")
-                    .bind(key)
-                    .fetch_optional(&self.pool)
-                    .await
-                    .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?;
-                r.is_none()
-            }
-            (Some(e), Some(v)) => {
-                retry_busy(|| async {
-                    sqlx::query("UPDATE lur_kv SET value = ? WHERE key = ? AND value = ?")
-                        .bind(v.clone())
-                        .bind(key.clone())
-                        .bind(e.clone())
-                        .execute(&self.pool)
-                        .await
-                })
-                .await
-                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
-                .rows_affected()
-                    == 1
-            }
             (Some(e), None) => {
                 retry_busy(|| async {
-                    sqlx::query("DELETE FROM lur_kv WHERE key = ? AND value = ?")
-                        .bind(key.clone())
-                        .bind(e.clone())
-                        .execute(&self.pool)
-                        .await
+                    sqlx::query(
+                        "DELETE FROM lur_kv WHERE key = ?1 AND value = ?2 \
+                         AND (expires_at IS NULL OR expires_at > ?3)",
+                    )
+                    .bind(key.clone())
+                    .bind(e.clone())
+                    .bind(now)
+                    .execute(&self.pool)
+                    .await
                 })
                 .await
                 .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
@@ -363,35 +450,94 @@ impl SqliteBackend {
         Ok(applied)
     }
 
-    /// Atomic upsert-add; a non-integer existing value yields no row → error.
+    /// Atomic upsert-add; a non-integer live value yields no row → error. An
+    /// expired row restarts from `delta`. The expiry is set when the row has
+    /// none (or `renew`), so a counter that predates TTLs heals itself.
     pub(crate) async fn kv_incr(
         &self,
         voice: &'static str,
         key: String,
         delta: i64,
+        ttl: Option<Ttl>,
     ) -> mlua::Result<i64> {
+        let now = now_ms();
+        let expires_at = expiry_at(now, ttl.map(|t| t.ms));
+        let renew = i64::from(ttl.is_some_and(|t| t.renew));
         let row = retry_busy(|| async {
             sqlx::query(
-                "INSERT INTO lur_kv (key, value) VALUES (?, ?) \
-                 ON CONFLICT(key) DO UPDATE SET value = value + excluded.value \
-                 WHERE typeof(lur_kv.value) = 'integer' \
+                "INSERT INTO lur_kv (key, value, expires_at) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(key) DO UPDATE SET \
+                   value = CASE WHEN lur_kv.expires_at IS NOT NULL AND lur_kv.expires_at <= ?4 \
+                                THEN excluded.value ELSE lur_kv.value + excluded.value END, \
+                   expires_at = CASE \
+                     WHEN lur_kv.expires_at IS NOT NULL AND lur_kv.expires_at <= ?4 \
+                       THEN excluded.expires_at \
+                     WHEN ?5 = 1 OR lur_kv.expires_at IS NULL \
+                       THEN COALESCE(excluded.expires_at, lur_kv.expires_at) \
+                     ELSE lur_kv.expires_at END \
+                 WHERE (lur_kv.expires_at IS NOT NULL AND lur_kv.expires_at <= ?4) \
+                    OR typeof(lur_kv.value) = 'integer' \
                  RETURNING value",
             )
             .bind(key.clone())
             .bind(delta)
+            .bind(expires_at)
+            .bind(now)
+            .bind(renew)
             .fetch_optional(&self.pool)
             .await
         })
         .await
         .map_err(|e| Error::runtime(format!("{voice}: {e}")))?;
-        match row {
+        let n = match row {
             Some(r) => r
                 .try_get::<i64, usize>(0)
-                .map_err(|e| Error::runtime(format!("{voice}: {e}"))),
-            None => Err(Error::runtime(format!(
-                "{voice}: existing value is not an integer"
-            ))),
-        }
+                .map_err(|e| Error::runtime(format!("{voice}: {e}")))?,
+            None => {
+                return Err(Error::runtime(format!(
+                    "{voice}: existing value is not an integer"
+                )));
+            }
+        };
+        self.maybe_purge().await;
+        Ok(n)
+    }
+
+    pub(crate) async fn kv_expire(&self, key: String, ttl_ms: i64) -> mlua::Result<bool> {
+        let now = now_ms();
+        let res = retry_busy(|| async {
+            sqlx::query(
+                "UPDATE lur_kv SET expires_at = ?1 WHERE key = ?2 \
+                 AND (expires_at IS NULL OR expires_at > ?3)",
+            )
+            .bind(now.saturating_add(ttl_ms))
+            .bind(key.clone())
+            .bind(now)
+            .execute(&self.pool)
+            .await
+        })
+        .await
+        .map_err(|e| Error::runtime(format!("lur.kv.expire: {e}")))?;
+        Ok(res.rows_affected() == 1)
+    }
+
+    pub(crate) async fn kv_ttl(&self, key: String) -> mlua::Result<Option<Option<i64>>> {
+        let now = now_ms();
+        let row = sqlx::query(
+            "SELECT expires_at FROM lur_kv WHERE key = ?1 \
+             AND (expires_at IS NULL OR expires_at > ?2)",
+        )
+        .bind(key)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Error::runtime(format!("lur.kv.ttl: {e}")))?;
+        row.map(|r| {
+            r.try_get::<Option<i64>, usize>(0)
+                .map(|exp| exp.map(|e| e - now))
+                .map_err(|e| Error::runtime(format!("lur.kv.ttl: {e}")))
+        })
+        .transpose()
     }
 
     /// `lur.kv.update` read-modify-write inside `BEGIN IMMEDIATE`. The result is
@@ -402,6 +548,7 @@ impl SqliteBackend {
         lua: &Lua,
         key: String,
         func: Function,
+        ttl_ms: Option<i64>,
     ) -> mlua::Result<Value> {
         let conn = retry_busy(|| async {
             let mut conn = self.pool.acquire().await?;
@@ -414,17 +561,29 @@ impl SqliteBackend {
 
         // Cancellation anywhere in here drops `tx`, which rolls back.
         let result: mlua::Result<Value> = async {
-            let cur: Value = match sqlx::query("SELECT value FROM lur_kv WHERE key = ?")
-                .bind(&key)
-                .fetch_optional(&mut **tx.conn())
-                .await
-                .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?
+            // An expired row reads as absent; a live one keeps its expiry
+            // unless `ttl_ms` replaces it.
+            let (cur, cur_expiry): (Value, Option<i64>) = match sqlx::query(
+                "SELECT value, expires_at FROM lur_kv WHERE key = ?1 \
+                 AND (expires_at IS NULL OR expires_at > ?2)",
+            )
+            .bind(&key)
+            .bind(now_ms())
+            .fetch_optional(&mut **tx.conn())
+            .await
+            .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?
             {
-                None => Value::Nil,
-                Some(r) => match value_to_bytes(&r)? {
-                    None => Value::Nil,
-                    Some(bytes) => Value::String(lua.create_string(bytes)?),
-                },
+                None => (Value::Nil, None),
+                Some(r) => {
+                    let expiry = r
+                        .try_get::<Option<i64>, usize>(1)
+                        .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
+                    let value = match value_to_bytes(&r)? {
+                        None => Value::Nil,
+                        Some(bytes) => Value::String(lua.create_string(bytes)?),
+                    };
+                    (value, expiry)
+                }
             };
 
             let new = func.call_async::<Value>(cur).await?;
@@ -438,12 +597,16 @@ impl SqliteBackend {
                         .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
                 }
                 Value::String(s) => {
-                    sqlx::query("INSERT OR REPLACE INTO lur_kv (key, value) VALUES (?, ?)")
-                        .bind(&key)
-                        .bind(s.as_bytes().to_vec())
-                        .execute(&mut **tx.conn())
-                        .await
-                        .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
+                    let expires_at = expiry_at(now_ms(), ttl_ms).or(cur_expiry);
+                    sqlx::query(
+                        "INSERT OR REPLACE INTO lur_kv (key, value, expires_at) VALUES (?, ?, ?)",
+                    )
+                    .bind(&key)
+                    .bind(s.as_bytes().to_vec())
+                    .bind(expires_at)
+                    .execute(&mut **tx.conn())
+                    .await
+                    .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
                 }
                 other => {
                     return Err(Error::runtime(format!(
@@ -609,11 +772,11 @@ pub(super) async fn max1_backend(dir: &std::path::Path) -> SqliteBackend {
         .connect_with(opts)
         .await
         .unwrap();
-    sqlx::query("CREATE TABLE IF NOT EXISTS lur_kv (key TEXT PRIMARY KEY, value BLOB)")
-        .execute(&pool)
-        .await
-        .unwrap();
-    SqliteBackend { pool }
+    ensure_kv_schema(&pool).await.unwrap();
+    SqliteBackend {
+        pool,
+        purge: PurgeClock::default(),
+    }
 }
 
 #[cfg(test)]
@@ -780,7 +943,7 @@ mod tests {
                 })
                 .unwrap();
 
-            let mut fut = Box::pin(backend.kv_update(&lua, "k".to_string(), parking));
+            let mut fut = Box::pin(backend.kv_update(&lua, "k".to_string(), parking, None));
             tokio::select! {
                 _ = &mut fut => panic!("kv_update should park in the transform"),
                 () = entered.notified() => {}

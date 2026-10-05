@@ -92,6 +92,53 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 - **Postgres `db.tx`/`kv.update` use `SERIALIZABLE`** because the database may be shared
   with non-lur writers; an advisory lock only serializes cooperating writers. Hence they're
   fallible and never auto-retried (the body may have side effects).
+- **kv expiry is a per-key absolute `expires_at`, not a TTL the database enforces.** `now`
+  comes from Rust so both backends agree and a skewed Postgres clock can't change results;
+  every op filters on it (lazy expiry), and deletion is housekeeping (on open, then hourly
+  on writes). Postgres/DynamoDB-style "TTL lags, filter on read" is the same shape.
+  Unit is `ttl_ms` because Redis `EX` is seconds and a bare `60` would silently mean 60 ms;
+  `ttl_ms <= 0` raises rather than meaning "now" or "never".
+- **TTL semantics follow Redis where it has an answer.** `set` without `ttl_ms` clears the
+  expiry (like `SET`; the alternative, `KEEPTTL`, is opt-in there). `incr` keeps the expiry,
+  as Redis `INCR` does. `lur` adds `ttl_ms` to `incr` that applies only if the key has no
+  expiry — Redis `EXPIRE NX`, folded into the same statement because the usual
+  `INCR`-then-`EXPIRE` pair leaks a counter that never expires if the second call is lost.
+  That makes a rate limit a fixed window (opened by the first hit, not extended by later
+  ones); `renew_ttl = true` is the idle-timeout variant. Rejected: always-refresh as the
+  default (a client that keeps retrying is never released), a separate `window_ms`/`nx`
+  knob, and a `kv.hit` rate-limit helper for now (the `incr` form reads better; revisit).
+  `cas`/`update` keep the existing expiry — Redis has no equivalent, but clearing it would
+  turn a rate-limit window or a session with an absolute lifetime into a permanent key.
+  Forgetting `ttl_ms` on `incr` is the sharp edge: the counter never resets until a later
+  `incr` supplies one (it is added then, so old counters heal).
+- **`kv.ttl` returns `ms, exists`** rather than one three-state value: `nil, false` absent,
+  `nil, true` no expiry, `ms, true` expiring. One-value callers get a number or `nil`
+  (safe in arithmetic); Redis's `-1`/`-2` would make `ttl < 1000` true for a missing key.
+- **`lur.http` `cache` is an in-memory map, not `lur.kv`.** A cache is disposable, so it
+  shouldn't demand a database: it works in one-shot and under `serve` with no `--db`. It
+  lives in `RuntimeConfig` (an `Arc` shared by the pool, like `lur.state`), not in a VM.
+  Costs: lost on restart, not shared between processes, useless across one-shot runs.
+  Rejected: kv-backed (needs `--db`, which users asked why a cache requires) and "kv when
+  `--db` is set, memory otherwise" (the same script would have different persistence per
+  environment). A persistent store can be added later as an explicit opt-in, not an
+  environment-dependent fallback.
+  `cache` is a table (`{ ttl_ms }`) so the unit is explicit and `vary` has a place. The
+  allowlist/SSRF check runs before the lookup so a cached body never outlives the policy that
+  allowed it. Requests with `Authorization`/`Cookie`/`Proxy-Authorization` bypass the cache
+  unless the header is listed in `vary`, and responses that set a cookie aren't stored: the
+  cache is shared by every request, so a credentialed response must not be served to someone
+  else.
+  **No size cap, on purpose; the script owns capacity.** lur keeps the levers sufficient:
+  `ttl_ms` bounds lifetime (expired entries are really freed: on lookup, and by a sweep at
+  most once a minute on insert), `--max-http-body` bounds each entry, `cache` is opt-in per
+  call so scripts choose what to cache, and `lur.http.cache_clear()` flushes everything and
+  reports the count. Rejected for now: a built-in LRU/byte cap (one more knob and eviction
+  policy to get wrong; add it if scripts turn out to need it). Memory is therefore bounded by
+  distinct keys per TTL window times `--max-http-body`; a script caching unbounded distinct
+  URLs with a long `ttl_ms` can grow the process, and the VM `--memory` limit does not cover
+  it.
+  Not done: serve-stale-on-error, stampede protection (N concurrent misses fetch N times),
+  honoring `Cache-Control`/`ETag`, per-key invalidation.
 - **TLS via rustls**, not native-tls: no OpenSSL system dependency.
 - **SQLite retry** wraps only lock acquisition and single statements; re-running a
   transaction body was rejected (duplicated side effects).
@@ -113,8 +160,7 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 - Cron: UTC only (no timezone setting), in-memory schedule, no missed-run replay, no
   `@every` interval syntax.
 - Not implemented: streaming response bodies / `lur.http` downloads, form bodies, retries,
-  cookie jar, proxies, a TLS-verification opt-out, managed migrations, kv/state TTL,
-  in-memory DB, named SQL params, socket/queue trigger sources, `lur.serve.on_start`,
+  cookie jar, proxies, a TLS-verification opt-out, managed migrations, in-memory DB, named SQL params, socket/queue trigger sources, `lur.serve.on_start`,
   configurable SQLite `busy_timeout`, machine-readable (`--error-format=json`) diagnostics,
   symmetric/asymmetric crypto and KDFs, signed cookies, `lur docs <section>`.
 - `chrono` → `jiff` migration is blocked on replacing the `cron` crate.

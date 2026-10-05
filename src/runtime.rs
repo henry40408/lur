@@ -54,6 +54,8 @@ pub struct RuntimeConfig {
     pub per_event_timeout: Option<Duration>,
     /// Shared by every VM built from this config so `lur.state` spans the pool.
     pub state: Arc<crate::capabilities::state::StateStore>,
+    /// Shared by every VM built from this config so `opts.cache` spans the pool.
+    pub http_cache: Arc<crate::capabilities::http::HttpCache>,
     /// *serve*: drain window on shutdown before remaining work is aborted.
     pub shutdown_grace: Duration,
     /// Cap on in-flight `lur.async.*` tasks per VM; `None` is unbounded.
@@ -74,6 +76,7 @@ impl Default for RuntimeConfig {
             pool_size: 1,
             per_event_timeout: None,
             state: Arc::new(crate::capabilities::state::StateStore::default()),
+            http_cache: Arc::default(),
             shutdown_grace: Duration::from_millis(DEFAULT_SHUTDOWN_GRACE_MS),
             max_concurrency: None,
             chunk_name: None,
