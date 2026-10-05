@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791179359298,
+  "lastUpdate": 1791185266258,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3821,6 +3821,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 212188,
             "range": "± 5259",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "81a33d799ad17e32fbbb68cf958040dfbe4118b7",
+          "message": "refactor: use sqlx begin_with transactions instead of a hand-rolled rollback guard (#136)\n\nPool::begin_with keeps our BEGIN IMMEDIATE / SERIALIZABLE statements, and dropping a sqlx Transaction already rolls back before the connection is reused. Removes PinnedTx and spawn_rollback.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T15:25:18+08:00",
+          "tree_id": "a56302197bb18a260f4bfb13fb0823204d2ed959",
+          "url": "https://github.com/henry40408/lur/commit/81a33d799ad17e32fbbb68cf958040dfbe4118b7"
+        },
+        "date": 1791185265485,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 321890,
+            "range": "± 14162",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5507,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 232913,
+            "range": "± 2953",
             "unit": "ns/iter"
           }
         ]
