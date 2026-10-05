@@ -130,7 +130,9 @@ rejected at load. Params are percent-decoded to raw bytes as `req.params`.
 
 `handle` (hyper adapter) → `dispatch_async`:
 
-1. Body over `--max-body` → **413** before routing; the VM never sees it.
+1. Body over `--max-body` → **413** before routing; the VM never sees it. `handle` reads the
+   body through `http_body_util::Limited`, so reading stops at the cap instead of buffering
+   an oversized (or chunked, length-less) body first.
 2. No route → **404**.
 3. `checkout()`, `build_req` (`method`, `path`, `params`, `query`/`query_all`, `headers`,
    `cookies`, `body`, streaming `read`, `json()`), then `call_handler` under the two-layer
@@ -163,9 +165,10 @@ with the job name, never propagated.
 ### Graceful shutdown
 
 `run_with_shutdown` fans one shutdown future (SIGTERM/SIGINT, or any future in tests) out to
-the accept loop and cron loops via a `watch` channel. Each in-flight connection and cron run
-holds a clone of an `Arc<()>` token; after accept stops, draining waits until only the
-original remains, bounded by `--shutdown-grace`. Stragglers are aborted when the runtime drops.
+the accept loop and cron loops via a `watch` channel. Connections are wrapped by hyper-util's
+`GracefulShutdown`, which tells idle keep-alive ones to close and lets in-flight requests
+finish; cron runs are tracked by a tokio-util `TaskTracker`. After accept stops, both are
+awaited, bounded by `--shutdown-grace`. Stragglers are aborted when the runtime drops.
 
 ## State & storage
 
