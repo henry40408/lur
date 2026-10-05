@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791185714040,
+  "lastUpdate": 1791187215267,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3905,6 +3905,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 161233,
             "range": "± 704",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4b2b9a6c07da3864b6106ac0c7e5f5bc28ac26b6",
+          "message": "feat: open lur.fs files beneath a cap-std root handle to close the TOCTOU window (#138)\n\nPolicy roots now hold a directory handle; canonicalizing only picks the granting root, and the open is confined to it by the OS. Binary +17 KB.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T15:57:40+08:00",
+          "tree_id": "17d2363ea32c620e6fc8d62a74db1d94254a9829",
+          "url": "https://github.com/henry40408/lur/commit/4b2b9a6c07da3864b6106ac0c7e5f5bc28ac26b6"
+        },
+        "date": 1791187214425,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 327107,
+            "range": "± 5538",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5378,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 207248,
+            "range": "± 4987",
             "unit": "ns/iter"
           }
         ]
