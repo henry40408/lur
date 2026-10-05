@@ -272,11 +272,6 @@ impl Shared {
         }
     }
 
-    /// Whether `--db` was given (the backend may not be opened yet).
-    pub(crate) fn configured(&self) -> bool {
-        self.cell.get().is_some() || self.path.is_some()
-    }
-
     pub(crate) async fn ensure(&self) -> mlua::Result<Backend> {
         if let Some(b) = self.cell.get() {
             return Ok(b.clone());

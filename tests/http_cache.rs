@@ -1,12 +1,12 @@
-//! `lur.http` `opts.cache`: responses stored through `lur.kv`.
+//! `lur.http` `opts.cache`: in-memory, shared across the pool, no `--db` needed.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
+use lur::capabilities::http::HttpCache;
 use lur::policy::Policy;
 use lur::runtime::{Runtime, RuntimeConfig};
 
@@ -57,24 +57,23 @@ fn loopback() -> Policy {
         .allow_private()
 }
 
-fn runtime(db: Option<PathBuf>, policy: Policy) -> Runtime {
+fn runtime(cache: &Arc<HttpCache>, policy: Policy) -> Runtime {
     Runtime::with_config(RuntimeConfig {
-        db_path: db,
+        http_cache: Arc::clone(cache),
         policy: Arc::new(policy),
         ..Default::default()
     })
     .expect("runtime builds")
 }
 
-fn cached_runtime(dir: &tempfile::TempDir) -> Runtime {
-    runtime(Some(dir.path().join("cache.db")), loopback())
+fn cached_runtime() -> Runtime {
+    runtime(&Arc::default(), loopback())
 }
 
 #[test]
 fn second_call_is_served_from_the_cache() {
-    let dir = tempfile::tempdir().unwrap();
     let srv = serve(200, "");
-    cached_runtime(&dir)
+    cached_runtime()
         .run(&format!(
             "local url = 'http://127.0.0.1:{}/'\n\
              local a = lur.http.get(url, {{ cache = {{ ttl_ms = 60000 }} }})\n\
@@ -90,9 +89,8 @@ fn second_call_is_served_from_the_cache() {
 
 #[test]
 fn without_the_option_nothing_is_cached() {
-    let dir = tempfile::tempdir().unwrap();
     let srv = serve(200, "");
-    cached_runtime(&dir)
+    cached_runtime()
         .run(&format!(
             "local url = 'http://127.0.0.1:{}/'\n\
              local a = lur.http.get(url)\n\
@@ -106,9 +104,8 @@ fn without_the_option_nothing_is_cached() {
 
 #[test]
 fn entries_expire() {
-    let dir = tempfile::tempdir().unwrap();
     let srv = serve(200, "");
-    cached_runtime(&dir)
+    cached_runtime()
         .run(&format!(
             "local url = 'http://127.0.0.1:{}/'\n\
              lur.http.get(url, {{ cache = {{ ttl_ms = 150 }} }})\n\
@@ -122,9 +119,8 @@ fn entries_expire() {
 
 #[test]
 fn the_query_is_part_of_the_key() {
-    let dir = tempfile::tempdir().unwrap();
     let srv = serve(200, "");
-    cached_runtime(&dir)
+    cached_runtime()
         .run(&format!(
             "local url = 'http://127.0.0.1:{}/'\n\
              local c = {{ ttl_ms = 60000 }}\n\
@@ -140,9 +136,8 @@ fn the_query_is_part_of_the_key() {
 
 #[test]
 fn error_responses_are_not_cached() {
-    let dir = tempfile::tempdir().unwrap();
     let srv = serve(500, "");
-    cached_runtime(&dir)
+    cached_runtime()
         .run(&format!(
             "local url = 'http://127.0.0.1:{}/'\n\
              local c = {{ ttl_ms = 60000 }}\n\
@@ -157,9 +152,8 @@ fn error_responses_are_not_cached() {
 
 #[test]
 fn responses_that_set_cookies_are_not_cached() {
-    let dir = tempfile::tempdir().unwrap();
     let srv = serve(200, "set-cookie: sid=1\r\n");
-    cached_runtime(&dir)
+    cached_runtime()
         .run(&format!(
             "local url = 'http://127.0.0.1:{}/'\n\
              local c = {{ ttl_ms = 60000 }}\n\
@@ -173,9 +167,8 @@ fn responses_that_set_cookies_are_not_cached() {
 
 #[test]
 fn credentialed_requests_bypass_the_cache_unless_listed_in_vary() {
-    let dir = tempfile::tempdir().unwrap();
     let srv = serve(200, "");
-    cached_runtime(&dir)
+    cached_runtime()
         .run(&format!(
             "local url = 'http://127.0.0.1:{}/'\n\
              local h = {{ authorization = 'Bearer a' }}\n\
@@ -188,7 +181,7 @@ fn credentialed_requests_bypass_the_cache_unless_listed_in_vary() {
     assert_eq!(srv.hits(), 2);
 
     let srv = serve(200, "");
-    cached_runtime(&dir)
+    cached_runtime()
         .run(&format!(
             "local url = 'http://127.0.0.1:{}/'\n\
              local c = {{ ttl_ms = 60000, vary = {{ 'Authorization' }} }}\n\
@@ -205,40 +198,57 @@ fn credentialed_requests_bypass_the_cache_unless_listed_in_vary() {
 
 #[test]
 fn the_policy_is_checked_before_the_cache() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("shared.db");
+    let cache: Arc<HttpCache> = Arc::default();
     let srv = serve(200, "");
     let script = format!(
         "lur.http.get('http://127.0.0.1:{}/', {{ cache = {{ ttl_ms = 60000 }} }})",
         srv.port
     );
-    runtime(Some(db.clone()), loopback())
+    runtime(&cache, loopback())
         .run(&script)
         .expect("allowed run fills the cache");
-    let err = runtime(Some(db), Policy::strict())
+    let err = runtime(&cache, Policy::strict())
         .run(&script)
         .expect_err("a stricter policy must not read the cached body");
     assert!(err.to_string().contains("not allowed"), "{err}");
 }
 
 #[test]
-fn cache_needs_a_database() {
+fn the_cache_is_shared_by_runtimes_built_from_one_config() {
+    let cache: Arc<HttpCache> = Arc::default();
     let srv = serve(200, "");
-    let err = runtime(None, loopback())
+    let get = format!(
+        "lur.http.get('http://127.0.0.1:{}/', {{ cache = {{ ttl_ms = 60000 }} }})",
+        srv.port
+    );
+    runtime(&cache, loopback()).run(&get).unwrap();
+    runtime(&cache, loopback())
+        .run(&format!("assert({get}.cached == true)"))
+        .expect("a second VM hits the first one's entry");
+    assert_eq!(srv.hits(), 1);
+}
+
+#[test]
+fn cache_clear_drops_every_entry() {
+    let srv = serve(200, "");
+    cached_runtime()
         .run(&format!(
-            "lur.http.get('http://127.0.0.1:{}/', {{ cache = {{ ttl_ms = 1000 }} }})",
+            "local url = 'http://127.0.0.1:{}/'\n\
+             local c = {{ ttl_ms = 60000 }}\n\
+             lur.http.get(url, {{ cache = c }})\n\
+             lur.http.get(url, {{ query = {{ p = 1 }}, cache = c }})\n\
+             assert(lur.http.cache_clear() == 2, 'reports how many it dropped')\n\
+             assert(lur.http.get(url, {{ cache = c }}).cached == false, 'refetched')\n\
+             assert(lur.http.cache_clear() == 1)",
             srv.port
         ))
-        .expect_err("no --db");
-    assert!(err.to_string().contains("--db"), "{err}");
-    assert_eq!(srv.hits(), 0, "rejected before any request");
+        .expect("clear");
 }
 
 #[test]
 fn cache_option_is_validated() {
-    let dir = tempfile::tempdir().unwrap();
     let srv = serve(200, "");
-    let rt = cached_runtime(&dir);
+    let rt = cached_runtime();
     for (opts, want) in [
         ("cache = 60000", "must be a table"),
         ("cache = {}", "ttl_ms is required"),

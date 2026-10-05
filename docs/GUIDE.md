@@ -222,12 +222,18 @@ assert(lur.env("LUR_GUIDE_DEFINITELY_UNSET") == nil)
 Returns `{ status, body, headers, headers_all, json() }`. Each request and hop is
 checked against the allowlist and SSRF guard; grant hosts with `--allow-net`.
 
-`cache = { ttl_ms = … }` (GET only, needs `--db`) serves repeat requests from
-`lur.kv` and sets `res.cached` (`true` on a hit). The policy check runs before
-the lookup. Only 2xx responses are stored, and not ones that set a cookie. The key is
+`cache = { ttl_ms = … }` (GET only) serves repeat requests from an in-memory cache
+shared by the whole process and sets `res.cached` (`true` on a hit). It needs no
+`--db`, but it is lost on restart and not shared between processes. The policy check
+runs before the lookup. Only 2xx responses are stored, and not ones that set a cookie. The key is
 the method, final URL (query included) and all request headers; a request carrying
 `Authorization`, `Cookie` or `Proxy-Authorization` bypasses the cache unless that
 header is named in `vary`, e.g. `cache = { ttl_ms = 60000, vary = { "authorization" } }`.
+
+lur does not cap the cache's total size; you manage it. Each entry is bounded by
+`--max-http-body`, expired entries are freed (on lookup, and swept every minute on
+insert), so a short `ttl_ms` and caching only what you need keep memory small.
+`lur.http.cache_clear()` drops everything and returns how many entries it held.
 
 ```lua ignore
 local res = lur.http.get("https://example.com", { timeout = 5000 })
@@ -246,9 +252,10 @@ lur.http.delete("https://api.example.com/items/1")
 local probe = lur.http.head("https://example.com")
 assert(probe.status == 200)
 
--- cached for 5 minutes (requires --db)
+-- cached in memory for 5 minutes
 local feed = lur.http.get("https://example.com/feed.xml", { cache = { ttl_ms = 300000 } })
 assert(feed.cached == false or feed.cached == true)
+local dropped = lur.http.cache_clear() -- number of entries dropped
 ```
 
 ## Storage

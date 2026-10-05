@@ -1,11 +1,12 @@
 //! `lur.http` — policy-gated async HTTP client. Every request and
 //! redirect hop is checked against the allowlist and private-network deny.
-//! Bodies are raw bytes, not auto-decompressed. `opts.cache` stores 2xx GET
-//! responses in `lur.kv` (so it needs `--db`).
+//! Bodies are raw bytes, not auto-decompressed. `opts.cache` keeps 2xx GET
+//! responses in a process-wide in-memory [`HttpCache`] shared by the pool.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use mlua::{Error, Lua, Table, Value};
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
@@ -14,7 +15,6 @@ use sha2::{Digest, Sha256};
 
 use super::json;
 use super::kv::ttl_ms_opt;
-use super::storage::Shared;
 use crate::policy::Policy;
 use crate::runtime::RunError;
 
@@ -26,27 +26,35 @@ pub(crate) fn install(
     lur: &Table,
     policy: Arc<Policy>,
     max_body: usize,
-    shared: &Shared,
+    cache: Arc<HttpCache>,
 ) -> Result<(), RunError> {
     let cell: Arc<OnceLock<Client>> = Arc::new(OnceLock::new());
     let http = lua.create_table().map_err(RunError::Init)?;
 
     {
+        let cache = Arc::clone(&cache);
+        let clear = lua
+            .create_function(move |_, ()| Ok(cache.clear()))
+            .map_err(RunError::Init)?;
+        http.set("cache_clear", clear).map_err(RunError::Init)?;
+    }
+
+    {
         let cell = Arc::clone(&cell);
         let policy = Arc::clone(&policy);
-        let shared = shared.clone();
+        let cache = Arc::clone(&cache);
         let request = lua
             .create_async_function(
                 move |lua, (method, url, opts): (String, String, Option<Table>)| {
                     let cell = Arc::clone(&cell);
                     let policy = Arc::clone(&policy);
-                    let shared = shared.clone();
+                    let cache = Arc::clone(&cache);
                     async move {
                         let client = ensure_client(&cell, &policy)?;
                         let ctx = Ctx {
                             client: &client,
                             policy: &policy,
-                            shared: &shared,
+                            cache: &cache,
                             max_body,
                         };
                         do_request(&lua, &ctx, &method, &url, opts).await
@@ -67,20 +75,20 @@ pub(crate) fn install(
     ] {
         let cell = Arc::clone(&cell);
         let policy = Arc::clone(&policy);
-        let shared = shared.clone();
+        let cache = Arc::clone(&cache);
         let method = method.to_string();
         let f = lua
             .create_async_function(move |lua, (url, opts): (String, Option<Table>)| {
                 let cell = Arc::clone(&cell);
                 let policy = Arc::clone(&policy);
-                let shared = shared.clone();
+                let cache = Arc::clone(&cache);
                 let method = method.clone();
                 async move {
                     let client = ensure_client(&cell, &policy)?;
                     let ctx = Ctx {
                         client: &client,
                         policy: &policy,
-                        shared: &shared,
+                        cache: &cache,
                         max_body,
                     };
                     do_request(&lua, &ctx, &method, &url, opts).await
@@ -191,8 +199,87 @@ fn url_allowed(policy: &Policy, url: &Url) -> bool {
 struct Ctx<'a> {
     client: &'a Client,
     policy: &'a Policy,
-    shared: &'a Shared,
+    cache: &'a HttpCache,
     max_body: usize,
+}
+
+/// A hit is shared, not copied: entries are `Arc`s.
+struct CacheEntry {
+    expires: Instant,
+    raw: Arc<RawResponse>,
+}
+
+#[derive(Default)]
+struct CacheInner {
+    entries: HashMap<String, CacheEntry>,
+    last_sweep: Option<Instant>,
+}
+
+/// Process-wide response cache behind `opts.cache`, shared by every pooled VM
+/// (like `lur.state`). Deliberately unbounded in size: memory is managed by the
+/// script through `ttl_ms`, what it chooses to cache, `--max-http-body` (caps
+/// each entry) and [`HttpCache::clear`]. Expired entries are dropped on lookup
+/// and swept at most once a minute on insert, so a TTL does release memory.
+#[derive(Default)]
+pub struct HttpCache {
+    inner: Mutex<CacheInner>,
+}
+
+impl std::fmt::Debug for HttpCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpCache").finish_non_exhaustive()
+    }
+}
+
+const SWEEP_EVERY: Duration = Duration::from_secs(60);
+
+impl HttpCache {
+    fn lock(&self) -> std::sync::MutexGuard<'_, CacheInner> {
+        self.inner.lock().expect("http cache mutex poisoned")
+    }
+
+    fn get(&self, key: &str) -> Option<Arc<RawResponse>> {
+        let mut inner = self.lock();
+        match inner.entries.get(key) {
+            Some(e) if e.expires > Instant::now() => Some(Arc::clone(&e.raw)),
+            Some(_) => {
+                inner.entries.remove(key);
+                None
+            }
+            None => None,
+        }
+    }
+
+    fn put(&self, key: String, raw: RawResponse, ttl_ms: i64) {
+        let now = Instant::now();
+        let mut inner = self.lock();
+        if inner
+            .last_sweep
+            .is_none_or(|t| now.duration_since(t) >= SWEEP_EVERY)
+        {
+            inner.entries.retain(|_, e| e.expires > now);
+            inner.last_sweep = Some(now);
+        }
+        // `ttl_ms` is validated positive; an absurd one must not overflow `Instant`.
+        let expires = now
+            .checked_add(Duration::from_millis(ttl_ms.cast_unsigned()))
+            .unwrap_or_else(|| now + Duration::from_secs(10 * 365 * 24 * 3600));
+        inner.entries.insert(
+            key,
+            CacheEntry {
+                expires,
+                raw: Arc::new(raw),
+            },
+        );
+    }
+
+    /// Drops every entry; returns how many were held.
+    fn clear(&self) -> usize {
+        let mut inner = self.lock();
+        let n = inner.entries.len();
+        inner.entries.clear();
+        n
+    }
 }
 
 async fn do_request(
@@ -217,15 +304,8 @@ async fn do_request(
         Some(opts) => parse_cache(opts)?,
         None => None,
     };
-    if cache.is_some() {
-        if method != Method::GET {
-            return Err(Error::runtime("lur.http: opts.cache only supports GET"));
-        }
-        if !ctx.shared.configured() {
-            return Err(Error::runtime(
-                "lur.http: opts.cache needs a database; pass --db <path>",
-            ));
-        }
+    if cache.is_some() && method != Method::GET {
+        return Err(Error::runtime("lur.http: opts.cache only supports GET"));
     }
 
     let mut req = ctx.client.request(method, url);
@@ -240,7 +320,7 @@ async fn do_request(
     let wants_cache = cache.is_some();
     let slot = cache.and_then(|c| cache_key(&req, &c).map(|key| (key, c.ttl_ms)));
     if let Some((key, _)) = &slot
-        && let Some(raw) = cache_lookup(lua, ctx.shared, key).await?
+        && let Some(raw) = ctx.cache.get(key)
     {
         let res = raw_to_table(lua, &raw)?;
         res.set("cached", true)?;
@@ -253,17 +333,14 @@ async fn do_request(
         .await
         .map_err(|e| Error::runtime(format!("lur.http: {e}")))?;
     let raw = read_response(resp, ctx.max_body).await?;
-    if let Some((key, ttl_ms)) = &slot
-        && cacheable(&raw)
-    {
-        let backend = ctx.shared.ensure().await?;
-        backend
-            .kv_set(key.clone(), encode_raw(&raw), Some(*ttl_ms))
-            .await?;
-    }
     let res = raw_to_table(lua, &raw)?;
     if wants_cache {
         res.set("cached", false)?;
+    }
+    if let Some((key, ttl_ms)) = slot
+        && cacheable(&raw)
+    {
+        ctx.cache.put(key, raw, ttl_ms);
     }
     Ok(res)
 }
@@ -331,15 +408,6 @@ fn cache_key(req: &reqwest::Request, cache: &CacheOpts) -> Option<String> {
 /// Only successful responses, and none that set cookies for one visitor.
 fn cacheable(raw: &RawResponse) -> bool {
     (200..300).contains(&raw.status) && !raw.headers.iter().any(|(k, _)| k == "set-cookie")
-}
-
-async fn cache_lookup(lua: &Lua, shared: &Shared, key: &str) -> mlua::Result<Option<RawResponse>> {
-    let backend = shared.ensure().await?;
-    Ok(match backend.kv_get(lua, key.to_owned()).await? {
-        // An undecodable entry is a miss, not an error: it gets overwritten.
-        Value::String(s) => decode_raw(&s.as_bytes()),
-        _ => None,
-    })
 }
 
 fn apply_opts(
@@ -476,51 +544,4 @@ fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
     res.set("json", json_fn)?;
 
     Ok(res)
-}
-
-/// Cache entry layout: `u16 status`, `u32 header count`, then per header
-/// `u32 len + name, u32 len + value`, then the body. Big-endian.
-fn encode_raw(raw: &RawResponse) -> Vec<u8> {
-    fn put(out: &mut Vec<u8>, bytes: &[u8]) {
-        out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
-        out.extend_from_slice(bytes);
-    }
-    let mut out = Vec::with_capacity(raw.body.len() + 64);
-    out.extend_from_slice(&raw.status.to_be_bytes());
-    out.extend_from_slice(&(raw.headers.len() as u32).to_be_bytes());
-    for (k, v) in &raw.headers {
-        put(&mut out, k.as_bytes());
-        put(&mut out, v);
-    }
-    out.extend_from_slice(&raw.body);
-    out
-}
-
-fn decode_raw(bytes: &[u8]) -> Option<RawResponse> {
-    fn take<'a>(buf: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
-        let (head, rest) = buf.split_at_checked(n)?;
-        *buf = rest;
-        Some(head)
-    }
-    fn take_u32(buf: &mut &[u8]) -> Option<usize> {
-        Some(u32::from_be_bytes(take(buf, 4)?.try_into().ok()?) as usize)
-    }
-    fn take_len_prefixed<'a>(buf: &mut &'a [u8]) -> Option<&'a [u8]> {
-        let n = take_u32(buf)?;
-        take(buf, n)
-    }
-    let mut buf = bytes;
-    let status = u16::from_be_bytes(take(&mut buf, 2)?.try_into().ok()?);
-    let count = take_u32(&mut buf)?;
-    let mut headers = Vec::new();
-    for _ in 0..count {
-        let k = String::from_utf8(take_len_prefixed(&mut buf)?.to_vec()).ok()?;
-        let v = take_len_prefixed(&mut buf)?.to_vec();
-        headers.push((k, v));
-    }
-    Some(RawResponse {
-        status,
-        headers,
-        body: buf.to_vec(),
-    })
 }

@@ -69,7 +69,7 @@ out-of-memory → `RunError::OutOfMemory`, past-deadline → `Timeout`, else `Sc
 [`capabilities::install`](src/capabilities/mod.rs) fills the flat `lur` table in fixed order:
 
 ```
-null · log · json · base64 · crypto · cookie · time · url · html · feed · io · fs · env · db · http · kv · async · args · serve · state
+null · log · json · base64 · crypto · cookie · time · url · html · feed · io · fs · http · env · db · kv · async · args · serve · state
 ```
 
 `fs`/`http`/`env` get an `Arc<Policy>`; `db` gets the `--db` target and passes the shared
@@ -185,9 +185,13 @@ original remains, bounded by `--shutdown-grace`. Stragglers are aborted when the
   `open` adds the column to older tables (SQLite: `pragma table_info` check, tolerating a lost
   race; Postgres: `ADD COLUMN IF NOT EXISTS`). `incr` is one upsert that restarts an expired
   row and sets the expiry only if the row has none (or `renew_ttl`).
-- **`lur.http` cache** reads/writes `kv_get`/`kv_set` directly (`http::install` gets the
-  `Shared` handle, so `db` installs before `http`). Policy check → build request → key →
-  lookup; the key is a SHA-256 of method, final URL and all request headers.
+- **`lur.http` cache** is an in-memory `HttpCache` (`http.rs`) held in `RuntimeConfig` and
+  shared by every pooled VM like `lur.state`, so it works without `--db`. This is the one
+  Rust-side shared state besides `StateStore`; it is never exposed to VMs except through
+  `opts.cache` and `lur.http.cache_clear()`. Policy check → build request → key → lookup; the
+  key is a SHA-256 of method, final URL and all request headers. Entries are `Arc`s with an
+  `Instant` expiry; expired ones are dropped on lookup and swept at most once a minute on
+  insert. There is no size cap by design (see decisions.md).
 - **Invariants:** kv counters are integers; `kv.get` returns bytes; `db.tx`/`kv.update` are
   write transactions; integer steps (`kv.incr`/`decr`, `state.incr`/`decr`) reject fractions.
 

@@ -243,9 +243,11 @@ Lua error (catch with `pcall`).
   redirect hop is checked against the allowlist and the private-IP (SSRF) guard; TLS is
   always verified; the body is capped by `--max-http-body`. Proxy environment variables
   (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) are ignored.
-  `cache = { ttl_ms = 60000, vary? }` (GET only, requires `--db`) stores 2xx responses
-  in `lur.kv` and adds `res.cached`; requests with `Authorization`/`Cookie` bypass it
-  unless named in `vary`, and the policy check runs before the lookup.
+  `cache = { ttl_ms = 60000, vary? }` (GET only; in memory, no `--db`) stores 2xx responses
+  and adds `res.cached`; requests with `Authorization`/`Cookie` bypass it unless named in
+  `vary`, and the policy check runs before the lookup. `lur.http.cache_clear()` drops all
+  entries and returns the count; the total size is otherwise unbounded, so scripts manage
+  it with `ttl_ms` and `--max-http-body` (per entry).
 - **`lur.env`** — `lur.env(name) → string | nil`; `nil` for both denied and unset, so it
   is not an oracle.
 

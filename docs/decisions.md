@@ -114,16 +114,31 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 - **`kv.ttl` returns `ms, exists`** rather than one three-state value: `nil, false` absent,
   `nil, true` no expiry, `ms, true` expiring. One-value callers get a number or `nil`
   (safe in arithmetic); Redis's `-1`/`-2` would make `ttl < 1000` true for a missing key.
-- **`lur.http` `cache` is built on `lur.kv`, not an in-memory map.** It survives restarts
-  and is shared by pooled VMs without shared mutable VM state, at the cost of requiring
-  `--db` (it raises without one rather than silently caching per process). `cache` is a
-  table (`{ ttl_ms }`) so the unit is explicit and `vary` has a place. The allowlist/SSRF
-  check runs before the lookup so a cached body never outlives the policy that allowed it.
-  Requests with `Authorization`/`Cookie`/`Proxy-Authorization` bypass the cache unless the
-  header is listed in `vary`, and responses that set a cookie aren't stored: the cache is
-  shared by every request, so a credentialed response must not be served to someone else.
+- **`lur.http` `cache` is an in-memory map, not `lur.kv`.** A cache is disposable, so it
+  shouldn't demand a database: it works in one-shot and under `serve` with no `--db`. It
+  lives in `RuntimeConfig` (an `Arc` shared by the pool, like `lur.state`), not in a VM.
+  Costs: lost on restart, not shared between processes, useless across one-shot runs.
+  Rejected: kv-backed (needs `--db`, which users asked why a cache requires) and "kv when
+  `--db` is set, memory otherwise" (the same script would have different persistence per
+  environment). A persistent store can be added later as an explicit opt-in, not an
+  environment-dependent fallback.
+  `cache` is a table (`{ ttl_ms }`) so the unit is explicit and `vary` has a place. The
+  allowlist/SSRF check runs before the lookup so a cached body never outlives the policy that
+  allowed it. Requests with `Authorization`/`Cookie`/`Proxy-Authorization` bypass the cache
+  unless the header is listed in `vary`, and responses that set a cookie aren't stored: the
+  cache is shared by every request, so a credentialed response must not be served to someone
+  else.
+  **No size cap, on purpose; the script owns capacity.** lur keeps the levers sufficient:
+  `ttl_ms` bounds lifetime (expired entries are really freed: on lookup, and by a sweep at
+  most once a minute on insert), `--max-http-body` bounds each entry, `cache` is opt-in per
+  call so scripts choose what to cache, and `lur.http.cache_clear()` flushes everything and
+  reports the count. Rejected for now: a built-in LRU/byte cap (one more knob and eviction
+  policy to get wrong; add it if scripts turn out to need it). Memory is therefore bounded by
+  distinct keys per TTL window times `--max-http-body`; a script caching unbounded distinct
+  URLs with a long `ttl_ms` can grow the process, and the VM `--memory` limit does not cover
+  it.
   Not done: serve-stale-on-error, stampede protection (N concurrent misses fetch N times),
-  honoring `Cache-Control`/`ETag`.
+  honoring `Cache-Control`/`ETag`, per-key invalidation.
 - **TLS via rustls**, not native-tls: no OpenSSL system dependency.
 - **SQLite retry** wraps only lock acquisition and single statements; re-running a
   transaction body was rejected (duplicated side effects).
