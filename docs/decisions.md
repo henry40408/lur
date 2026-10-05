@@ -46,6 +46,12 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   to Lua tables (loses `select` on sub-nodes; fragment re-parse drops `<td>`). Known cost:
   holding many live docs on one thread re-parses on access. Invalid UTF-8 input is replaced
   rather than rejected, since it is usually a raw HTTP body.
+- **`lur.html.sanitize`**: delegated to `ammonia` rather than hand-rolled, since an
+  allowlist sanitizer is security code where the long tail (mXSS, scheme tricks) is the whole
+  job. Cost measured: +275 KB release (ammonia 4.1.4 shares `html5ever` 0.39 with `scraper`,
+  so no second parser). Schemes are narrowed to `http`/`https`/`mailto` (ammonia's default
+  also allows `ftp`, `tel`, `magnet`, …). Not done: custom tag/attribute allowlists and
+  returning a node instead of a string.
 - **`lur.xml`**: unlike `lur.html`, the tree is owned data (an arena of elements behind an
   `Arc`), so a node is just a handle plus an index: `Send`, no re-parsing, no cache. Selection
   is a small slash-path grammar rather than CSS or full XPath: feeds need `a/b`, `//a`, `*`
