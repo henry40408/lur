@@ -1,5 +1,8 @@
-//! `lur.time` — what `os.*` lacks: millisecond wall/monotonic clocks and
-//! RFC 3339 / HTTP-date parsing. Formatting stays with `os.date`.
+//! `lur.time` — what `os.*` lacks: millisecond wall/monotonic clocks, RFC 3339 /
+//! RFC 2822 / HTTP-date parsing, lenient parsing of scraped dates, and
+//! timezone-aware formatting (`os.date` only knows local time and UTC).
+
+mod zoned;
 
 use std::sync::LazyLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -17,6 +20,7 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 
     install_clocks(lua, &time)?;
     install_parsers(lua, &time)?;
+    zoned::install(lua, &time)?;
 
     lur.set("time", time).map_err(RunError::Init)?;
     Ok(())

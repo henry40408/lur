@@ -22,6 +22,7 @@ pub mod serve;
 pub mod state;
 mod storage;
 pub mod time;
+pub mod url;
 
 use mlua::Lua;
 
@@ -42,6 +43,7 @@ pub fn install(
     crypto::install(lua, &lur)?;
     cookie::install(lua, &lur)?;
     time::install(lua, &lur)?;
+    url::install(lua, &lur)?;
     html::install(lua, &lur)?;
     feed::install(lua, &lur)?;
     io::install(lua, &lur)?;

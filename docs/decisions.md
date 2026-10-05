@@ -25,7 +25,7 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## Capabilities
 
-- **Pure-compute capabilities** (`json`, `base64`, `crypto`, `cookie`, `time`, `html`, `feed`) are not
+- **Pure-compute capabilities** (`json`, `base64`, `crypto`, `cookie`, `time`, `url`, `html`, `feed`) are not
   policy-gated and take/return raw bytes; callers bridge with `hex`/`base64`.
 - **`lur.crypto`**: `hmac_md5` and `random_hex` omitted on purpose (extinct /
   composable). `constant_eq` returns early on length mismatch (length isn't secret).
@@ -47,8 +47,16 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   inventing an id.
 - **`lur.cookie`**: no percent-encoding (a value containing `%` would be ambiguous).
   `SameSite=None` without `secure` raises rather than silently adding `Secure`.
-- **`lur.time`**: integer milliseconds everywhere; no formatting API since
-  `os.date("!…")` already covers RFC 3339 / IMF-fixdate.
+- **`lur.time`**: integer milliseconds everywhere. Formatting was first left to
+  `os.date("!…")`, but that only knows local time and UTC, and feeds need RFC 2822 with
+  offsets and scraped sites need `Asia/Taipei`-style zones, so `format*`/`parse` take an
+  optional `tz` (IANA via `chrono-tz`, or a fixed offset). `parse` without a format is
+  deliberately a short fixed list (no guessing `dd/mm` vs `mm/dd`: ambiguous input needs an
+  explicit `fmt`). DST gap raises; overlap picks the earlier instant.
+- **`lur.url`**: thin wrapper over the `url` crate (WHATWG, already in the tree via
+  `reqwest`). `parse` returns a plain table (no userdata, no setters). `encode_query`
+  sorts keys for deterministic output; `decode_query` keeps the last duplicate to match
+  `req.query`. No percent-encode helper yet: `join` and `encode_query` cover URL building.
 - **Server responses**: no `Content-Type` inference ("explicit over magic"); an invalid
   header fails the whole response (500) instead of being dropped.
 - **`lur.http` SSRF guard**:

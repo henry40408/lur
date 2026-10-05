@@ -99,6 +99,34 @@ assert(lur.time.parse_rfc3339("1970-01-01T00:00:01Z") == 1000)
 assert(lur.time.parse_http_date("Thu, 01 Jan 1970 00:00:01 GMT") == 1000)
 ```
 
+Timezone-aware formatting and lenient parsing (`tz` is an IANA name, `"+08:00"`, or
+`nil` for UTC). Wall-clock text with no offset is read in `tz`.
+
+```lua
+local ms = lur.time.parse("2026-10-05 14:30", nil, "Asia/Taipei")
+assert(ms == lur.time.parse("2026-10-05T06:30:00Z"))
+assert(lur.time.format_rfc3339(ms, "Asia/Taipei") == "2026-10-05T14:30:00.000+08:00")
+assert(lur.time.format_rfc2822(ms) == "Mon, 5 Oct 2026 06:30:00 +0000")
+assert(lur.time.format(ms, "%Y/%m/%d %H:%M", "Asia/Taipei") == "2026/10/05 14:30")
+assert(lur.time.parse_rfc2822("Thu, 01 Jan 1970 00:00:01 +0000") == 1000)
+assert(lur.time.parse("05/10/2026", "%d/%m/%Y") == lur.time.parse("2026-10-05"))
+```
+
+### lur.url
+
+Parse and build URLs; resolve the relative links found in scraped pages.
+
+```lua
+local u = lur.url.parse("https://example.com:8443/a?x=1#top")
+assert(u.host == "example.com" and u.port == 8443 and u.query == "x=1")
+
+assert(lur.url.join("https://e.com/blog/1", "../about") == "https://e.com/about")
+
+local q = lur.url.encode_query({ b = "x y", a = { 1, 2 } })
+assert(q == "a=1&a=2&b=x+y")
+assert(lur.url.decode_query("?b=x+y").b == "x y")
+```
+
 ### lur.log
 
 `info`/`warn`/`error` write `<level>: <msg>\n` to **stderr** (stdout is the
