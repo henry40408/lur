@@ -216,6 +216,53 @@ fn oversize_body_is_rejected_with_413_over_http() {
 }
 
 #[test]
+fn oversize_chunked_body_is_rejected_with_413_over_http() {
+    // No Content-Length to check up front: the cap must hold while reading.
+    let (addr, _reaper, _dir) = spawn_server_args(
+        "lur.serve.http('POST', '/u', function(req) return { body = 'reached' } end)",
+        &["--max-body", "4"],
+    );
+    let chunk = "x".repeat(64);
+    let request = format!(
+        "POST /u HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{chunk}\r\n0\r\n\r\n",
+        chunk.len()
+    );
+    let response = round_trip(&addr, &request);
+
+    assert!(response.starts_with("HTTP/1.1 413"), "{response:?}");
+    assert!(!response.contains("reached"), "{response:?}");
+}
+
+#[test]
+fn sigterm_closes_idle_keep_alive_connections_promptly() {
+    // The default grace is 10 s; an idle keep-alive client must not make the
+    // server wait for it.
+    let (addr, mut reaper, _dir) =
+        spawn_server("lur.serve.http('GET', '/ping', function() return { body = 'pong' } end)");
+    let mut stream = wait_until_up(&addr);
+    stream
+        .write_all(b"GET /ping HTTP/1.1\r\nHost: x\r\n\r\n")
+        .unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut seen = Vec::new();
+    let mut buf = [0u8; 256];
+    while !seen.ends_with(b"pong") {
+        let n = stream.read(&mut buf).expect("read the response");
+        assert!(n > 0, "connection closed early: {seen:?}");
+        seen.extend_from_slice(&buf[..n]);
+    }
+
+    // The connection is now idle but open.
+    send_sigterm(reaper.pid());
+    let status = reaper
+        .wait_within(Duration::from_secs(3))
+        .expect("an idle keep-alive connection must not hold up shutdown");
+    assert!(status.success(), "{status:?}");
+}
+
+#[test]
 fn sigterm_drains_in_flight_request_then_exits_cleanly() {
     // SIGTERM mid-request: the request completes, then the process exits 0.
     let (addr, mut reaper, _dir) = spawn_server(
