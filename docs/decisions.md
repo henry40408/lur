@@ -178,9 +178,11 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 - **TLS via rustls**, not native-tls: no OpenSSL system dependency.
 - **SQLite retry** wraps only lock acquisition and single statements; re-running a
   transaction body was rejected (duplicated side effects).
-- **Cancellation cleanup is a rollback-on-drop guard.** Rejected: sqlx's `.begin()` (issues
-  a deferred `BEGIN`, losing `BEGIN IMMEDIATE`; Postgres would need `SET TRANSACTION`) and
-  Postgres server-side timeouts (Postgres-only, and would kill legitimately slow
+- **Cancellation cleanup relies on sqlx's rollback-on-drop**, using `Pool::begin_with` so the
+  `BEGIN` statement stays ours (`BEGIN IMMEDIATE`, `BEGIN ISOLATION LEVEL SERIALIZABLE`).
+  This replaced a hand-rolled guard (`PinnedTx` + detached ROLLBACK task) once sqlx 0.9
+  gained `begin_with`; the cancel tests (single-connection pool) pass on both backends.
+  Rejected: Postgres server-side timeouts (Postgres-only, and would kill legitimately slow
   transforms). `db.tx` closures hold `Weak` refs so cancellation drops the transaction
   immediately instead of waiting for Luau GC.
 - **`db.tx` takes the write lock on SQLite even when read-only** (`BEGIN IMMEDIATE`) —

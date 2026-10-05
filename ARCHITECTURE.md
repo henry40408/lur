@@ -228,11 +228,11 @@ awaited, bounded by `--shutdown-grace`. Stragglers are aborted when the runtime 
 
 ### Cancellation-safe transactions
 
-`db.tx`/`kv.update` run user code inside a manually opened transaction, which `sqlx` doesn't
-auto-roll-back. If the wall-clock timeout drops the future mid-body, the guard
-(`SqliteTransaction`/`PgTransaction`, or `PinnedTx` in `kv_update`) rolls back on `Drop` via a
-detached task, so the connection never returns to the pool mid-transaction (on Postgres it
-would sit idle-in-transaction holding locks). Explicit COMMIT/ROLLBACK disarms the guard.
+`db.tx`/`kv.update` open a `sqlx::Transaction` via `Pool::begin_with` (`BEGIN IMMEDIATE` on
+SQLite, `BEGIN ISOLATION LEVEL SERIALIZABLE` on Postgres). If the wall-clock timeout drops the
+future mid-body, dropping the `Transaction` queues a ROLLBACK on the connection before it
+returns to the pool, so it is never reused mid-transaction (on Postgres it would sit
+idle-in-transaction holding locks). Explicit commit/rollback consumes the transaction.
 
 ### `lur.state`
 
