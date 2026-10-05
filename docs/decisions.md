@@ -46,6 +46,17 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   to Lua tables (loses `select` on sub-nodes; fragment re-parse drops `<td>`). Known cost:
   holding many live docs on one thread re-parses on access. Invalid UTF-8 input is replaced
   rather than rejected, since it is usually a raw HTTP body.
+- **`lur.xml`**: unlike `lur.html`, the tree is owned data (an arena of elements behind an
+  `Arc`), so a node is just a handle plus an index: `Send`, no re-parsing, no cache. Selection
+  is a small slash-path grammar rather than CSS or full XPath: feeds need `a/b`, `//a`, `*`
+  and little else, and CSS would force a second selector engine over this tree. Names are
+  matched as written without namespace resolution (`dc:creator`); scripts that need a
+  different prefix mapping are rare and the workaround is one extra `if`. Structure errors
+  raise (a half-parsed feed is worse than none) while unknown entities are kept literally,
+  because real feeds use `&nbsp;` undeclared. `DOCTYPE` is dropped, so custom entities never
+  expand (no billion-laughs). Parsing and traversal are iterative, so nesting depth cannot
+  overflow the stack. Not done: namespaces, XPath predicates, streaming, serialization back
+  to XML.
 - **`lur.feed`**: RSS/Atom are written with `quick-xml`'s `Writer` (closures guarantee
   balanced tags; text and attributes are escaped), not hand-built strings; we only strip
   characters XML 1.0 forbids. `rss`/`atom_syndication` were rejected: two typed models to
