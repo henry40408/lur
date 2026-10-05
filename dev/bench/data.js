@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791187905128,
+  "lastUpdate": 1791188840141,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3989,6 +3989,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 232166,
             "range": "± 8893",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "587aaac4a282dc468e19b5740e529bad51b1fc84",
+          "message": "test: widen the timing margins of the kv incr TTL window tests (#140)\n\nA 250 ms sleep inside a 400 ms TTL (and 300 ms inside 600 ms) flaked on a slow coverage runner. Scale the windows so a sleep can overshoot by 500 ms or more without changing the outcome; sleeps never undershoot, so the expiry assertions are unaffected.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T16:24:53+08:00",
+          "tree_id": "5af3bc21c768608f7b105d98cc205900b97b1a17",
+          "url": "https://github.com/henry40408/lur/commit/587aaac4a282dc468e19b5740e529bad51b1fc84"
+        },
+        "date": 1791188839591,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 292668,
+            "range": "± 2701",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5022,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 208177,
+            "range": "± 1041",
             "unit": "ns/iter"
           }
         ]
