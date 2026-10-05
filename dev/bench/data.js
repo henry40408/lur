@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791174605409,
+  "lastUpdate": 1791179359298,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3779,6 +3779,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 206291,
             "range": "± 11290",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e4f3709e21bb7e030454fffd2dd1243750d00d29",
+          "message": "fix: stop lur.state from keeping a tombstone for every deleted key (#135)\n\n* fix: stop lur.state from keeping a tombstone for every deleted key\n\nVersions now come from one store-wide counter, so deleted keys can be\nremoved and a recreated key still never reuses a version a reader holds.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* refactor: rename the state version counter from clock to last_version\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T13:46:20+08:00",
+          "tree_id": "4d7a59a4301b95f59ef5f2055f8ff902ebf52c3d",
+          "url": "https://github.com/henry40408/lur/commit/e4f3709e21bb7e030454fffd2dd1243750d00d29"
+        },
+        "date": 1791179358923,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 324982,
+            "range": "± 7801",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5301,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 212188,
+            "range": "± 5259",
             "unit": "ns/iter"
           }
         ]
