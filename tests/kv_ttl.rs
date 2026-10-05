@@ -71,21 +71,21 @@ fn add_succeeds_over_an_expired_key_only() {
 #[test]
 fn incr_ttl_is_a_fixed_window() {
     // The window opens at the first hit and later hits don't extend it.
-    run("assert(lur.kv.incr('c', 1, { ttl_ms = 600 }) == 1)\n\
-         lur.async.sleep(300)\n\
-         assert(lur.kv.incr('c', 1, { ttl_ms = 600 }) == 2)\n\
-         lur.async.sleep(400)\n\
-         assert(lur.kv.incr('c', 1, { ttl_ms = 600 }) == 1, 'window elapsed, restarts')");
+    run("assert(lur.kv.incr('c', 1, { ttl_ms = 1500 }) == 1)\n\
+         lur.async.sleep(600)\n\
+         assert(lur.kv.incr('c', 1, { ttl_ms = 1500 }) == 2)\n\
+         lur.async.sleep(1100)\n\
+         assert(lur.kv.incr('c', 1, { ttl_ms = 1500 }) == 1, 'window elapsed, restarts')");
 }
 
 #[test]
 fn incr_renew_ttl_slides_the_window() {
     run(
-        "assert(lur.kv.incr('c', 1, { ttl_ms = 400, renew_ttl = true }) == 1)\n\
-         lur.async.sleep(250)\n\
-         assert(lur.kv.incr('c', 1, { ttl_ms = 400, renew_ttl = true }) == 2)\n\
-         lur.async.sleep(250)\n\
-         assert(lur.kv.incr('c', 1, { ttl_ms = 400, renew_ttl = true }) == 3, 'renewed')",
+        "assert(lur.kv.incr('c', 1, { ttl_ms = 1000, renew_ttl = true }) == 1)\n\
+         lur.async.sleep(500)\n\
+         assert(lur.kv.incr('c', 1, { ttl_ms = 1000, renew_ttl = true }) == 2)\n\
+         lur.async.sleep(500)\n\
+         assert(lur.kv.incr('c', 1, { ttl_ms = 1000, renew_ttl = true }) == 3, 'renewed')",
     );
 }
 
