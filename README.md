@@ -224,6 +224,10 @@ Lua error (catch with `pcall`).
   (descendants only; invalid selector raises), `text()`, `html()`, `inner_html()`, `tag()`,
   `attr(name) → string | nil`, `attrs()`, `parent()`, `children()` (elements only).
   Call with `:`. Parsing follows the HTML5 algorithm, so `<td>` outside a `<table>` is dropped.
+- **`lur.html.sanitize(html, opts?) → string`** — strips scripts, styles, event handlers and
+  unsafe URLs with `ammonia`'s allowlist; only `http`, `https` and `mailto` links survive and
+  links get `rel="noopener noreferrer"`. `opts.base` (absolute URL) resolves relative
+  `href`/`src`; without it they are kept as written. Broken markup is repaired.
 - **`lur.xml`** — `parse(xml) → doc`. Same node methods as `lur.html` (`select`, `select_one`,
   `text`, `tag`, `attr`, `attrs`, `parent`, `children`) but selection takes a slash path:
   `a/b` (children), `//a` (descendants, also mid-path), `*` (any name); results are in document

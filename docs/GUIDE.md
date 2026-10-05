@@ -99,6 +99,15 @@ assert(lur.feed.rss(meta, items):find("<rss", 1, true))
 assert(lur.json.decode(lur.feed.json(meta, items)).items[1].title == "A")
 ```
 
+Clean scraped HTML before it goes into a feed item (`base` turns relative links absolute):
+
+```lua
+local dirty = [[<p onclick="x()">Hi <a href="/a">a</a><script>alert(1)</script></p>]]
+local clean = lur.html.sanitize(dirty, { base = "https://e.com/blog/" })
+assert(clean:find('href="https://e.com/a"', 1, true))
+assert(not clean:find("script") and not clean:find("onclick"))
+```
+
 `lur.feed.rss` / `.atom` / `.json` take `(meta, items)`; item `date` is epoch milliseconds.
 
 ### lur.xml

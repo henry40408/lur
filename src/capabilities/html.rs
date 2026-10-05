@@ -18,6 +18,8 @@ use scraper::{ElementRef, Html, Selector};
 use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
+mod sanitize;
+
 /// Parsed documents kept per thread.
 const CACHE_SLOTS: usize = 8;
 
@@ -188,6 +190,7 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
         })
         .map_err(RunError::Init)?;
     html.set("parse", parse).map_err(RunError::Init)?;
+    sanitize::install(lua, &html)?;
 
     lur.set("html", html).map_err(RunError::Init)?;
     Ok(())
