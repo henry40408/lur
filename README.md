@@ -200,7 +200,19 @@ Lua error (catch with `pcall`).
 - **`lur.time`** — integer milliseconds throughout. `now_ms()` (Unix time),
   `monotonic_ms()` (for elapsed-time differences), `parse_rfc3339(text)` (UTC offset
   such as `Z` required) and `parse_http_date(text)` → epoch ms; malformed input raises.
-  Divide by `1000` for `os.date`.
+  Divide by `1000` for `os.date`. Timezone-aware: `format_rfc3339(ms, tz?)`,
+  `format_rfc2822(ms, tz?)`, `format(ms, strftime, tz?)`, `parse_rfc2822(text)`, and
+  `parse(text, fmt?, tz?)`. `tz` is an IANA name (`"Asia/Taipei"`), a fixed offset
+  (`"+08:00"`), or `nil`/`"UTC"`. `parse` without `fmt` accepts RFC 3339, RFC 2822,
+  HTTP-date, then `YYYY-MM-DD[ T]HH:MM[:SS[.f]]` and `YYYY/MM/DD[ HH:MM[:SS]]`; wall-clock
+  text with no offset is read in `tz`. A local time in a DST gap raises; in an overlap the
+  earlier instant wins.
+- **`lur.url`** — `parse(url) → { href, scheme, host?, port?, username?, password?, path,
+  query?, fragment? }` (`port` only when explicit and non-default; invalid URL raises),
+  `join(base, relative) → string` (resolves relative links, `base` must be absolute),
+  `encode_query(table) → string` (keys sorted; an array value repeats the key; string,
+  number and boolean values) and `decode_query(text) → table` (leading `?` optional, last
+  duplicate wins, `+` is a space).
 - **`lur.html`** — `parse(html) → doc` (invalid UTF-8 is replaced). Nodes (the doc and its
   elements) share methods: `select(css) → array`, `select_one(css) → node | nil`
   (descendants only; invalid selector raises), `text()`, `html()`, `inner_html()`, `tag()`,
