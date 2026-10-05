@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791161549219,
+  "lastUpdate": 1791162903861,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3527,6 +3527,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208954,
             "range": "± 2075",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "968db22dff7333f82b181b893f7e0db3b44dfcdf",
+          "message": "feat: add lur.url and timezone-aware lur.time (#128)\n\nlur.url parses, joins and builds URLs and query strings. lur.time gains\nformat_rfc3339/format_rfc2822/format, parse_rfc2822 and a lenient parse,\nall with optional IANA or fixed-offset timezones.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T09:13:50+08:00",
+          "tree_id": "489074da9f0bb96fa6142303eb8ca99910a8450e",
+          "url": "https://github.com/henry40408/lur/commit/968db22dff7333f82b181b893f7e0db3b44dfcdf"
+        },
+        "date": 1791162903145,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 185727,
+            "range": "± 15339",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3395,
+            "range": "± 186",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 301734,
+            "range": "± 15540",
             "unit": "ns/iter"
           }
         ]
