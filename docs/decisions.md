@@ -37,7 +37,11 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   to Lua tables (loses `select` on sub-nodes; fragment re-parse drops `<td>`). Known cost:
   holding many live docs on one thread re-parses on access. Invalid UTF-8 input is replaced
   rather than rejected, since it is usually a raw HTTP body.
-- **`lur.feed`**: escaped text instead of CDATA (no `]]>` edge case); no feed parsing
+- **`lur.feed`**: RSS/Atom are written with `quick-xml`'s `Writer` (closures guarantee
+  balanced tags; text and attributes are escaped), not hand-built strings; we only strip
+  characters XML 1.0 forbids. `rss`/`atom_syndication` were rejected: two typed models to
+  map from Lua tables and less control over output. Escaped text instead of CDATA (no
+  `]]>` edge case); `quick-xml`'s `Reader` is the intended base for a future `lur.xml`. No feed parsing
   (`lur.xml`), HTML sanitizing, or date formatting API yet — dates are epoch ms and the
   serializers format them. Atom/JSON items without `guid`/`link` raise instead of
   inventing an id.
