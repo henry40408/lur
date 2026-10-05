@@ -246,16 +246,16 @@ fn pg_kv_incr_ttl_fixed_window_renew_and_heal() {
     let r = unique("pgren");
     let h = unique("pgheal");
     rt.run(&format!(
-        "assert(lur.kv.incr('{w}', 1, {{ ttl_ms = 600 }}) == 1)\n\
-         lur.async.sleep(300)\n\
-         assert(lur.kv.incr('{w}', 1, {{ ttl_ms = 600 }}) == 2, 'window not extended')\n\
-         lur.async.sleep(400)\n\
-         assert(lur.kv.incr('{w}', 1, {{ ttl_ms = 600 }}) == 1, 'window elapsed, restarts')\n\
-         local o = {{ ttl_ms = 400, renew_ttl = true }}\n\
+        "assert(lur.kv.incr('{w}', 1, {{ ttl_ms = 1500 }}) == 1)\n\
+         lur.async.sleep(600)\n\
+         assert(lur.kv.incr('{w}', 1, {{ ttl_ms = 1500 }}) == 2, 'window not extended')\n\
+         lur.async.sleep(1100)\n\
+         assert(lur.kv.incr('{w}', 1, {{ ttl_ms = 1500 }}) == 1, 'window elapsed, restarts')\n\
+         local o = {{ ttl_ms = 1000, renew_ttl = true }}\n\
          assert(lur.kv.incr('{r}', 1, o) == 1)\n\
-         lur.async.sleep(250)\n\
+         lur.async.sleep(500)\n\
          assert(lur.kv.incr('{r}', 1, o) == 2)\n\
-         lur.async.sleep(250)\n\
+         lur.async.sleep(500)\n\
          assert(lur.kv.incr('{r}', 1, o) == 3, 'renewed')\n\
          assert(lur.kv.incr('{h}') == 1)\n\
          assert(lur.kv.incr('{h}', 1, {{ ttl_ms = 5000 }}) == 2, 'value carries over')\n\
