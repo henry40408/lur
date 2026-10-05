@@ -168,21 +168,14 @@ fn install_serialize(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
                     out.extend_from_slice(&path);
                 }
                 if let Some(max_age) = opts.get::<Option<Value>>("max_age")? {
+                    let bad_max_age =
+                        || Error::runtime("lur.cookie.serialize: max_age must be an integer");
                     let n = match max_age {
                         Value::Integer(i) => i,
-                        Value::Number(f)
-                            if f.is_finite()
-                                && f.fract() == 0.0
-                                && f >= i64::MIN as f64
-                                && f < (1u64 << 63) as f64 =>
-                        {
-                            f as i64
+                        Value::Number(f) => {
+                            argcheck::whole_f64_to_i64(f).ok_or_else(bad_max_age)?
                         }
-                        _ => {
-                            return Err(Error::runtime(
-                                "lur.cookie.serialize: max_age must be an integer",
-                            ));
-                        }
+                        _ => return Err(bad_max_age()),
                     };
                     out.extend_from_slice(format!("; Max-Age={n}").as_bytes());
                 }

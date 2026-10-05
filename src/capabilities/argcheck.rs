@@ -3,6 +3,13 @@
 
 use mlua::{Error, FromLua, Lua, Value};
 
+/// A whole-number float that fits in i64; `None` for fractions, NaN, infinities
+/// and out-of-range values.
+pub(crate) fn whole_f64_to_i64(f: f64) -> Option<i64> {
+    // `i64::MAX as f64` rounds up to 2^63, which is out of range.
+    (f.fract() == 0.0 && f >= i64::MIN as f64 && f < i64::MAX as f64).then_some(f as i64)
+}
+
 /// Optional integer argument; whole-number floats in i64 range are accepted.
 pub(crate) fn integer_arg(value: Value, fname: &str, n: usize) -> mlua::Result<Option<i64>> {
     match value {
@@ -14,13 +21,9 @@ pub(crate) fn integer_arg(value: Value, fname: &str, n: usize) -> mlua::Result<O
                     "{fname}: argument #{n} must be integer, got float"
                 )));
             }
-            // `i64::MAX as f64` rounds up to 2^63, which is out of range.
-            if f < i64::MIN as f64 || f >= i64::MAX as f64 {
-                return Err(mlua::Error::RuntimeError(format!(
-                    "{fname}: argument #{n} out of integer range"
-                )));
-            }
-            Ok(Some(f as i64))
+            whole_f64_to_i64(f).map(Some).ok_or_else(|| {
+                mlua::Error::RuntimeError(format!("{fname}: argument #{n} out of integer range"))
+            })
         }
         other => Err(mlua::Error::RuntimeError(format!(
             "{fname}: argument #{n} must be integer, got {}",
@@ -114,5 +117,16 @@ mod tests {
         // 2^63 == `i64::MAX as f64`; it must not saturate to i64::MAX.
         let err = integer_arg(Value::Number(2f64.powi(63)), "lur.x.y", 1).unwrap_err();
         assert!(err.to_string().contains("out of integer range"), "{err}");
+    }
+
+    #[test]
+    fn whole_f64_to_i64_bounds() {
+        assert_eq!(whole_f64_to_i64(3.0), Some(3));
+        assert_eq!(whole_f64_to_i64(-2f64.powi(63)), Some(i64::MIN));
+        assert_eq!(whole_f64_to_i64(2f64.powi(63)), None);
+        assert_eq!(whole_f64_to_i64(1.5), None);
+        assert_eq!(whole_f64_to_i64(f64::NAN), None);
+        assert_eq!(whole_f64_to_i64(f64::INFINITY), None);
+        assert_eq!(whole_f64_to_i64(f64::NEG_INFINITY), None);
     }
 }
