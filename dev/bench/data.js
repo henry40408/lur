@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791185266258,
+  "lastUpdate": 1791185714040,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3863,6 +3863,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 232913,
             "range": "± 2953",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9d7ed0270d8d018b3043a9cbd8d565c487e9b698",
+          "message": "refactor: share one whole-float to i64 check across argcheck, kv and cookie (#137)\n\n* refactor: share one whole-float to i64 check across argcheck, kv and cookie\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* test: import whole_f64_to_i64 in argcheck tests\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T15:33:02+08:00",
+          "tree_id": "969fb160c3d6935376fb6761c1838c9df7cedb11",
+          "url": "https://github.com/henry40408/lur/commit/9d7ed0270d8d018b3043a9cbd8d565c487e9b698"
+        },
+        "date": 1791185713697,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 225654,
+            "range": "± 4768",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3931,
+            "range": "± 127",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 161233,
+            "range": "± 704",
             "unit": "ns/iter"
           }
         ]
