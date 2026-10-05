@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791171136373,
+  "lastUpdate": 1791171838605,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -3695,6 +3695,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 281713,
             "range": "± 8303",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6bfb1ed216e5173a642dde289043ac93ab4bd3dd",
+          "message": "feat: add lur.html.sanitize backed by ammonia (#133)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T11:41:46+08:00",
+          "tree_id": "d232b5565445b900a782ea1b1daf09c8d6ddfa36",
+          "url": "https://github.com/henry40408/lur/commit/6bfb1ed216e5173a642dde289043ac93ab4bd3dd"
+        },
+        "date": 1791171837724,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 223374,
+            "range": "± 3758",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3904,
+            "range": "± 66",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 160394,
+            "range": "± 569",
             "unit": "ns/iter"
           }
         ]
