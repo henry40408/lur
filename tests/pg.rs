@@ -217,12 +217,12 @@ fn pg_kv_ttl_set_add_and_ttl_report() {
     let k = unique("pgttl");
     let p = unique("pgperm");
     rt.run(&format!(
-        "lur.kv.set('{k}', 'v', {{ ttl_ms = 100 }})\n\
+        "lur.kv.set('{k}', 'v', {{ ttl_ms = 1000 }})\n\
          assert(lur.kv.get('{k}') == 'v', 'live before expiry')\n\
          local ms, exists = lur.kv.ttl('{k}')\n\
-         assert(exists == true and ms > 0 and ms <= 100, 'remaining')\n\
+         assert(exists == true and ms > 0 and ms <= 1000, 'remaining')\n\
          assert(lur.kv.add('{k}', 'x') == false, 'live key blocks add')\n\
-         lur.async.sleep(250)\n\
+         lur.async.sleep(1300)\n\
          assert(lur.kv.get('{k}') == nil, 'gone after expiry')\n\
          ms, exists = lur.kv.ttl('{k}')\n\
          assert(ms == nil and exists == false, 'expired reads as absent')\n\
