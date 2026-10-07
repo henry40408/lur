@@ -5,11 +5,14 @@ pub(crate) mod argcheck;
 pub mod args;
 pub mod async_ops;
 pub mod base64;
+pub mod charset;
 pub mod cookie;
 pub mod crypto;
 pub mod db;
 pub mod env;
+pub mod feed;
 pub mod fs;
+pub mod html;
 pub mod http;
 pub mod io;
 pub mod json;
@@ -20,6 +23,8 @@ pub mod serve;
 pub mod state;
 mod storage;
 pub mod time;
+pub mod url;
+pub mod xml;
 
 use mlua::Lua;
 
@@ -40,9 +45,20 @@ pub fn install(
     crypto::install(lua, &lur)?;
     cookie::install(lua, &lur)?;
     time::install(lua, &lur)?;
+    url::install(lua, &lur)?;
+    charset::install(lua, &lur)?;
+    html::install(lua, &lur)?;
+    xml::install(lua, &lur)?;
+    feed::install(lua, &lur)?;
     io::install(lua, &lur)?;
     fs::install(lua, &lur, config.policy.clone())?;
-    http::install(lua, &lur, config.policy.clone(), config.max_http_body)?;
+    http::install(
+        lua,
+        &lur,
+        config.policy.clone(),
+        config.max_http_body,
+        config.http_cache.clone(),
+    )?;
     env::install(lua, &lur, config.policy.clone())?;
     let shared = db::install(lua, &lur, config.db_path.clone())?;
     kv::install(lua, &lur, &shared)?;

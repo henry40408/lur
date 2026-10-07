@@ -25,14 +25,64 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## Capabilities
 
-- **Pure-compute capabilities** (`json`, `base64`, `crypto`, `cookie`, `time`) are not
+- **Pure-compute capabilities** (`json`, `base64`, `crypto`, `cookie`, `time`, `url`, `charset`, `html`, `feed`) are not
   policy-gated and take/return raw bytes; callers bridge with `hex`/`base64`.
 - **`lur.crypto`**: `hmac_md5` and `random_hex` omitted on purpose (extinct /
   composable). `constant_eq` returns early on length mismatch (length isn't secret).
+- **`lur.charset`**: `encoding_rs` (the Encoding Standard's labels and BOM/replacement rules,
+  as browsers behave), not `chardet`-style guessing: an unlabeled page decodes as UTF-8 and
+  the script says otherwise, so output never depends on a heuristic. Explicit, not automatic
+  in `lur.http`/`lur.html.parse`: both stay byte-oriented, and decoding is one call
+  (`lur.charset.decode(res.body, res.headers["content-type"])`). A bare label or a whole
+  `Content-Type` is accepted as the hint, so callers don't parse the header. An unknown
+  label raises rather than guessing (wrap in `pcall` to fall back). `<meta>` sniffing only
+  looks at `charset=` in the first 1 KiB and ignores a UTF-16 declaration, as browsers do.
+  Not done: encoding detection, streaming decode, UTF-16 targets for `encode`.
+- **`lur.html`**: `scraper::Html` (and `dom_query`) are `!Send` because tendril uses
+  non-atomic refcounts, while mlua's `send` mode needs `Send` userdata. A node stores the
+  source text plus an `ego_tree::NodeId`; parsed trees live in an 8-slot per-thread LRU and
+  are re-parsed on a miss. Parsing is deterministic, so ids stay valid; the cache only
+  affects speed. Rejected: `unsafe impl Send` (denied by lint, unsound), eager conversion
+  to Lua tables (loses `select` on sub-nodes; fragment re-parse drops `<td>`). Known cost:
+  holding many live docs on one thread re-parses on access. Invalid UTF-8 input is replaced
+  rather than rejected, since it is usually a raw HTTP body.
+- **`lur.html.sanitize`**: delegated to `ammonia` rather than hand-rolled, since an
+  allowlist sanitizer is security code where the long tail (mXSS, scheme tricks) is the whole
+  job. Cost measured: +275 KB release (ammonia 4.1.4 shares `html5ever` 0.39 with `scraper`,
+  so no second parser). Schemes are narrowed to `http`/`https`/`mailto` (ammonia's default
+  also allows `ftp`, `tel`, `magnet`, …). Not done: custom tag/attribute allowlists and
+  returning a node instead of a string.
+- **`lur.xml`**: unlike `lur.html`, the tree is owned data (an arena of elements behind an
+  `Arc`), so a node is just a handle plus an index: `Send`, no re-parsing, no cache. Selection
+  is a small slash-path grammar rather than CSS or full XPath: feeds need `a/b`, `//a`, `*`
+  and little else, and CSS would force a second selector engine over this tree. Names are
+  matched as written without namespace resolution (`dc:creator`); scripts that need a
+  different prefix mapping are rare and the workaround is one extra `if`. Structure errors
+  raise (a half-parsed feed is worse than none) while unknown entities are kept literally,
+  because real feeds use `&nbsp;` undeclared. `DOCTYPE` is dropped, so custom entities never
+  expand (no billion-laughs). Parsing and traversal are iterative, so nesting depth cannot
+  overflow the stack. Not done: namespaces, XPath predicates, streaming, serialization back
+  to XML.
+- **`lur.feed`**: RSS/Atom are written with `quick-xml`'s `Writer` (closures guarantee
+  balanced tags; text and attributes are escaped), not hand-built strings; we only strip
+  characters XML 1.0 forbids. `rss`/`atom_syndication` were rejected: two typed models to
+  map from Lua tables and less control over output. Escaped text instead of CDATA (no
+  `]]>` edge case); `quick-xml`'s `Reader` is the intended base for a future `lur.xml`. No feed parsing
+  (`lur.xml`), HTML sanitizing, or date formatting API yet — dates are epoch ms and the
+  serializers format them. Atom/JSON items without `guid`/`link` raise instead of
+  inventing an id.
 - **`lur.cookie`**: no percent-encoding (a value containing `%` would be ambiguous).
   `SameSite=None` without `secure` raises rather than silently adding `Secure`.
-- **`lur.time`**: integer milliseconds everywhere; no formatting API since
-  `os.date("!…")` already covers RFC 3339 / IMF-fixdate.
+- **`lur.time`**: integer milliseconds everywhere. Formatting was first left to
+  `os.date("!…")`, but that only knows local time and UTC, and feeds need RFC 2822 with
+  offsets and scraped sites need `Asia/Taipei`-style zones, so `format*`/`parse` take an
+  optional `tz` (IANA via `chrono-tz`, or a fixed offset). `parse` without a format is
+  deliberately a short fixed list (no guessing `dd/mm` vs `mm/dd`: ambiguous input needs an
+  explicit `fmt`). DST gap raises; overlap picks the earlier instant.
+- **`lur.url`**: thin wrapper over the `url` crate (WHATWG, already in the tree via
+  `reqwest`). `parse` returns a plain table (no userdata, no setters). `encode_query`
+  sorts keys for deterministic output; `decode_query` keeps the last duplicate to match
+  `req.query`. No percent-encode helper yet: `join` and `encode_query` cover URL building.
 - **Server responses**: no `Content-Type` inference ("explicit over magic"); an invalid
   header fails the whole response (500) instead of being dropped.
 - **`lur.http` SSRF guard**:
@@ -68,29 +118,95 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 - **Postgres `db.tx`/`kv.update` use `SERIALIZABLE`** because the database may be shared
   with non-lur writers; an advisory lock only serializes cooperating writers. Hence they're
   fallible and never auto-retried (the body may have side effects).
+- **kv expiry is a per-key absolute `expires_at`, not a TTL the database enforces.** `now`
+  comes from Rust so both backends agree and a skewed Postgres clock can't change results;
+  every op filters on it (lazy expiry), and deletion is housekeeping (on open, then hourly
+  on writes). Postgres/DynamoDB-style "TTL lags, filter on read" is the same shape.
+  Unit is `ttl_ms` because Redis `EX` is seconds and a bare `60` would silently mean 60 ms;
+  `ttl_ms <= 0` raises rather than meaning "now" or "never".
+- **TTL semantics follow Redis where it has an answer.** `set` without `ttl_ms` clears the
+  expiry (like `SET`; the alternative, `KEEPTTL`, is opt-in there). `incr` keeps the expiry,
+  as Redis `INCR` does. `lur` adds `ttl_ms` to `incr` that applies only if the key has no
+  expiry — Redis `EXPIRE NX`, folded into the same statement because the usual
+  `INCR`-then-`EXPIRE` pair leaks a counter that never expires if the second call is lost.
+  That makes a rate limit a fixed window (opened by the first hit, not extended by later
+  ones); `renew_ttl = true` is the idle-timeout variant. Rejected: always-refresh as the
+  default (a client that keeps retrying is never released), a separate `window_ms`/`nx`
+  knob, and a `kv.hit` rate-limit helper for now (the `incr` form reads better; revisit).
+  `cas`/`update` keep the existing expiry — Redis has no equivalent, but clearing it would
+  turn a rate-limit window or a session with an absolute lifetime into a permanent key.
+  Forgetting `ttl_ms` on `incr` is the sharp edge: the counter never resets until a later
+  `incr` supplies one (it is added then, so old counters heal).
+- **`kv.ttl` returns `ms, exists`** rather than one three-state value: `nil, false` absent,
+  `nil, true` no expiry, `ms, true` expiring. One-value callers get a number or `nil`
+  (safe in arithmetic); Redis's `-1`/`-2` would make `ttl < 1000` true for a missing key.
+- **`lur.http` `cache` is an in-memory map, not `lur.kv`.** A cache is disposable, so it
+  shouldn't demand a database: it works in one-shot and under `serve` with no `--db`. It
+  lives in `RuntimeConfig` (an `Arc` shared by the pool, like `lur.state`), not in a VM.
+  Costs: lost on restart, not shared between processes, useless across one-shot runs.
+  Rejected: kv-backed (needs `--db`, which users asked why a cache requires) and "kv when
+  `--db` is set, memory otherwise" (the same script would have different persistence per
+  environment). A persistent store can be added later as an explicit opt-in, not an
+  environment-dependent fallback.
+  `cache` is a table (`{ ttl_ms }`) so the unit is explicit and `vary` has a place. The
+  allowlist/SSRF check runs before the lookup so a cached body never outlives the policy that
+  allowed it. Requests with `Authorization`/`Cookie`/`Proxy-Authorization` bypass the cache
+  unless the header is listed in `vary`, and responses that set a cookie aren't stored: the
+  cache is shared by every request, so a credentialed response must not be served to someone
+  else.
+  **No size cap, on purpose; the script owns capacity.** lur keeps the levers sufficient:
+  `ttl_ms` bounds lifetime (expired entries are really freed: on lookup, and by a sweep at
+  most once a minute on insert), `--max-http-body` bounds each entry, `cache` is opt-in per
+  call so scripts choose what to cache, and `lur.http.cache_clear()` flushes everything and
+  reports the count. Rejected for now: a built-in LRU/byte cap (one more knob and eviction
+  policy to get wrong; add it if scripts turn out to need it). Memory is therefore bounded by
+  distinct keys per TTL window times `--max-http-body`; a script caching unbounded distinct
+  URLs with a long `ttl_ms` can grow the process, and the VM `--memory` limit does not cover
+  it.
+  Not done: serve-stale-on-error, stampede protection (N concurrent misses fetch N times),
+  honoring `Cache-Control`/`ETag`, per-key invalidation.
+- **Release profile: `strip`, `lto = "fat"`, `codegen-units = 1`, never `panic = "abort"`.**
+  Measured on macOS arm64: 19.0 MB default, 15.8 MB with `strip` alone, 14.2 MB with fat
+  LTO, 13.4 MB with `codegen-units = 1`; `lto = "thin"` alone made it larger (19.8 MB).
+  Compile time barely moved (~45–80 s clean) and the benchmarks stayed level or slightly
+  faster. A Lua error raised from a Rust callback (e.g. `lur.json.decode("{bad")`) must
+  unwind through the Rust frames to reach `pcall` and the diagnostics renderer; with
+  `panic = "abort"` it is `panic in a function that cannot unwind` and exit 134 instead
+  (also `-3.7 MB`, which is why it is tempting). `strip`/LTO/`codegen-units` produced
+  byte-identical error output and tracebacks. Stripping drops Rust symbols, so a Rust
+  panic backtrace is only addresses; Lua tracebacks are unaffected.
 - **TLS via rustls**, not native-tls: no OpenSSL system dependency.
 - **SQLite retry** wraps only lock acquisition and single statements; re-running a
   transaction body was rejected (duplicated side effects).
-- **Cancellation cleanup is a rollback-on-drop guard.** Rejected: sqlx's `.begin()` (issues
-  a deferred `BEGIN`, losing `BEGIN IMMEDIATE`; Postgres would need `SET TRANSACTION`) and
-  Postgres server-side timeouts (Postgres-only, and would kill legitimately slow
+- **Cancellation cleanup relies on sqlx's rollback-on-drop**, using `Pool::begin_with` so the
+  `BEGIN` statement stays ours (`BEGIN IMMEDIATE`, `BEGIN ISOLATION LEVEL SERIALIZABLE`).
+  This replaced a hand-rolled guard (`PinnedTx` + detached ROLLBACK task) once sqlx 0.9
+  gained `begin_with`; the cancel tests (single-connection pool) pass on both backends.
+  Rejected: Postgres server-side timeouts (Postgres-only, and would kill legitimately slow
   transforms). `db.tx` closures hold `Weak` refs so cancellation drops the transaction
   immediately instead of waiting for Luau GC.
+- **`lur.fs` opens files beneath a root's directory handle (`cap-std`)** instead of
+  canonicalize-then-`std::fs::open`, which had a TOCTOU window (a symlink swapped in after
+  the check). Canonicalizing still picks the granting root, but the open is confined to that
+  root by the OS, so losing the race can only reach files inside it. Rejected: hand-rolled
+  `openat2` (`unsafe`, no macOS equivalent). Consequences: a file root is a handle on its
+  parent plus the one allowed name; `--loose` is a handle on `/` (one code path); a dangling
+  symlink that points inside the root can be written through, one pointing out is refused
+  at open time. Cost: +17 KB binary.
 - **`db.tx` takes the write lock on SQLite even when read-only** (`BEGIN IMMEDIATE`) —
   deliberate.
 
 ## Known limitations / deferred
 
-- Sandbox: no OS-level hardening (landlock/seccomp); `lur.fs` has a canonicalize-then-open
-  TOCTOU window (needs `openat2`/`O_NOFOLLOW`).
+- Sandbox: no OS-level hardening (landlock/seccomp). The SQLite `--db` path is opened
+  outside `lur.fs`'s confinement.
 - Allowlists: no subdomain wildcards, CIDR ranges, path globs, or env-name prefixes.
 - A `lur.db` write inside a `kv.update` transform blocks on the lock; on Postgres it hangs
   unless `--timeout` is set.
 - Cron: UTC only (no timezone setting), in-memory schedule, no missed-run replay, no
   `@every` interval syntax.
 - Not implemented: streaming response bodies / `lur.http` downloads, form bodies, retries,
-  cookie jar, proxies, a TLS-verification opt-out, managed migrations, kv/state TTL,
-  in-memory DB, named SQL params, socket/queue trigger sources, `lur.serve.on_start`,
+  cookie jar, proxies, a TLS-verification opt-out, managed migrations, in-memory DB, named SQL params, socket/queue trigger sources, `lur.serve.on_start`,
   configurable SQLite `busy_timeout`, machine-readable (`--error-format=json`) diagnostics,
   symmetric/asymmetric crypto and KDFs, signed cookies, `lur docs <section>`.
 - `chrono` → `jiff` migration is blocked on replacing the `cron` crate.

@@ -1,42 +1,63 @@
 //! `lur.http` — policy-gated async HTTP client. Every request and
 //! redirect hop is checked against the allowlist and private-network deny.
-//! Bodies are raw bytes, not auto-decompressed.
+//! Bodies are raw bytes, not auto-decompressed. `opts.cache` keeps 2xx GET
+//! responses in a process-wide in-memory [`HttpCache`] shared by the pool.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use mlua::{Error, Lua, Table, Value};
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::{Client, Method, Url, redirect};
+use sha2::{Digest, Sha256};
 
 use super::json;
+use super::kv::ttl_ms_opt;
 use crate::policy::Policy;
 use crate::runtime::RunError;
 
 const MAX_REDIRECTS: usize = 10;
 
 /// The client is built on first use: its rustls setup dominates VM cold start.
-pub fn install(
+pub(crate) fn install(
     lua: &Lua,
     lur: &Table,
     policy: Arc<Policy>,
     max_body: usize,
+    cache: Arc<HttpCache>,
 ) -> Result<(), RunError> {
     let cell: Arc<OnceLock<Client>> = Arc::new(OnceLock::new());
     let http = lua.create_table().map_err(RunError::Init)?;
 
     {
+        let cache = Arc::clone(&cache);
+        let clear = lua
+            .create_function(move |_, ()| Ok(cache.clear()))
+            .map_err(RunError::Init)?;
+        http.set("cache_clear", clear).map_err(RunError::Init)?;
+    }
+
+    {
         let cell = Arc::clone(&cell);
         let policy = Arc::clone(&policy);
+        let cache = Arc::clone(&cache);
         let request = lua
             .create_async_function(
                 move |lua, (method, url, opts): (String, String, Option<Table>)| {
                     let cell = Arc::clone(&cell);
                     let policy = Arc::clone(&policy);
+                    let cache = Arc::clone(&cache);
                     async move {
                         let client = ensure_client(&cell, &policy)?;
-                        do_request(&lua, &client, &policy, &method, &url, opts, max_body).await
+                        let ctx = Ctx {
+                            client: &client,
+                            policy: &policy,
+                            cache: &cache,
+                            max_body,
+                        };
+                        do_request(&lua, &ctx, &method, &url, opts).await
                     }
                 },
             )
@@ -54,15 +75,23 @@ pub fn install(
     ] {
         let cell = Arc::clone(&cell);
         let policy = Arc::clone(&policy);
+        let cache = Arc::clone(&cache);
         let method = method.to_string();
         let f = lua
             .create_async_function(move |lua, (url, opts): (String, Option<Table>)| {
                 let cell = Arc::clone(&cell);
                 let policy = Arc::clone(&policy);
+                let cache = Arc::clone(&cache);
                 let method = method.clone();
                 async move {
                     let client = ensure_client(&cell, &policy)?;
-                    do_request(&lua, &client, &policy, &method, &url, opts, max_body).await
+                    let ctx = Ctx {
+                        client: &client,
+                        policy: &policy,
+                        cache: &cache,
+                        max_body,
+                    };
+                    do_request(&lua, &ctx, &method, &url, opts).await
                 }
             })
             .map_err(RunError::Init)?;
@@ -166,18 +195,104 @@ fn url_allowed(policy: &Policy, url: &Url) -> bool {
     true
 }
 
+/// What one request needs besides its own arguments.
+struct Ctx<'a> {
+    client: &'a Client,
+    policy: &'a Policy,
+    cache: &'a HttpCache,
+    max_body: usize,
+}
+
+/// A hit is shared, not copied: entries are `Arc`s.
+struct CacheEntry {
+    expires: Instant,
+    raw: Arc<RawResponse>,
+}
+
+#[derive(Default)]
+struct CacheInner {
+    entries: HashMap<String, CacheEntry>,
+    last_sweep: Option<Instant>,
+}
+
+/// Process-wide response cache behind `opts.cache`, shared by every pooled VM
+/// (like `lur.state`). Deliberately unbounded in size: memory is managed by the
+/// script through `ttl_ms`, what it chooses to cache, `--max-http-body` (caps
+/// each entry) and [`HttpCache::clear`]. Expired entries are dropped on lookup
+/// and swept at most once a minute on insert, so a TTL does release memory.
+#[derive(Default)]
+pub struct HttpCache {
+    inner: Mutex<CacheInner>,
+}
+
+impl std::fmt::Debug for HttpCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpCache").finish_non_exhaustive()
+    }
+}
+
+const SWEEP_EVERY: Duration = Duration::from_secs(60);
+
+impl HttpCache {
+    fn lock(&self) -> std::sync::MutexGuard<'_, CacheInner> {
+        self.inner.lock().expect("http cache mutex poisoned")
+    }
+
+    fn get(&self, key: &str) -> Option<Arc<RawResponse>> {
+        let mut inner = self.lock();
+        match inner.entries.get(key) {
+            Some(e) if e.expires > Instant::now() => Some(Arc::clone(&e.raw)),
+            Some(_) => {
+                inner.entries.remove(key);
+                None
+            }
+            None => None,
+        }
+    }
+
+    fn put(&self, key: String, raw: RawResponse, ttl_ms: i64) {
+        let now = Instant::now();
+        let mut inner = self.lock();
+        if inner
+            .last_sweep
+            .is_none_or(|t| now.duration_since(t) >= SWEEP_EVERY)
+        {
+            inner.entries.retain(|_, e| e.expires > now);
+            inner.last_sweep = Some(now);
+        }
+        // `ttl_ms` is validated positive; an absurd one must not overflow `Instant`.
+        let expires = now
+            .checked_add(Duration::from_millis(ttl_ms.cast_unsigned()))
+            .unwrap_or_else(|| now + Duration::from_secs(10 * 365 * 24 * 3600));
+        inner.entries.insert(
+            key,
+            CacheEntry {
+                expires,
+                raw: Arc::new(raw),
+            },
+        );
+    }
+
+    /// Drops every entry; returns how many were held.
+    fn clear(&self) -> usize {
+        let mut inner = self.lock();
+        let n = inner.entries.len();
+        inner.entries.clear();
+        n
+    }
+}
+
 async fn do_request(
     lua: &Lua,
-    client: &Client,
-    policy: &Policy,
+    ctx: &Ctx<'_>,
     method: &str,
     url_str: &str,
     opts: Option<Table>,
-    max_body: usize,
 ) -> mlua::Result<Table> {
     let url = Url::parse(url_str)
         .map_err(|e| Error::runtime(format!("lur.http: invalid url {url_str:?}: {e}")))?;
-    if !url_allowed(policy, &url) {
+    // Before any cache lookup: a cached body must never outlive the policy.
+    if !url_allowed(ctx.policy, &url) {
         return Err(Error::runtime(format!(
             "lur.http: {url} is not allowed by the policy"
         )));
@@ -185,16 +300,114 @@ async fn do_request(
     let method = Method::from_bytes(method.to_uppercase().as_bytes())
         .map_err(|e| Error::runtime(format!("lur.http: bad method: {e}")))?;
 
-    let mut req = client.request(method, url);
+    let cache = match &opts {
+        Some(opts) => parse_cache(opts)?,
+        None => None,
+    };
+    if cache.is_some() && method != Method::GET {
+        return Err(Error::runtime("lur.http: opts.cache only supports GET"));
+    }
+
+    let mut req = ctx.client.request(method, url);
     if let Some(opts) = opts {
         req = apply_opts(req, &opts)?;
     }
+    let req = req
+        .build()
+        .map_err(|e| Error::runtime(format!("lur.http: {e}")))?;
 
-    let resp = req
-        .send()
+    // `None` also when the request carries credentials the script didn't allow.
+    let wants_cache = cache.is_some();
+    let slot = cache.and_then(|c| cache_key(&req, &c).map(|key| (key, c.ttl_ms)));
+    if let Some((key, _)) = &slot
+        && let Some(raw) = ctx.cache.get(key)
+    {
+        let res = raw_to_table(lua, &raw)?;
+        res.set("cached", true)?;
+        return Ok(res);
+    }
+
+    let resp = ctx
+        .client
+        .execute(req)
         .await
         .map_err(|e| Error::runtime(format!("lur.http: {e}")))?;
-    build_response(lua, resp, max_body).await
+    let raw = read_response(resp, ctx.max_body).await?;
+    let res = raw_to_table(lua, &raw)?;
+    if wants_cache {
+        res.set("cached", false)?;
+    }
+    if let Some((key, ttl_ms)) = slot
+        && cacheable(&raw)
+    {
+        ctx.cache.put(key, raw, ttl_ms);
+    }
+    Ok(res)
+}
+
+/// `opts.cache = { ttl_ms = …, vary = { "authorization" } }`.
+struct CacheOpts {
+    ttl_ms: i64,
+    /// Credential headers the script has explicitly allowed into the cache.
+    vary: Vec<String>,
+}
+
+/// Request headers that make a response user-specific.
+const CREDENTIAL_HEADERS: [&str; 3] = ["authorization", "cookie", "proxy-authorization"];
+
+fn parse_cache(opts: &Table) -> mlua::Result<Option<CacheOpts>> {
+    let cache = match opts.get::<Value>("cache")? {
+        Value::Nil | Value::Boolean(false) => return Ok(None),
+        Value::Table(t) => t,
+        _ => {
+            return Err(Error::runtime(
+                "lur.http: opts.cache must be a table such as { ttl_ms = 60000 }",
+            ));
+        }
+    };
+    let ttl_ms = ttl_ms_opt(&cache, "lur.http: opts.cache")?
+        .ok_or_else(|| Error::runtime("lur.http: opts.cache.ttl_ms is required"))?;
+    let mut vary = Vec::new();
+    if let Some(list) = cache.get::<Option<Table>>("vary")? {
+        for name in list.sequence_values::<String>() {
+            vary.push(name?.to_ascii_lowercase());
+        }
+    }
+    Ok(Some(CacheOpts { ttl_ms, vary }))
+}
+
+/// Digest of method, final URL (query included) and every request header.
+/// `None`: the request carries a credential header not listed in `vary`, so
+/// it must bypass the cache rather than share an entry across users.
+fn cache_key(req: &reqwest::Request, cache: &CacheOpts) -> Option<String> {
+    let mut headers: Vec<(&str, &[u8])> = req
+        .headers()
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_bytes()))
+        .collect();
+    if headers
+        .iter()
+        .any(|(k, _)| CREDENTIAL_HEADERS.contains(k) && !cache.vary.iter().any(|v| v == k))
+    {
+        return None;
+    }
+    headers.sort_unstable();
+    let mut hash = Sha256::new();
+    hash.update(req.method().as_str().as_bytes());
+    hash.update(b"\n");
+    hash.update(req.url().as_str().as_bytes());
+    for (k, v) in headers {
+        hash.update(b"\n");
+        hash.update(k.as_bytes());
+        hash.update(b":");
+        hash.update(v);
+    }
+    Some(format!("lur.http.cache:{}", hex::encode(hash.finalize())))
+}
+
+/// Only successful responses, and none that set cookies for one visitor.
+fn cacheable(raw: &RawResponse) -> bool {
+    (200..300).contains(&raw.status) && !raw.headers.iter().any(|(k, _)| k == "set-cookie")
 }
 
 fn apply_opts(
@@ -255,20 +468,54 @@ fn value_to_string(v: &Value) -> mlua::Result<String> {
     }
 }
 
-/// Build the response table. The body is capped at `max_body` because the VM
-/// memory limit doesn't cover Rust-side buffering.
-async fn build_response(
-    lua: &Lua,
-    mut resp: reqwest::Response,
-    max_body: usize,
-) -> mlua::Result<Table> {
-    let status = resp.status().as_u16();
+/// A response as read off the wire, before it becomes a Lua table.
+struct RawResponse {
+    status: u16,
+    headers: Vec<(String, Vec<u8>)>,
+    body: Vec<u8>,
+}
 
+/// Reads the body, capped at `max_body` because the VM memory limit doesn't
+/// cover Rust-side buffering.
+async fn read_response(mut resp: reqwest::Response, max_body: usize) -> mlua::Result<RawResponse> {
+    let status = resp.status().as_u16();
+    let headers = resp
+        .headers()
+        .iter()
+        .map(|(name, value)| (name.as_str().to_lowercase(), value.as_bytes().to_vec()))
+        .collect();
+
+    if resp.content_length().is_some_and(|n| n as usize > max_body) {
+        return Err(Error::runtime(format!(
+            "lur.http: response body exceeds the {max_body}-byte limit"
+        )));
+    }
+    // Also bounds chunked responses without a length.
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| Error::runtime(format!("lur.http: reading body: {e}")))?
+    {
+        if body.len() + chunk.len() > max_body {
+            return Err(Error::runtime(format!(
+                "lur.http: response body exceeds the {max_body}-byte limit"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(RawResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
+fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
     let headers = lua.create_table()?;
     let headers_all = lua.create_table()?;
-    for (name, value) in resp.headers() {
-        let key = name.as_str().to_lowercase();
-        let val = lua.create_string(value.as_bytes())?;
+    for (key, value) in &raw.headers {
+        let val = lua.create_string(value)?;
         headers.set(key.as_str(), &val)?; // last value wins
         let arr = if let Some(t) = headers_all.get::<Option<Table>>(key.as_str())? {
             t
@@ -280,30 +527,10 @@ async fn build_response(
         let next = arr.raw_len() + 1;
         arr.raw_set(next as i64, &val)?;
     }
-
-    if resp.content_length().is_some_and(|n| n as usize > max_body) {
-        return Err(Error::runtime(format!(
-            "lur.http: response body exceeds the {max_body}-byte limit"
-        )));
-    }
-    // Also bounds chunked responses without a length.
-    let mut buf: Vec<u8> = Vec::new();
-    while let Some(chunk) = resp
-        .chunk()
-        .await
-        .map_err(|e| Error::runtime(format!("lur.http: reading body: {e}")))?
-    {
-        if buf.len() + chunk.len() > max_body {
-            return Err(Error::runtime(format!(
-                "lur.http: response body exceeds the {max_body}-byte limit"
-            )));
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    let body = lua.create_string(&buf)?;
+    let body = lua.create_string(&raw.body)?;
 
     let res = lua.create_table()?;
-    res.set("status", status)?;
+    res.set("status", raw.status)?;
     res.set("body", &body)?;
     res.set("headers", headers)?;
     res.set("headers_all", headers_all)?;

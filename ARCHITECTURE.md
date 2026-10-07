@@ -69,7 +69,7 @@ out-of-memory → `RunError::OutOfMemory`, past-deadline → `Timeout`, else `Sc
 [`capabilities::install`](src/capabilities/mod.rs) fills the flat `lur` table in fixed order:
 
 ```
-null · log · json · base64 · crypto · cookie · time · io · fs · http · env · db · kv · async · args · serve · state
+null · log · json · base64 · crypto · cookie · time · url · charset · html · xml · feed · io · fs · http · env · db · kv · async · args · serve · state
 ```
 
 `fs`/`http`/`env` get an `Arc<Policy>`; `db` gets the `--db` target and passes the shared
@@ -86,7 +86,9 @@ validate their own arguments.
 [`Policy`](src/policy.rs) is deny-by-default, shared into callbacks via `Arc`. `strict()`
 grants nothing; `loose()` grants everything. Enforced at each capability:
 
-- **`lur.fs`** canonicalizes before the allowlist check, defeating `..` and symlink escapes.
+- **`lur.fs`** canonicalizes to pick the granting root (defeating `..` and symlink escapes),
+  then opens the file beneath that root's `cap-std` directory handle, so a symlink swapped in
+  after the check cannot lead out of the root.
 - **`lur.http`** checks every request and redirect hop against the net allowlist, uses a DNS
   resolver rejecting loopback/private/link-local IPs unless `--allow-private` (SSRF guard),
   caps redirects (10) and the buffered body (`--max-http-body`), and always verifies TLS.
@@ -130,7 +132,9 @@ rejected at load. Params are percent-decoded to raw bytes as `req.params`.
 
 `handle` (hyper adapter) → `dispatch_async`:
 
-1. Body over `--max-body` → **413** before routing; the VM never sees it.
+1. Body over `--max-body` → **413** before routing; the VM never sees it. `handle` reads the
+   body through `http_body_util::Limited`, so reading stops at the cap instead of buffering
+   an oversized (or chunked, length-less) body first.
 2. No route → **404**.
 3. `checkout()`, `build_req` (`method`, `path`, `params`, `query`/`query_all`, `headers`,
    `cookies`, `body`, streaming `read`, `json()`), then `call_handler` under the two-layer
@@ -163,9 +167,10 @@ with the job name, never propagated.
 ### Graceful shutdown
 
 `run_with_shutdown` fans one shutdown future (SIGTERM/SIGINT, or any future in tests) out to
-the accept loop and cron loops via a `watch` channel. Each in-flight connection and cron run
-holds a clone of an `Arc<()>` token; after accept stops, draining waits until only the
-original remains, bounded by `--shutdown-grace`. Stragglers are aborted when the runtime drops.
+the accept loop and cron loops via a `watch` channel. Connections are wrapped by hyper-util's
+`GracefulShutdown`, which tells idle keep-alive ones to close and lets in-flight requests
+finish; cron runs are tracked by a tokio-util `TaskTracker`. After accept stops, both are
+awaited, bounded by `--shutdown-grace`. Stragglers are aborted when the runtime drops.
 
 ## State & storage
 
@@ -178,13 +183,28 @@ original remains, bounded by `--shutdown-grace`. Stragglers are aborted when the
 - **`lur.kv`.** `add`/`cas`/`incr`/`decr` are single statements; `update` (read-modify-write)
   uses the backend's `kv_update` transaction. `get` always returns bytes (counters as
   decimal strings).
+- **Expiry.** Every `lur_kv` row has a nullable `expires_at` (epoch ms; `NULL` = never). A row
+  with `expires_at <= now` is absent for every op, and `now` is read in Rust (`now_ms`), never
+  from the database clock, so SQLite and Postgres agree. Expired rows are deleted when the pool
+  opens and, at most hourly (`PurgeClock`), after a `set`/`add`/`incr`; reads don't delete.
+  `open` adds the column to older tables (SQLite: `pragma table_info` check, tolerating a lost
+  race; Postgres: `ADD COLUMN IF NOT EXISTS`). `incr` is one upsert that restarts an expired
+  row and sets the expiry only if the row has none (or `renew_ttl`).
+- **`lur.http` cache** is an in-memory `HttpCache` (`http.rs`) held in `RuntimeConfig` and
+  shared by every pooled VM like `lur.state`, so it works without `--db`. This is the one
+  Rust-side shared state besides `StateStore`; it is never exposed to VMs except through
+  `opts.cache` and `lur.http.cache_clear()`. Policy check → build request → key → lookup; the
+  key is a SHA-256 of method, final URL and all request headers. Entries are `Arc`s with an
+  `Instant` expiry; expired ones are dropped on lookup and swept at most once a minute on
+  insert. There is no size cap by design (see decisions.md).
 - **Invariants:** kv counters are integers; `kv.get` returns bytes; `db.tx`/`kv.update` are
   write transactions; integer steps (`kv.incr`/`decr`, `state.incr`/`decr`) reject fractions.
 
 ### SQLite (`storage/sqlite.rs`)
 
 - `SqliteBackend` owns a lazily opened `sqlx` pool (WAL, file auto-created) and
-  `lur_kv(key TEXT PRIMARY KEY, value BLOB)` — counters are stored as SQLite integers.
+  `lur_kv(key TEXT PRIMARY KEY, value BLOB, expires_at INTEGER)` — counters are stored as
+  SQLite integers.
 - Write transactions (`db.tx`, `kv.update`) use `BEGIN IMMEDIATE`.
 - Lock contention has two complementary layers: a 5 s `busy_timeout` waits out ordinary
   write-lock contention; `retry_busy` (5 attempts, full-jitter backoff) covers locks the busy
@@ -197,7 +217,8 @@ original remains, bounded by `--shutdown-grace`. Stragglers are aborted when the
 
 - `PgBackend` owns the `PgPool`, `$n` binding, row→Lua mapping (core scalar types only; other
   columns raise a cast-to-text error), and `lur_kv(key TEXT PRIMARY KEY, kind SMALLINT,
-  bytes BYTEA, num BIGINT)` — `kind = 0` opaque bytes, `kind = 1` integer counter in `num`.
+  bytes BYTEA, num BIGINT, expires_at BIGINT)` — `kind = 0` opaque bytes, `kind = 1` integer
+  counter in `num`.
 - **Isolation:** single statements run at `READ COMMITTED` (atomic, no retry). `db.tx` and
   `kv.update` use `SERIALIZABLE` on a pinned connection; conflicts abort with SQLSTATE
   `40001`, surfaced with a stable, locale-independent message (`map_pg_error`) rather than
@@ -209,18 +230,20 @@ original remains, bounded by `--shutdown-grace`. Stragglers are aborted when the
 
 ### Cancellation-safe transactions
 
-`db.tx`/`kv.update` run user code inside a manually opened transaction, which `sqlx` doesn't
-auto-roll-back. If the wall-clock timeout drops the future mid-body, the guard
-(`SqliteTransaction`/`PgTransaction`, or `PinnedTx` in `kv_update`) rolls back on `Drop` via a
-detached task, so the connection never returns to the pool mid-transaction (on Postgres it
-would sit idle-in-transaction holding locks). Explicit COMMIT/ROLLBACK disarms the guard.
+`db.tx`/`kv.update` open a `sqlx::Transaction` via `Pool::begin_with` (`BEGIN IMMEDIATE` on
+SQLite, `BEGIN ISOLATION LEVEL SERIALIZABLE` on Postgres). If the wall-clock timeout drops the
+future mid-body, dropping the `Transaction` queues a ROLLBACK on the connection before it
+returns to the pool, so it is never reused mid-transaction (on Postgres it would sit
+idle-in-transaction holding locks). Explicit commit/rollback consumes the transaction.
 
 ### `lur.state`
 
 [`capabilities/state.rs`](src/capabilities/state.rs): a process-wide host-side `StateStore`
-shared by all pooled VMs (via `RuntimeConfig::state`), **primitives only**. Each key carries a
-version bumped on every write, including deletes (prevents ABA). `update` is an optimistic
-CAS loop whose user function runs with no host lock held; conflicts retry.
+shared by all pooled VMs (via `RuntimeConfig::state`), **primitives only**. Each write takes
+a fresh version from one store-wide counter that only goes up, so a key deleted and recreated
+never reuses a version a reader might hold (prevents ABA) and deleted keys leave no entry
+behind (an absent key is version 0). `update` is an optimistic CAS loop whose user function
+runs with no host lock held; conflicts retry.
 
 ## Async core
 

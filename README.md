@@ -200,7 +200,48 @@ Lua error (catch with `pcall`).
 - **`lur.time`** — integer milliseconds throughout. `now_ms()` (Unix time),
   `monotonic_ms()` (for elapsed-time differences), `parse_rfc3339(text)` (UTC offset
   such as `Z` required) and `parse_http_date(text)` → epoch ms; malformed input raises.
-  Divide by `1000` for `os.date`.
+  Divide by `1000` for `os.date`. Timezone-aware: `format_rfc3339(ms, tz?)`,
+  `format_rfc2822(ms, tz?)`, `format(ms, strftime, tz?)`, `parse_rfc2822(text)`, and
+  `parse(text, fmt?, tz?)`. `tz` is an IANA name (`"Asia/Taipei"`), a fixed offset
+  (`"+08:00"`), or `nil`/`"UTC"`. `parse` without `fmt` accepts RFC 3339, RFC 2822,
+  HTTP-date, then `YYYY-MM-DD[ T]HH:MM[:SS[.f]]` and `YYYY/MM/DD[ HH:MM[:SS]]`; wall-clock
+  text with no offset is read in `tz`. A local time in a DST gap raises; in an overlap the
+  earlier instant wins.
+- **`lur.url`** — `parse(url) → { href, scheme, host?, port?, username?, password?, path,
+  query?, fragment? }` (`port` only when explicit and non-default; invalid URL raises),
+  `join(base, relative) → string` (resolves relative links, `base` must be absolute),
+  `encode_query(table) → string` (keys sorted; an array value repeats the key; string,
+  number and boolean values) and `decode_query(text) → table` (leading `?` optional, last
+  duplicate wins, `+` is a space).
+- **`lur.charset`** — `decode(bytes, hint?) → string` and `encode(text, label) → bytes` for
+  non-UTF-8 pages (Big5, GBK, Shift_JIS, … via `encoding_rs`, WHATWG labels). `hint` is a
+  charset label or a whole `Content-Type` value. Precedence: BOM, then `hint`, then a
+  `<meta charset>` in the first 1 KiB, then UTF-8; invalid bytes become U+FFFD; an unknown
+  label raises. `encode` writes unmappable characters as `&#NNN;` and refuses UTF-16.
+- **`lur.html`** — `parse(html) → doc` (invalid UTF-8 is replaced; decode other encodings with
+  `lur.charset` first). Nodes (the doc and its
+  elements) share methods: `select(css) → array`, `select_one(css) → node | nil`
+  (descendants only; invalid selector raises), `text()`, `html()`, `inner_html()`, `tag()`,
+  `attr(name) → string | nil`, `attrs()`, `parent()`, `children()` (elements only).
+  Call with `:`. Parsing follows the HTML5 algorithm, so `<td>` outside a `<table>` is dropped.
+- **`lur.html.sanitize(html, opts?) → string`** — strips scripts, styles, event handlers and
+  unsafe URLs with `ammonia`'s allowlist; only `http`, `https` and `mailto` links survive and
+  links get `rel="noopener noreferrer"`. `opts.base` (absolute URL) resolves relative
+  `href`/`src`; without it they are kept as written. Broken markup is repaired.
+- **`lur.xml`** — `parse(xml) → doc`. Same node methods as `lur.html` (`select`, `select_one`,
+  `text`, `tag`, `attr`, `attrs`, `parent`, `children`) but selection takes a slash path:
+  `a/b` (children), `//a` (descendants, also mid-path), `*` (any name); results are in document
+  order and deduplicated. Names match exactly as written (`dc:creator`); namespaces are not
+  resolved. Malformed XML raises with line/column; unknown entities such as `&nbsp;` are kept
+  as text; `DOCTYPE` is ignored, so custom entities are not expanded. A BOM or the
+  declaration's `encoding` selects the charset; otherwise invalid UTF-8 is replaced.
+- **`lur.feed`** — `rss(meta, items)`, `atom(meta, items)`, `json(meta, items)` → string
+  (RSS 2.0 / Atom 1.0 / JSON Feed 1.1). `meta`: `title` (required), `link`, `feed_url`,
+  `description`, `language`, `id`, `updated`. Each item: `title` (required), `link`, `guid`,
+  `date`, `updated`, `summary`, `content` (HTML), `author`, `categories` (array of strings),
+  `enclosure` (`{ url, type?, length? }`). Dates are epoch ms. RSS needs `meta.link`; Atom
+  needs `meta.id` or `meta.link`; Atom/JSON items need `guid` or `link`. XML is escaped and
+  characters illegal in XML 1.0 are dropped.
 - **`lur.log`** — `info`/`warn`/`error(msg)` write `<level>: <msg>\n` to stderr (stdout is
   the data channel).
 - **`lur.stdin`** — `read()` drains all bytes, `read(n)` reads up to `n` (`nil` at EOF),
@@ -212,13 +253,19 @@ Lua error (catch with `pcall`).
 ### Capabilities (policy-gated)
 
 - **`lur.fs`** — `read(path) → bytes`, `write(path, bytes)`. Paths are canonicalized
-  before the allowlist check, defeating `..` and symlink escapes.
+  before the allowlist check, defeating `..` and symlink escapes, and files are opened
+  confined to the granted root, so a symlink swapped in mid-call cannot escape either.
 - **`lur.http`** — `request(method, url, opts?)` plus `get`/`post`/`put`/`patch`/
   `delete`/`head(url, opts?)`. `opts`: `headers`, `query`, `body` **or** `json`, `timeout`
-  (ms). Returns `{ status, body, headers, headers_all, json() }`. Every request and
+  (ms), `cache`. Returns `{ status, body, headers, headers_all, json() }`. Every request and
   redirect hop is checked against the allowlist and the private-IP (SSRF) guard; TLS is
   always verified; the body is capped by `--max-http-body`. Proxy environment variables
   (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) are ignored.
+  `cache = { ttl_ms = 60000, vary? }` (GET only; in memory, no `--db`) stores 2xx responses
+  and adds `res.cached`; requests with `Authorization`/`Cookie` bypass it unless named in
+  `vary`, and the policy check runs before the lookup. `lur.http.cache_clear()` drops all
+  entries and returns the count; the total size is otherwise unbounded, so scripts manage
+  it with `ttl_ms` and `--max-http-body` (per entry).
 - **`lur.env`** — `lur.env(name) → string | nil`; `nil` for both denied and unset, so it
   is not an oracle.
 
@@ -236,7 +283,11 @@ native to the backend.
   `add(key, value) → bool` (set-if-absent), `cas(key, expected, new) → bool` (`nil`
   expected = must be absent, `nil` new = delete), `incr`/`decr(key, n?)` (integer
   counters, step 1; `get` returns them as decimal strings), and `update(key, fn)`
-  (read-modify-write; return `nil` to delete).
+  (read-modify-write; return `nil` to delete). Expiry: pass `{ ttl_ms = n }` (positive
+  milliseconds) as the last argument of `set`/`add`/`cas`/`update`/`incr`/`decr`; expired
+  keys read as absent. `set` without `ttl_ms` clears the expiry, `cas`/`update` keep it,
+  `incr`/`decr` set it only when the key has none (fixed window; `renew_ttl = true`
+  resets it every call). `expire(key, ms) → bool`; `ttl(key) → ms, exists`.
 - **SQLite contention** — write transactions use `BEGIN IMMEDIATE`; a 5 s `busy_timeout`
   plus up to 5 jittered attempts on single-statement writes, lock acquisition, and open
   absorb "database is locked".

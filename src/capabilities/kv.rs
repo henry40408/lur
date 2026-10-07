@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use mlua::{Error, Function, Lua, Table, Value};
 
 use crate::capabilities::argcheck;
-use crate::capabilities::storage::Shared;
+use crate::capabilities::storage::{Shared, Ttl};
 use crate::runtime::RunError;
 
 /// Set while this VM runs a `kv.update` transform, so a nested `lur.kv` call
@@ -44,6 +44,48 @@ impl Drop for KvUpdateGuard {
     }
 }
 
+/// `opts.ttl_ms`: a positive whole number of milliseconds. Zero and negative
+/// values raise rather than silently meaning "expire now" or "never".
+pub(crate) fn ttl_ms_opt(opts: &Table, fname: &str) -> mlua::Result<Option<i64>> {
+    let bad = || Error::runtime(format!("{fname}.ttl_ms must be a positive integer"));
+    let ms = match opts.get::<Value>("ttl_ms")? {
+        Value::Nil => return Ok(None),
+        Value::Integer(i) => i,
+        Value::Number(f) => argcheck::whole_f64_to_i64(f).ok_or_else(bad)?,
+        _ => return Err(bad()),
+    };
+    if ms <= 0 {
+        return Err(bad());
+    }
+    Ok(Some(ms))
+}
+
+fn ttl_opt(opts: Option<&Table>, fname: &str) -> mlua::Result<Option<i64>> {
+    opts.map_or(Ok(None), |t| ttl_ms_opt(t, fname))
+}
+
+/// `incr`/`decr` options: `ttl_ms`, plus `renew_ttl` (which needs it).
+fn counter_ttl(opts: Option<&Table>, fname: &str) -> mlua::Result<Option<Ttl>> {
+    let Some(opts) = opts else { return Ok(None) };
+    let ms = ttl_ms_opt(opts, &format!("{fname}: opts"))?;
+    let renew = match opts.get::<Value>("renew_ttl")? {
+        Value::Nil => false,
+        Value::Boolean(b) => b,
+        _ => {
+            return Err(Error::runtime(format!(
+                "{fname}: opts.renew_ttl must be a boolean"
+            )));
+        }
+    };
+    match (ms, renew) {
+        (Some(ms), renew) => Ok(Some(Ttl { ms, renew })),
+        (None, true) => Err(Error::runtime(format!(
+            "{fname}: opts.renew_ttl requires opts.ttl_ms"
+        ))),
+        (None, false) => Ok(None),
+    }
+}
+
 pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), RunError> {
     let kv = lua.create_table().map_err(RunError::Init)?;
     let in_update = InUpdate::default();
@@ -68,15 +110,18 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
         let shared = shared.clone();
         let in_update = in_update.clone();
         let set = lua
-            .create_async_function(move |_, (key, value): (String, mlua::LuaString)| {
-                let shared = shared.clone();
-                let in_update = in_update.clone();
-                async move {
-                    reject_kv_reentry(&in_update, "lur.kv.set")?;
-                    let backend = shared.ensure().await?;
-                    backend.kv_set(key, value.as_bytes().to_vec()).await
-                }
-            })
+            .create_async_function(
+                move |_, (key, value, opts): (String, mlua::LuaString, Option<Table>)| {
+                    let shared = shared.clone();
+                    let in_update = in_update.clone();
+                    async move {
+                        reject_kv_reentry(&in_update, "lur.kv.set")?;
+                        let ttl_ms = ttl_opt(opts.as_ref(), "lur.kv.set: opts")?;
+                        let backend = shared.ensure().await?;
+                        backend.kv_set(key, value.as_bytes().to_vec(), ttl_ms).await
+                    }
+                },
+            )
             .map_err(RunError::Init)?;
         kv.set("set", set).map_err(RunError::Init)?;
     }
@@ -100,15 +145,18 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
         let shared = shared.clone();
         let in_update = in_update.clone();
         let add = lua
-            .create_async_function(move |_, (key, value): (String, mlua::LuaString)| {
-                let shared = shared.clone();
-                let in_update = in_update.clone();
-                async move {
-                    reject_kv_reentry(&in_update, "lur.kv.add")?;
-                    let backend = shared.ensure().await?;
-                    backend.kv_add(key, value.as_bytes().to_vec()).await
-                }
-            })
+            .create_async_function(
+                move |_, (key, value, opts): (String, mlua::LuaString, Option<Table>)| {
+                    let shared = shared.clone();
+                    let in_update = in_update.clone();
+                    async move {
+                        reject_kv_reentry(&in_update, "lur.kv.add")?;
+                        let ttl_ms = ttl_opt(opts.as_ref(), "lur.kv.add: opts")?;
+                        let backend = shared.ensure().await?;
+                        backend.kv_add(key, value.as_bytes().to_vec(), ttl_ms).await
+                    }
+                },
+            )
             .map_err(RunError::Init)?;
         kv.set("add", add).map_err(RunError::Init)?;
     }
@@ -118,19 +166,21 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
         let cas = lua
             .create_async_function(
                 move |_,
-                      (key, expected, new): (
+                      (key, expected, new, opts): (
                     String,
                     Option<mlua::LuaString>,
                     Option<mlua::LuaString>,
+                    Option<Table>,
                 )| {
                     let shared = shared.clone();
                     let in_update = in_update.clone();
                     async move {
                         reject_kv_reentry(&in_update, "lur.kv.cas")?;
+                        let ttl_ms = ttl_opt(opts.as_ref(), "lur.kv.cas: opts")?;
                         let backend = shared.ensure().await?;
                         let exp = expected.map(|s| s.as_bytes().to_vec());
                         let neu = new.map(|s| s.as_bytes().to_vec());
-                        backend.kv_cas(key, exp, neu).await
+                        backend.kv_cas(key, exp, neu, ttl_ms).await
                     }
                 },
             )
@@ -141,14 +191,17 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
         let shared = shared.clone();
         let in_update = in_update.clone();
         let incr = lua
-            .create_async_function(move |_, (key, n): (String, Value)| {
+            .create_async_function(move |_, (key, n, opts): (String, Value, Option<Table>)| {
                 let shared = shared.clone();
                 let in_update = in_update.clone();
                 async move {
                     reject_kv_reentry(&in_update, "lur.kv.incr")?;
                     let n = argcheck::integer_arg(n, "lur.kv.incr", 2)?;
+                    let ttl = counter_ttl(opts.as_ref(), "lur.kv.incr")?;
                     let backend = shared.ensure().await?;
-                    backend.kv_incr("lur.kv.incr", key, n.unwrap_or(1)).await
+                    backend
+                        .kv_incr("lur.kv.incr", key, n.unwrap_or(1), ttl)
+                        .await
                 }
             })
             .map_err(RunError::Init)?;
@@ -158,7 +211,7 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
         let shared = shared.clone();
         let in_update = in_update.clone();
         let decr = lua
-            .create_async_function(move |_, (key, n): (String, Value)| {
+            .create_async_function(move |_, (key, n, opts): (String, Value, Option<Table>)| {
                 let shared = shared.clone();
                 let in_update = in_update.clone();
                 async move {
@@ -168,8 +221,9 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
                         .unwrap_or(1)
                         .checked_neg()
                         .ok_or_else(|| Error::runtime("lur.kv.decr: step too large"))?;
+                    let ttl = counter_ttl(opts.as_ref(), "lur.kv.decr")?;
                     let backend = shared.ensure().await?;
-                    backend.kv_incr("lur.kv.decr", key, delta).await
+                    backend.kv_incr("lur.kv.decr", key, delta, ttl).await
                 }
             })
             .map_err(RunError::Init)?;
@@ -180,27 +234,74 @@ pub(crate) fn install(lua: &Lua, lur: &Table, shared: &Shared) -> Result<(), Run
         let shared = shared.clone();
         let in_update = in_update.clone();
         let update = lua
-            .create_async_function(move |lua, (key, func): (String, Function)| {
+            .create_async_function(
+                move |lua, (key, func, opts): (String, Function, Option<Table>)| {
+                    let shared = shared.clone();
+                    let in_update = in_update.clone();
+                    async move {
+                        reject_kv_reentry(&in_update, "lur.kv.update")?;
+                        let ttl_ms = ttl_opt(opts.as_ref(), "lur.kv.update: opts")?;
+                        let backend = shared.ensure().await?;
+                        // Guard only the transform, not the tx's own I/O, so sibling
+                        // lur.async kv calls aren't rejected as re-entry.
+                        let wrapped = lua.create_async_function(move |_, cur: Value| {
+                            let func = func.clone();
+                            let in_update = in_update.clone();
+                            async move {
+                                let _guard = KvUpdateGuard::enter(in_update);
+                                func.call_async::<Value>(cur).await
+                            }
+                        })?;
+                        backend.kv_update(&lua, key, wrapped, ttl_ms).await
+                    }
+                },
+            )
+            .map_err(RunError::Init)?;
+        kv.set("update", update).map_err(RunError::Init)?;
+    }
+
+    {
+        let shared = shared.clone();
+        let in_update = in_update.clone();
+        let expire = lua
+            .create_async_function(move |_, (key, ms): (String, Value)| {
                 let shared = shared.clone();
                 let in_update = in_update.clone();
                 async move {
-                    reject_kv_reentry(&in_update, "lur.kv.update")?;
+                    reject_kv_reentry(&in_update, "lur.kv.expire")?;
+                    let ms = argcheck::integer_arg(ms, "lur.kv.expire", 2)?
+                        .filter(|ms| *ms > 0)
+                        .ok_or_else(|| {
+                            Error::runtime(
+                                "lur.kv.expire: argument #2 must be a positive integer (ms)",
+                            )
+                        })?;
                     let backend = shared.ensure().await?;
-                    // Guard only the transform, not the tx's own I/O, so sibling
-                    // lur.async kv calls aren't rejected as re-entry.
-                    let wrapped = lua.create_async_function(move |_, cur: Value| {
-                        let func = func.clone();
-                        let in_update = in_update.clone();
-                        async move {
-                            let _guard = KvUpdateGuard::enter(in_update);
-                            func.call_async::<Value>(cur).await
-                        }
-                    })?;
-                    backend.kv_update(&lua, key, wrapped).await
+                    backend.kv_expire(key, ms).await
                 }
             })
             .map_err(RunError::Init)?;
-        kv.set("update", update).map_err(RunError::Init)?;
+        kv.set("expire", expire).map_err(RunError::Init)?;
+    }
+    {
+        let shared = shared.clone();
+        let in_update = in_update.clone();
+        // `ms, exists`: `nil, false` absent · `nil, true` no expiry · `n, true` expiring.
+        let ttl = lua
+            .create_async_function(move |_, key: String| {
+                let shared = shared.clone();
+                let in_update = in_update.clone();
+                async move {
+                    reject_kv_reentry(&in_update, "lur.kv.ttl")?;
+                    let backend = shared.ensure().await?;
+                    Ok(match backend.kv_ttl(key).await? {
+                        None => (None, false),
+                        Some(left) => (left, true),
+                    })
+                }
+            })
+            .map_err(RunError::Init)?;
+        kv.set("ttl", ttl).map_err(RunError::Init)?;
     }
 
     lur.set("kv", kv).map_err(RunError::Init)?;

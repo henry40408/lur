@@ -1,10 +1,30 @@
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::thread;
 
 use lur::policy::Policy;
 use lur::runtime::{Runtime, RuntimeConfig};
+use wiremock::{Request, ResponseTemplate};
+
+mod common;
+use common::Server;
+
+fn fixed(status: u16, body: &'static str) -> Server {
+    Server::start(ResponseTemplate::new(status).set_body_string(body))
+}
+
+fn fixed_v6(status: u16, body: &'static str) -> Option<Server> {
+    Server::start_v6(ResponseTemplate::new(status).set_body_string(body))
+}
+
+fn echo() -> Server {
+    Server::start(|req: &Request| ResponseTemplate::new(200).set_body_bytes(req.body.clone()))
+}
+
+fn redirect(location: &str) -> Server {
+    Server::start(ResponseTemplate::new(302).insert_header("Location", location))
+}
 
 fn runtime_with(policy: Policy) -> Runtime {
     Runtime::with_config(RuntimeConfig {
@@ -21,109 +41,10 @@ fn loopback_policy() -> Policy {
         .allow_private()
 }
 
-enum Resp {
-    Fixed(u16, &'static str),
-    Echo,
-    Redirect(String),
-}
-
-/// A tiny one-request-per-connection HTTP/1.1 server in a background thread.
-fn spawn(resp: Resp) -> u16 {
-    spawn_on(TcpListener::bind("127.0.0.1:0").unwrap(), resp)
-}
-
-/// Like [`spawn`] on IPv6 loopback; `None` if the host has no `::1`.
-fn spawn_v6(resp: Resp) -> Option<u16> {
-    match TcpListener::bind("[::1]:0") {
-        Ok(l) => Some(spawn_on(l, resp)),
-        Err(e) => {
-            eprintln!("skipping: cannot bind [::1]: {e}");
-            None
-        }
-    }
-}
-
-fn spawn_on(listener: TcpListener, resp: Resp) -> u16 {
-    let port = listener.local_addr().unwrap().port();
-    thread::spawn(move || {
-        for stream in listener.incoming() {
-            let mut s = stream.unwrap();
-            let mut buf = Vec::new();
-            let mut tmp = [0u8; 4096];
-            let body = loop {
-                let n = s.read(&mut tmp).unwrap_or(0);
-                if n == 0 {
-                    break Vec::new();
-                }
-                buf.extend_from_slice(&tmp[..n]);
-                if let Some(pos) = find(&buf, b"\r\n\r\n") {
-                    let cl = content_length(&buf[..pos]);
-                    let start = pos + 4;
-                    while buf.len() - start < cl {
-                        let n = s.read(&mut tmp).unwrap_or(0);
-                        if n == 0 {
-                            break;
-                        }
-                        buf.extend_from_slice(&tmp[..n]);
-                    }
-                    break buf[start..(start + cl).min(buf.len())].to_vec();
-                }
-            };
-            let mut out = Vec::new();
-            match &resp {
-                Resp::Fixed(code, b) => {
-                    out.extend_from_slice(
-                        format!(
-                            "HTTP/1.1 {code} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                            b.len()
-                        )
-                        .as_bytes(),
-                    );
-                    out.extend_from_slice(b.as_bytes());
-                }
-                Resp::Echo => {
-                    out.extend_from_slice(
-                        format!(
-                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                            body.len()
-                        )
-                        .as_bytes(),
-                    );
-                    out.extend_from_slice(&body);
-                }
-                Resp::Redirect(loc) => {
-                    out.extend_from_slice(
-                        format!(
-                            "HTTP/1.1 302 Found\r\nLocation: {loc}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                        )
-                        .as_bytes(),
-                    );
-                }
-            }
-            let _ = s.write_all(&out);
-            let _ = s.flush();
-        }
-    });
-    port
-}
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|w| w == needle)
-}
-
-fn content_length(headers: &[u8]) -> usize {
-    let text = String::from_utf8_lossy(headers).to_lowercase();
-    for line in text.lines() {
-        if let Some(v) = line.strip_prefix("content-length:") {
-            return v.trim().parse().unwrap_or(0);
-        }
-    }
-    0
-}
-
 #[test]
 fn http_get_returns_status_and_body() {
-    let port = spawn(Resp::Fixed(200, "hello-http"));
+    let srv = fixed(200, "hello-http");
+    let port = srv.port();
     let rt = runtime_with(loopback_policy());
     rt.run(&format!(
         "local r = lur.http.get('http://127.0.0.1:{port}/')\n\
@@ -135,7 +56,8 @@ fn http_get_returns_status_and_body() {
 
 #[test]
 fn http_post_sends_body_and_echoes() {
-    let port = spawn(Resp::Echo);
+    let srv = echo();
+    let port = srv.port();
     let rt = runtime_with(loopback_policy());
     rt.run(&format!(
         "local r = lur.http.post('http://127.0.0.1:{port}/', {{ body = 'ping' }})\n\
@@ -147,7 +69,8 @@ fn http_post_sends_body_and_echoes() {
 
 #[test]
 fn http_res_json_decodes_body() {
-    let port = spawn(Resp::Fixed(200, "{\"ok\":true,\"n\":7}"));
+    let srv = fixed(200, "{\"ok\":true,\"n\":7}");
+    let port = srv.port();
     let rt = runtime_with(loopback_policy());
     rt.run(&format!(
         "local r = lur.http.get('http://127.0.0.1:{port}/')\n\
@@ -160,7 +83,8 @@ fn http_res_json_decodes_body() {
 
 #[test]
 fn http_json_opt_sets_body() {
-    let port = spawn(Resp::Echo);
+    let srv = echo();
+    let port = srv.port();
     let rt = runtime_with(loopback_policy());
     rt.run(&format!(
         "local r = lur.http.post('http://127.0.0.1:{port}/', {{ json = {{ a = 1 }} }})\n\
@@ -171,7 +95,8 @@ fn http_json_opt_sets_body() {
 
 #[test]
 fn http_denied_when_host_not_allowlisted() {
-    let port = spawn(Resp::Fixed(200, "x"));
+    let srv = fixed(200, "x");
+    let port = srv.port();
     let rt = runtime_with(
         Policy::strict()
             .with_net(vec!["example.com".to_string()])
@@ -186,7 +111,8 @@ fn http_denied_when_host_not_allowlisted() {
 
 #[test]
 fn http_private_ip_denied_by_default() {
-    let port = spawn(Resp::Fixed(200, "x"));
+    let srv = fixed(200, "x");
+    let port = srv.port();
     // Allowlisted but private → SSRF guard blocks.
     let rt = runtime_with(Policy::strict().with_net(vec!["127.0.0.1".to_string()]));
     assert!(
@@ -198,7 +124,8 @@ fn http_private_ip_denied_by_default() {
 
 #[test]
 fn http_body_exceeding_cap_errors() {
-    let port = spawn(Resp::Fixed(200, "hello-http")); // 10 bytes
+    let srv = fixed(200, "hello-http"); // 10 bytes
+    let port = srv.port();
     let rt = Runtime::with_config(RuntimeConfig {
         policy: Arc::new(loopback_policy()),
         max_http_body: 4, // smaller than the response
@@ -214,7 +141,8 @@ fn http_body_exceeding_cap_errors() {
 
 #[test]
 fn http_redirect_to_disallowed_host_is_blocked() {
-    let target = spawn(Resp::Redirect("http://evil.example:9/".to_string()));
+    let srv = redirect("http://evil.example:9/");
+    let target = srv.port();
     let rt = runtime_with(loopback_policy());
     assert!(
         rt.run(&format!("lur.http.get('http://127.0.0.1:{target}/')"))
@@ -247,7 +175,8 @@ fn http_ipv6_loopback_literal_denied_by_default() {
 
 #[test]
 fn http_ipv4_mapped_ipv6_literal_denied_by_default() {
-    let port = spawn(Resp::Fixed(200, "x"));
+    let srv = fixed(200, "x");
+    let port = srv.port();
     let rt = runtime_with(Policy::strict().with_net(vec!["*".to_string()]));
     for host in [
         "[::ffff:127.0.0.1]",
@@ -262,9 +191,10 @@ fn http_ipv4_mapped_ipv6_literal_denied_by_default() {
 
 #[test]
 fn http_ipv6_allowlist_entry_matches_url_literal() {
-    let Some(port) = spawn_v6(Resp::Fixed(200, "v6")) else {
+    let Some(srv) = fixed_v6(200, "v6") else {
         return;
     };
+    let port = srv.port();
     for rule in [
         "::1".to_string(),
         "[::1]".to_string(),
@@ -291,13 +221,14 @@ fn http_ipv6_allowlist_entry_still_needs_allow_private() {
 
 #[test]
 fn http_redirect_to_ipv6_literal_is_checked() {
-    let Some(v6) = spawn_v6(Resp::Fixed(200, "v6")) else {
+    let Some(v6_srv) = fixed_v6(200, "v6") else {
         return;
     };
-    let target = format!("http://[::1]:{v6}/");
+    let target = format!("http://[::1]:{}/", v6_srv.port());
 
     // Not on the allowlist → the redirect hop is refused.
-    let origin = spawn(Resp::Redirect(target.clone()));
+    let origin_srv = redirect(&target);
+    let origin = origin_srv.port();
     let rt = runtime_with(loopback_policy());
     let err = rt
         .run(&format!("lur.http.get('http://127.0.0.1:{origin}/')"))
@@ -308,7 +239,8 @@ fn http_redirect_to_ipv6_literal_is_checked() {
     assert!(err.contains("error following redirect"), "got: {err}");
 
     // Allowlisted (and private allowed) → followed.
-    let origin = spawn(Resp::Redirect(target));
+    let origin_srv = redirect(&target);
+    let origin = origin_srv.port();
     let rt = runtime_with(
         Policy::strict()
             .with_net(vec!["127.0.0.1".to_string(), "::1".to_string()])

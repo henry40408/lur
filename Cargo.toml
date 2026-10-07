@@ -13,10 +13,15 @@ name = "lur"
 path = "src/main.rs"
 
 [dependencies]
+ammonia = "=4.1.4"
 base64 = "0.23.0"
+cap-std = "4.0.3"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+chrono-tz = { version = "0.10.4", default-features = false, features = ["std"] }
 clap = { version = "4.6", features = ["derive", "env"] }
 cron = "0.17.0"
+ego-tree = "0.11.0"
+encoding_rs = "0.8.42"
 futures-util = { version = "0.3.32", default-features = false, features = ["std", "async-await"] }
 getrandom = "0.4.3"
 hex = "0.4.3"
@@ -24,11 +29,14 @@ hmac = "0.13.0"
 http-body-util = "0.1.3"
 httpdate = "1.0.3"
 hyper = { version = "1.10.1", features = ["server", "http1"] }
-hyper-util = { version = "0.1.20", features = ["tokio"] }
+hyper-util = { version = "0.1.20", features = ["tokio", "server-graceful"] }
 md-5 = "0.11.0"
 mlua = { version = "0.12.0", features = ["luau", "async", "send"] }
-pulldown-cmark = { version = "0.13.4", default-features = false }
+percent-encoding = "2.3.2"
+pulldown-cmark ={ version = "0.13.4", default-features = false }
+quick-xml = "0.42.0"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "http2", "query"] }
+scraper = "0.27.0"
 serde_json = "1.0.150"
 sha1 = "0.11.0"
 sha2 = "0.11.0"
@@ -36,19 +44,29 @@ sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio
 subtle = "2.6.1"
 thiserror = "2.0.18"
 tokio = { version = "1.52", features = ["rt", "rt-multi-thread", "time", "net", "sync", "signal", "macros"] }
+tokio-util = { version = "0.7.18", default-features = false, features = ["rt"] }
 toml = "1.1.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "ansi", "json"] }
+url = "2.5.8"
 
 [dev-dependencies]
 assert_cmd = "2.2.2"
 criterion = "0.8.2"
 predicates = "3.1.4"
 tempfile = "3.27.0"
+wiremock = "0.6.5"
 
 [[bench]]
 name = "runtime"
 harness = false
+
+# Size over compile time (~19 MB -> ~13 MB). Never add `panic = "abort"`: mlua unwinds Lua
+# errors through Rust callbacks, so abort turns every error into a crash (see decisions.md).
+[profile.release]
+strip = true
+lto = "fat"
+codegen-units = 1
 
 # Self-maintained lint set (originally seeded from Embark Studios' rust-ecosystem
 # list). The bulk of the old itemised pedantic lints are now covered by the

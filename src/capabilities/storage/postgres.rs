@@ -6,10 +6,10 @@
 use std::str::FromStr;
 
 use mlua::{Error, Function, Lua, Table, Value};
-use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgArguments, PgConnectOptions, PgPool, PgPoolOptions, PgRow};
 use sqlx::{Column, Postgres, Row, TypeInfo, ValueRef};
 
+use super::{PurgeClock, Ttl, expiry_at, now_ms};
 use crate::capabilities::null;
 
 /// SQLSTATE `40001`. Matched by code: the message is localized, the code isn't.
@@ -135,10 +135,19 @@ fn kv_row_to_bytes(row: &PgRow) -> mlua::Result<Vec<u8>> {
     }
 }
 
+async fn purge_expired(pool: &PgPool, now: i64) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM lur_kv WHERE expires_at IS NOT NULL AND expires_at <= $1")
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Postgres backend; cloning clones the pool handle.
 #[derive(Clone)]
 pub(crate) struct PgBackend {
     pool: PgPool,
+    purge: PurgeClock,
 }
 
 impl PgBackend {
@@ -150,14 +159,29 @@ impl PgBackend {
             .connect_with(opts)
             .await
             .map_err(|e| Error::runtime(format!("lur.db: connecting to postgres: {e}")))?;
+        let ensure = |e: sqlx::Error| Error::runtime(format!("lur.db: ensuring lur_kv: {e}"));
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS lur_kv (\
-             key TEXT PRIMARY KEY, kind SMALLINT NOT NULL, bytes BYTEA, num BIGINT)",
+             key TEXT PRIMARY KEY, kind SMALLINT NOT NULL, bytes BYTEA, num BIGINT, \
+             expires_at BIGINT)",
         )
         .execute(&pool)
         .await
-        .map_err(|e| Error::runtime(format!("lur.db: ensuring lur_kv: {e}")))?;
-        Ok(Self { pool })
+        .map_err(ensure)?;
+        // Tables created before TTLs lack the column.
+        sqlx::query("ALTER TABLE lur_kv ADD COLUMN IF NOT EXISTS expires_at BIGINT")
+            .execute(&pool)
+            .await
+            .map_err(ensure)?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS lur_kv_expires_at ON lur_kv (expires_at)")
+            .execute(&pool)
+            .await
+            .map_err(ensure)?;
+        purge_expired(&pool, now_ms()).await.map_err(ensure)?;
+        Ok(Self {
+            pool,
+            purge: PurgeClock::started(now_ms()),
+        })
     }
 
     pub(crate) async fn exec(
@@ -195,27 +219,48 @@ impl PgBackend {
     }
 
     pub(crate) async fn kv_get(&self, lua: &Lua, key: String) -> mlua::Result<Value> {
-        let row = sqlx::query("SELECT kind, bytes, num FROM lur_kv WHERE key = $1")
-            .bind(key)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| Error::runtime(format!("lur.kv.get: {e}")))?;
+        let row = sqlx::query(
+            "SELECT kind, bytes, num FROM lur_kv WHERE key = $1 \
+             AND (expires_at IS NULL OR expires_at > $2)",
+        )
+        .bind(key)
+        .bind(now_ms())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Error::runtime(format!("lur.kv.get: {e}")))?;
         match row {
             None => Ok(Value::Nil),
             Some(r) => Ok(Value::String(lua.create_string(kv_row_to_bytes(&r)?)?)),
         }
     }
 
-    pub(crate) async fn kv_set(&self, key: String, value: Vec<u8>) -> mlua::Result<()> {
+    /// Sweeps expired rows at most once an hour; best-effort, so errors are dropped.
+    async fn maybe_purge(&self) {
+        let now = now_ms();
+        if self.purge.due(now) {
+            let _ = purge_expired(&self.pool, now).await;
+        }
+    }
+
+    pub(crate) async fn kv_set(
+        &self,
+        key: String,
+        value: Vec<u8>,
+        ttl_ms: Option<i64>,
+    ) -> mlua::Result<()> {
+        let expires_at = expiry_at(now_ms(), ttl_ms);
         sqlx::query(
-            "INSERT INTO lur_kv (key, kind, bytes, num) VALUES ($1, 0, $2, NULL) \
-             ON CONFLICT (key) DO UPDATE SET kind = 0, bytes = excluded.bytes, num = NULL",
+            "INSERT INTO lur_kv (key, kind, bytes, num, expires_at) VALUES ($1, 0, $2, NULL, $3) \
+             ON CONFLICT (key) DO UPDATE SET kind = 0, bytes = excluded.bytes, num = NULL, \
+               expires_at = excluded.expires_at",
         )
         .bind(key)
         .bind(value)
+        .bind(expires_at)
         .execute(&self.pool)
         .await
         .map_err(|e| Error::runtime(format!("lur.kv.set: {e}")))?;
+        self.maybe_purge().await;
         Ok(())
     }
 
@@ -228,55 +273,77 @@ impl PgBackend {
         Ok(())
     }
 
-    pub(crate) async fn kv_add(&self, key: String, value: Vec<u8>) -> mlua::Result<bool> {
+    /// Insert unless a live row exists; an expired row is taken over.
+    async fn insert_absent(
+        &self,
+        voice: &str,
+        key: String,
+        value: Vec<u8>,
+        ttl_ms: Option<i64>,
+    ) -> mlua::Result<bool> {
+        let now = now_ms();
         let res = sqlx::query(
-            "INSERT INTO lur_kv (key, kind, bytes) VALUES ($1, 0, $2) \
-             ON CONFLICT (key) DO NOTHING",
+            "INSERT INTO lur_kv (key, kind, bytes, expires_at) VALUES ($1, 0, $2, $3) \
+             ON CONFLICT (key) DO UPDATE SET kind = 0, bytes = excluded.bytes, num = NULL, \
+               expires_at = excluded.expires_at \
+             WHERE lur_kv.expires_at IS NOT NULL AND lur_kv.expires_at <= $4",
         )
         .bind(key)
         .bind(value)
+        .bind(expiry_at(now, ttl_ms))
+        .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|e| Error::runtime(format!("lur.kv.add: {e}")))?;
+        .map_err(|e| Error::runtime(format!("{voice}: {e}")))?;
         Ok(res.rows_affected() == 1)
     }
 
+    pub(crate) async fn kv_add(
+        &self,
+        key: String,
+        value: Vec<u8>,
+        ttl_ms: Option<i64>,
+    ) -> mlua::Result<bool> {
+        let added = self.insert_absent("lur.kv.add", key, value, ttl_ms).await?;
+        self.maybe_purge().await;
+        Ok(added)
+    }
+
+    /// `ttl_ms` of `None` keeps the row's existing expiry.
     pub(crate) async fn kv_cas(
         &self,
         key: String,
         expected: Option<Vec<u8>>,
         new: Option<Vec<u8>>,
+        ttl_ms: Option<i64>,
     ) -> mlua::Result<bool> {
+        let now = now_ms();
         let applied = match (expected, new) {
-            (None, Some(v)) => {
-                sqlx::query(
-                    "INSERT INTO lur_kv (key, kind, bytes) VALUES ($1, 0, $2) \
-                     ON CONFLICT (key) DO NOTHING",
+            (None, Some(v)) => self.insert_absent("lur.kv.cas", key, v, ttl_ms).await?,
+            (None, None) => {
+                let r = sqlx::query(
+                    "SELECT 1 FROM lur_kv WHERE key = $1 \
+                     AND (expires_at IS NULL OR expires_at > $2)",
                 )
                 .bind(key)
-                .bind(v)
-                .execute(&self.pool)
+                .bind(now)
+                .fetch_optional(&self.pool)
                 .await
-                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
-                .rows_affected()
-                    == 1
-            }
-            (None, None) => {
-                let r = sqlx::query("SELECT 1 FROM lur_kv WHERE key = $1")
-                    .bind(key)
-                    .fetch_optional(&self.pool)
-                    .await
-                    .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?;
+                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?;
                 r.is_none()
             }
             (Some(e), Some(v)) => {
                 sqlx::query(
-                    "UPDATE lur_kv SET kind = 0, bytes = $1, num = NULL \
-                     WHERE key = $2 AND kind = 0 AND bytes = $3",
+                    "UPDATE lur_kv SET kind = 0, bytes = $1, num = NULL, \
+                       expires_at = COALESCE($2, expires_at) \
+                     WHERE key = $3 AND kind = 0 AND bytes = $4 \
+                     AND (expires_at IS NULL OR expires_at > $5)",
                 )
                 .bind(v)
+                .bind(expiry_at(now, ttl_ms))
                 .bind(key)
                 .bind(e)
+                .bind(now)
                 .execute(&self.pool)
                 .await
                 .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
@@ -284,62 +351,117 @@ impl PgBackend {
                     == 1
             }
             (Some(e), None) => {
-                sqlx::query("DELETE FROM lur_kv WHERE key = $1 AND kind = 0 AND bytes = $2")
-                    .bind(key)
-                    .bind(e)
-                    .execute(&self.pool)
-                    .await
-                    .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
-                    .rows_affected()
+                sqlx::query(
+                    "DELETE FROM lur_kv WHERE key = $1 AND kind = 0 AND bytes = $2 \
+                     AND (expires_at IS NULL OR expires_at > $3)",
+                )
+                .bind(key)
+                .bind(e)
+                .bind(now)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
+                .rows_affected()
                     == 1
             }
         };
         Ok(applied)
     }
 
-    /// Atomic upsert-add; a non-counter existing value yields no row → error.
+    /// Atomic upsert-add; a non-counter live value yields no row → error. An
+    /// expired row restarts from `delta`. The expiry is set when the row has
+    /// none (or `renew`), so a counter that predates TTLs heals itself.
     pub(crate) async fn kv_incr(
         &self,
         voice: &'static str,
         key: String,
         delta: i64,
+        ttl: Option<Ttl>,
     ) -> mlua::Result<i64> {
+        let now = now_ms();
         let row = sqlx::query(
-            "INSERT INTO lur_kv (key, kind, num) VALUES ($1, 1, $2) \
-             ON CONFLICT (key) DO UPDATE SET num = lur_kv.num + excluded.num \
-             WHERE lur_kv.kind = 1 \
+            "INSERT INTO lur_kv (key, kind, num, expires_at) VALUES ($1, 1, $2, $3) \
+             ON CONFLICT (key) DO UPDATE SET \
+               kind = 1, bytes = NULL, \
+               num = CASE WHEN lur_kv.expires_at IS NOT NULL AND lur_kv.expires_at <= $4 \
+                          THEN excluded.num ELSE lur_kv.num + excluded.num END, \
+               expires_at = CASE \
+                 WHEN lur_kv.expires_at IS NOT NULL AND lur_kv.expires_at <= $4 \
+                   THEN excluded.expires_at \
+                 WHEN $5::boolean OR lur_kv.expires_at IS NULL \
+                   THEN COALESCE(excluded.expires_at, lur_kv.expires_at) \
+                 ELSE lur_kv.expires_at END \
+             WHERE (lur_kv.expires_at IS NOT NULL AND lur_kv.expires_at <= $4) \
+                OR lur_kv.kind = 1 \
              RETURNING num",
         )
         .bind(key)
         .bind(delta)
+        .bind(expiry_at(now, ttl.map(|t| t.ms)))
+        .bind(now)
+        .bind(ttl.is_some_and(|t| t.renew))
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| Error::runtime(format!("{voice}: {e}")))?;
-        match row {
+        let n = match row {
             Some(r) => r
                 .try_get::<i64, usize>(0)
-                .map_err(|e| Error::runtime(format!("{voice}: {e}"))),
-            None => Err(Error::runtime(format!(
-                "{voice}: existing value is not an integer"
-            ))),
-        }
+                .map_err(|e| Error::runtime(format!("{voice}: {e}")))?,
+            None => {
+                return Err(Error::runtime(format!(
+                    "{voice}: existing value is not an integer"
+                )));
+            }
+        };
+        self.maybe_purge().await;
+        Ok(n)
+    }
+
+    pub(crate) async fn kv_expire(&self, key: String, ttl_ms: i64) -> mlua::Result<bool> {
+        let now = now_ms();
+        let res = sqlx::query(
+            "UPDATE lur_kv SET expires_at = $1 WHERE key = $2 \
+             AND (expires_at IS NULL OR expires_at > $3)",
+        )
+        .bind(now.saturating_add(ttl_ms))
+        .bind(key)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Error::runtime(format!("lur.kv.expire: {e}")))?;
+        Ok(res.rows_affected() == 1)
+    }
+
+    pub(crate) async fn kv_ttl(&self, key: String) -> mlua::Result<Option<Option<i64>>> {
+        let now = now_ms();
+        let row = sqlx::query(
+            "SELECT expires_at FROM lur_kv WHERE key = $1 \
+             AND (expires_at IS NULL OR expires_at > $2)",
+        )
+        .bind(key)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Error::runtime(format!("lur.kv.ttl: {e}")))?;
+        row.map(|r| {
+            r.try_get::<Option<i64>, usize>(0)
+                .map(|exp| exp.map(|e| e - now))
+                .map_err(|e| Error::runtime(format!("lur.kv.ttl: {e}")))
+        })
+        .transpose()
     }
 
     /// `SERIALIZABLE` transaction on a pinned connection. Conflicts surface as
     /// 40001 (at a statement or at COMMIT) and are not retried: the body may have
     /// external side effects.
     pub(crate) async fn begin(&self) -> mlua::Result<PgTransaction> {
-        let mut conn = self
+        let tx = self
             .pool
-            .acquire()
-            .await
-            .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
-        sqlx::query("BEGIN ISOLATION LEVEL SERIALIZABLE")
-            .execute(&mut *conn)
+            .begin_with("BEGIN ISOLATION LEVEL SERIALIZABLE")
             .await
             .map_err(|e| Error::runtime(format!("lur.db.tx: begin: {e}")))?;
         Ok(PgTransaction {
-            conn: tokio::sync::Mutex::new(Some(conn)),
+            tx: tokio::sync::Mutex::new(Some(tx)),
         })
     }
 
@@ -350,28 +472,38 @@ impl PgBackend {
         lua: &Lua,
         key: String,
         func: Function,
+        ttl_ms: Option<i64>,
     ) -> mlua::Result<Value> {
-        let conn = self
+        let mut tx = self
             .pool
-            .acquire()
-            .await
-            .map_err(|e| Error::runtime(format!("lur.kv.update: begin: {e}")))?;
-        let mut tx = PinnedTx::new(conn);
-        sqlx::query("BEGIN ISOLATION LEVEL SERIALIZABLE")
-            .execute(&mut **tx.conn())
+            .begin_with("BEGIN ISOLATION LEVEL SERIALIZABLE")
             .await
             .map_err(|e| Error::runtime(format!("lur.kv.update: begin: {e}")))?;
 
-        // Cancellation anywhere in here drops `tx`, which rolls back.
-        let result: mlua::Result<Value> = async {
-            let cur: Value = match sqlx::query("SELECT kind, bytes, num FROM lur_kv WHERE key = $1")
-                .bind(&key)
-                .fetch_optional(&mut **tx.conn())
-                .await
-                .map_err(|e| map_pg_error("lur.kv.update", &e))?
+        // Cancellation or an error anywhere in here drops `tx`, which rolls back.
+        async {
+            // An expired row reads as absent; a live one keeps its expiry
+            // unless `ttl_ms` replaces it.
+            let (cur, cur_expiry): (Value, Option<i64>) = match sqlx::query(
+                "SELECT kind, bytes, num, expires_at FROM lur_kv WHERE key = $1 \
+                 AND (expires_at IS NULL OR expires_at > $2)",
+            )
+            .bind(&key)
+            .bind(now_ms())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| map_pg_error("lur.kv.update", &e))?
             {
-                None => Value::Nil,
-                Some(r) => Value::String(lua.create_string(kv_row_to_bytes(&r)?)?),
+                None => (Value::Nil, None),
+                Some(r) => {
+                    let expiry = r
+                        .try_get::<Option<i64>, usize>(3)
+                        .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
+                    (
+                        Value::String(lua.create_string(kv_row_to_bytes(&r)?)?),
+                        expiry,
+                    )
+                }
             };
 
             let new = func.call_async::<Value>(cur).await?;
@@ -380,18 +512,22 @@ impl PgBackend {
                 Value::Nil => {
                     sqlx::query("DELETE FROM lur_kv WHERE key = $1")
                         .bind(&key)
-                        .execute(&mut **tx.conn())
+                        .execute(&mut *tx)
                         .await
                         .map_err(|e| map_pg_error("lur.kv.update", &e))?;
                 }
                 Value::String(s) => {
+                    let expires_at = expiry_at(now_ms(), ttl_ms).or(cur_expiry);
                     sqlx::query(
-                        "INSERT INTO lur_kv (key, kind, bytes, num) VALUES ($1, 0, $2, NULL) \
-                         ON CONFLICT (key) DO UPDATE SET kind = 0, bytes = excluded.bytes, num = NULL",
+                        "INSERT INTO lur_kv (key, kind, bytes, num, expires_at) \
+                         VALUES ($1, 0, $2, NULL, $3) \
+                         ON CONFLICT (key) DO UPDATE SET kind = 0, bytes = excluded.bytes, \
+                           num = NULL, expires_at = excluded.expires_at",
                     )
                     .bind(&key)
                     .bind(s.as_bytes().to_vec())
-                    .execute(&mut **tx.conn())
+                    .bind(expires_at)
+                    .execute(&mut *tx)
                     .await
                     .map_err(|e| map_pg_error("lur.kv.update", &e))?;
                 }
@@ -402,76 +538,19 @@ impl PgBackend {
                     )));
                 }
             }
-            sqlx::query("COMMIT")
-                .execute(&mut **tx.conn())
+            tx.commit()
                 .await
                 .map_err(|e| map_pg_error("lur.kv.update: commit", &e))?;
             Ok(new)
         }
-        .await;
-
-        match result {
-            Ok(v) => {
-                tx.disarm();
-                Ok(v)
-            }
-            Err(e) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut **tx.conn()).await;
-                tx.disarm();
-                Err(e)
-            }
-        }
+        .await
     }
 }
 
-/// Detached best-effort ROLLBACK for a transaction left open by cancellation,
-/// so the connection doesn't sit idle-in-transaction holding locks. Without a
-/// runtime, closes the connection instead.
-fn spawn_rollback(conn: PoolConnection<Postgres>) {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            handle.spawn(async move {
-                let mut conn = conn;
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-            });
-        }
-        Err(_) => {
-            drop(conn.detach());
-        }
-    }
-}
-
-/// Pinned connection with an open transaction; rolls back on drop unless
-/// `disarm`ed after an explicit COMMIT/ROLLBACK.
-struct PinnedTx {
-    conn: Option<PoolConnection<Postgres>>,
-}
-
-impl PinnedTx {
-    fn new(conn: PoolConnection<Postgres>) -> Self {
-        Self { conn: Some(conn) }
-    }
-
-    fn conn(&mut self) -> &mut PoolConnection<Postgres> {
-        self.conn.as_mut().expect("connection present until disarm")
-    }
-
-    fn disarm(mut self) {
-        self.conn = None;
-    }
-}
-
-impl Drop for PinnedTx {
-    fn drop(&mut self) {
-        if let Some(conn) = self.conn.take() {
-            spawn_rollback(conn);
-        }
-    }
-}
-
-/// Pinned-connection write transaction; calls after commit/rollback error.
+/// Write transaction; calls after commit/rollback error. Dropping it (e.g. on
+/// cancellation) rolls back via sqlx.
 pub(crate) struct PgTransaction {
-    conn: tokio::sync::Mutex<Option<PoolConnection<Postgres>>>,
+    tx: tokio::sync::Mutex<Option<sqlx::Transaction<'static, Postgres>>>,
 }
 
 impl PgTransaction {
@@ -481,12 +560,12 @@ impl PgTransaction {
         sql: String,
         params: Vec<Value>,
     ) -> mlua::Result<super::ExecResult> {
-        let mut guard = self.conn.lock().await;
-        let conn = guard
+        let mut guard = self.tx.lock().await;
+        let tx = guard
             .as_mut()
             .ok_or_else(|| Error::runtime("lur.db.tx: transaction already finished"))?;
         let res = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql.as_str())), &params)?
-            .execute(&mut **conn)
+            .execute(&mut **tx)
             .await
             .map_err(|e| map_pg_error("lur.db.tx exec", &e))?;
         Ok(super::ExecResult {
@@ -501,12 +580,12 @@ impl PgTransaction {
         sql: String,
         params: Vec<Value>,
     ) -> mlua::Result<Table> {
-        let mut guard = self.conn.lock().await;
-        let conn = guard
+        let mut guard = self.tx.lock().await;
+        let tx = guard
             .as_mut()
             .ok_or_else(|| Error::runtime("lur.db.tx: transaction already finished"))?;
         let rows = bind_all(sqlx::query(sqlx::AssertSqlSafe(sql.as_str())), &params)?
-            .fetch_all(&mut **conn)
+            .fetch_all(&mut **tx)
             .await
             .map_err(|e| map_pg_error("lur.db.tx query", &e))?;
         let out = lua.create_table()?;
@@ -517,29 +596,20 @@ impl PgTransaction {
     }
 
     pub(crate) async fn commit(&self) -> mlua::Result<()> {
-        let mut guard = self.conn.lock().await;
-        if let Some(mut conn) = guard.take()
-            && let Err(e) = sqlx::query("COMMIT").execute(&mut *conn).await
-        {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-            return Err(map_pg_error("lur.db.tx: commit", &e));
+        let mut guard = self.tx.lock().await;
+        if let Some(tx) = guard.take() {
+            // A failed commit drops `tx`, which rolls back.
+            tx.commit()
+                .await
+                .map_err(|e| map_pg_error("lur.db.tx: commit", &e))?;
         }
         Ok(())
     }
 
     pub(crate) async fn rollback(&self) {
-        let mut guard = self.conn.lock().await;
-        if let Some(mut conn) = guard.take() {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-        }
-    }
-}
-
-impl Drop for PgTransaction {
-    /// Roll back a transaction abandoned by cancellation.
-    fn drop(&mut self) {
-        if let Some(conn) = self.conn.get_mut().take() {
-            spawn_rollback(conn);
+        let mut guard = self.tx.lock().await;
+        if let Some(tx) = guard.take() {
+            let _ = tx.rollback().await;
         }
     }
 }
@@ -576,7 +646,10 @@ mod tests {
             eprintln!("skipping PG test: Postgres unreachable (start it: docker compose up -d)");
             return None;
         };
-        Some(PgBackend { pool })
+        Some(PgBackend {
+            pool,
+            purge: PurgeClock::default(),
+        })
     }
 
     // Dropping an unfinished tx rolls back before the connection is reused.

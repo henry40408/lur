@@ -12,16 +12,18 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use cron::Schedule;
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{CONTENT_LENGTH, HeaderName, HeaderValue, TRANSFER_ENCODING};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response as HyperResponse};
 use hyper_util::rt::TokioIo;
+use hyper_util::server::graceful::GracefulShutdown;
 use mlua::{Function, IntoLuaMulti, Lua, MultiValue, Value};
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, SemaphorePermit};
+use tokio_util::task::TaskTracker;
 use tracing::{error, info, warn};
 
 use crate::capabilities::serve::Registry;
@@ -325,16 +327,17 @@ impl Server {
                 let _ = shutdown_tx.send(true);
             });
 
-            // Cloned into every in-flight connection and cron run; draining
-            // waits until only this handle remains.
-            let active = Arc::new(());
+            // Connections are watched by `graceful`, which tells idle keep-alive
+            // ones to close on shutdown; cron runs are tracked by `crons`.
+            let graceful = GracefulShutdown::new();
+            let crons = TaskTracker::new();
 
             for job in &server.cron_jobs {
                 tokio::spawn(cron_loop(
                     server.clone(),
                     job.clone(),
                     shutdown_rx.clone(),
-                    active.clone(),
+                    crons.clone(),
                 ));
             }
 
@@ -346,15 +349,13 @@ impl Server {
                         let (stream, _) = res?;
                         let io = TokioIo::new(stream);
                         let server = server.clone();
-                        let guard = active.clone();
+                        let service = service_fn(move |req| {
+                            let server = server.clone();
+                            async move { server.handle(req).await }
+                        });
+                        let conn = graceful.watch(http1::Builder::new().serve_connection(io, service));
                         tokio::spawn(async move {
-                            #[allow(clippy::no_effect_underscore_binding, reason = "hold the active-connection guard alive for the whole task")]
-                            let _guard = guard;
-                            let service = service_fn(move |req| {
-                                let server = server.clone();
-                                async move { server.handle(req).await }
-                            });
-                            if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
+                            if let Err(e) = conn.await {
                                 warn!("connection error: {e}");
                             }
                         });
@@ -363,10 +364,13 @@ impl Server {
             }
 
             info!("shutting down, draining for up to {}ms", grace.as_millis());
-            let deadline = Instant::now() + grace;
-            while Arc::strong_count(&active) > 1 && Instant::now() < deadline {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
+            crons.close();
+            // Anything still running after the grace period is aborted when the
+            // runtime drops.
+            let _ = tokio::time::timeout(grace, async {
+                tokio::join!(graceful.shutdown(), crons.wait());
+            })
+            .await;
             Ok(())
         })
     }
@@ -384,12 +388,15 @@ impl Server {
             .iter()
             .map(|(k, v)| (k.as_str().to_owned(), v.to_str().unwrap_or("").to_owned()))
             .collect();
-        let body = req
-            .into_body()
-            .collect()
-            .await
-            .map(|c| c.to_bytes().to_vec())
-            .unwrap_or_default();
+        // `Limited` stops reading at the cap, so an oversized body is never buffered.
+        let limit = self.max_body.unwrap_or(usize::MAX);
+        let body = match Limited::new(req.into_body(), limit).collect().await {
+            Ok(c) => c.to_bytes().to_vec(),
+            Err(e) if e.downcast_ref::<LengthLimitError>().is_some() => {
+                return Ok(to_hyper(oversize_response()));
+            }
+            Err(_) => Vec::new(),
+        };
 
         let raw = RawRequest {
             method,
@@ -418,12 +425,7 @@ impl Server {
             }
         };
 
-        let mut built = HyperResponse::builder().status(response.status);
-        for (name, value) in response.headers {
-            built = built.header(name, value);
-        }
-        let built = built.body(Full::new(Bytes::from(response.body)));
-        Ok(built.unwrap_or_else(|_| HyperResponse::new(Full::new(Bytes::new()))))
+        Ok(to_hyper(response))
     }
 
     async fn dispatch_async(&self, req: &RawRequest) -> Result<Response, RunError> {
@@ -480,6 +482,16 @@ impl Server {
     }
 }
 
+fn to_hyper(response: Response) -> HyperResponse<Full<Bytes>> {
+    let mut built = HyperResponse::builder().status(response.status);
+    for (name, value) in response.headers {
+        built = built.header(name, value);
+    }
+    built
+        .body(Full::new(Bytes::from(response.body)))
+        .unwrap_or_else(|_| HyperResponse::new(Full::new(Bytes::new())))
+}
+
 enum CallError {
     /// Hit either timeout layer.
     TimedOut,
@@ -530,7 +542,7 @@ async fn cron_loop(
     server: Arc<Server>,
     job: CronJob,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
-    active: Arc<()>,
+    crons: TaskTracker,
 ) {
     let in_flight = Arc::new(AtomicBool::new(false));
     loop {
@@ -553,13 +565,7 @@ async fn cron_loop(
         let server = server.clone();
         let job = job.clone();
         let in_flight = in_flight.clone();
-        let guard = active.clone();
-        tokio::spawn(async move {
-            #[allow(
-                clippy::no_effect_underscore_binding,
-                reason = "hold the active-request guard alive for the whole task"
-            )]
-            let _guard = guard;
+        crons.spawn(async move {
             server.run_cron(&job).await;
             in_flight.store(false, Ordering::SeqCst);
         });
@@ -843,40 +849,17 @@ fn parse_query(query: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
         .collect()
 }
 
-/// An invalid `%` escape is left verbatim.
+/// Raw bytes out (no UTF-8 assumption); an invalid `%` escape is left verbatim.
+/// `+` is mapped before decoding so that `%2B` stays a literal plus.
 fn percent_decode(input: &[u8], plus_as_space: bool) -> Vec<u8> {
-    let mut out = Vec::with_capacity(input.len());
-    let mut i = 0;
-    while i < input.len() {
-        match input[i] {
-            b'%' if i + 2 < input.len() => {
-                if let (Some(h), Some(l)) = (hex(input[i + 1]), hex(input[i + 2])) {
-                    out.push(h * 16 + l);
-                    i += 3;
-                } else {
-                    out.push(b'%');
-                    i += 1;
-                }
-            }
-            b'+' if plus_as_space => {
-                out.push(b' ');
-                i += 1;
-            }
-            c => {
-                out.push(c);
-                i += 1;
-            }
-        }
-    }
-    out
-}
-
-fn hex(c: u8) -> Option<u8> {
-    match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        _ => None,
+    if plus_as_space {
+        let spaced: Vec<u8> = input
+            .iter()
+            .map(|&b| if b == b'+' { b' ' } else { b })
+            .collect();
+        percent_encoding::percent_decode(&spaced).collect()
+    } else {
+        percent_encoding::percent_decode(input).collect()
     }
 }
 
@@ -969,4 +952,36 @@ fn headers_from(table: &mlua::Table) -> mlua::Result<Vec<(HeaderName, HeaderValu
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percent_decode_keeps_raw_bytes_and_bad_escapes() {
+        assert_eq!(percent_decode(b"a%20b", false), b"a b");
+        assert_eq!(percent_decode(b"%E4%BD%A0", false), "你".as_bytes());
+        assert_eq!(percent_decode(b"%FF", false), [0xFF], "not forced to UTF-8");
+        assert_eq!(percent_decode(b"100%", false), b"100%");
+        assert_eq!(percent_decode(b"%zz%4", false), b"%zz%4");
+        assert_eq!(
+            percent_decode(b"a%41", false),
+            b"aA",
+            "escape at the very end"
+        );
+        assert_eq!(percent_decode(b"a+b", false), b"a+b", "paths keep +");
+    }
+
+    #[test]
+    fn query_plus_is_a_space_but_encoded_plus_is_not() {
+        assert_eq!(
+            parse_query("q=a+b%2Bc&flag&e="),
+            vec![
+                (b"q".to_vec(), b"a b+c".to_vec()),
+                (b"flag".to_vec(), Vec::new()),
+                (b"e".to_vec(), Vec::new()),
+            ]
+        );
+    }
 }
