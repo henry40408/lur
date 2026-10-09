@@ -502,7 +502,8 @@ fn handler_sets_single_and_repeated_response_headers() {
 #[test]
 fn omitted_headers_yield_none() {
     let s = serve("lur.serve.http('GET', '/h', function(req) return { body = 'x' } end)");
-    assert!(s.dispatch("GET", "/h", b"").unwrap().headers.is_empty());
+    let headers = s.dispatch("GET", "/h", b"").unwrap().headers;
+    assert_eq!(headers, []);
 }
 
 #[test]
