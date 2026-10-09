@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791188840141,
+  "lastUpdate": 1791513678380,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4031,6 +4031,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 208177,
             "range": "± 1041",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "97d6ba8f165b5e1377952d32991071a423bd55ac",
+          "message": "chore(deps): bump rust-toolchain from 1.98.1 to 1.99.0 (#124)\n\n* chore(deps): bump rust-toolchain from 1.98.1 to 1.99.0\n\nBumps [rust-toolchain](https://github.com/rust-lang/rust) from 1.98.1 to 1.99.0.\n- [Release notes](https://github.com/rust-lang/rust/releases)\n- [Changelog](https://github.com/rust-lang/rust/blob/main/RELEASES.md)\n- [Commits](https://github.com/rust-lang/rust/compare/1.98.1...1.99.0)\n\n---\nupdated-dependencies:\n- dependency-name: rust-toolchain\n  dependency-version: 1.99.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\n\n* fix: satisfy clippy assert_is_empty on Rust 1.99\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* test: widen the TTL window in the pg kv set/add/ttl test\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nCo-authored-by: Heng-Yi Wu <2316687+henry40408@users.noreply.github.com>\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-09T10:36:30+08:00",
+          "tree_id": "57eac38ce5acfe8f4a857aeae10d1719a22f35da",
+          "url": "https://github.com/henry40408/lur/commit/97d6ba8f165b5e1377952d32991071a423bd55ac"
+        },
+        "date": 1791513677511,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 320186,
+            "range": "± 7065",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5431,
+            "range": "± 69",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 205140,
+            "range": "± 4663",
             "unit": "ns/iter"
           }
         ]
