@@ -297,3 +297,70 @@ fn http_proxy_env_is_ignored() {
     );
     assert!(!hit.load(Ordering::SeqCst), "proxy must never be contacted");
 }
+
+/// `<title>你好</title>` in Big5, behind a `Content-Type` charset hint.
+fn big5_page(ct: &'static str) -> Server {
+    let mut body = b"<html><head><title>".to_vec();
+    body.extend_from_slice(b"\xA7\x41\xA6\x6E");
+    body.extend_from_slice(b"</title></head></html>");
+    Server::start(
+        ResponseTemplate::new(200)
+            .insert_header("Content-Type", ct)
+            .set_body_bytes(body),
+    )
+}
+
+#[test]
+fn http_res_text_decodes_with_content_type_charset() {
+    let srv = big5_page("text/html; charset=big5");
+    let port = srv.port();
+    let rt = runtime_with(loopback_policy());
+    rt.run(&format!(
+        "local r = lur.http.get('http://127.0.0.1:{port}/')\n\
+         assert(r.text():find('你好', 1, true), 'decoded')\n\
+         assert(not r.body:find('你好', 1, true), 'body stays raw')",
+    ))
+    .expect("res.text works");
+}
+
+#[test]
+fn http_res_text_falls_back_on_unknown_charset() {
+    let srv = big5_page("text/html; charset=no-such-charset");
+    let port = srv.port();
+    let rt = runtime_with(loopback_policy());
+    rt.run(&format!(
+        "local r = lur.http.get('http://127.0.0.1:{port}/')\n\
+         assert(r.text():find('<title>', 1, true), 'does not raise')\n\
+         assert(r.text():find('\\u{{FFFD}}', 1, true), 'invalid bytes replaced')",
+    ))
+    .expect("unknown charset does not raise");
+}
+
+#[test]
+fn http_res_html_parses_decoded_text() {
+    let srv = big5_page("text/html; charset=big5");
+    let port = srv.port();
+    let rt = runtime_with(loopback_policy());
+    rt.run(&format!(
+        "local r = lur.http.get('http://127.0.0.1:{port}/')\n\
+         assert(r.html():select_one('title'):text() == '你好', 'title')\n\
+         assert(r.html():html() == lur.html.parse(r.text()):html(), 'same as parse(text)')",
+    ))
+    .expect("res.html works");
+}
+
+#[test]
+fn http_res_text_and_html_work_on_cached_responses() {
+    let srv = big5_page("text/html; charset=big5");
+    let port = srv.port();
+    let rt = runtime_with(loopback_policy());
+    rt.run(&format!(
+        "local o = {{ cache = {{ ttl_ms = 60000 }} }}\n\
+         local a = lur.http.get('http://127.0.0.1:{port}/', o)\n\
+         local b = lur.http.get('http://127.0.0.1:{port}/', o)\n\
+         assert(a.cached == false and b.cached == true, 'second is a hit')\n\
+         assert(b.text() == a.text() and b.text():find('你好', 1, true), 'text')\n\
+         assert(b.html():select_one('title'):text() == '你好', 'html')",
+    ))
+    .expect("helpers work when cached");
+}

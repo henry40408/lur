@@ -13,8 +13,8 @@ use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::{Client, Method, Url, redirect};
 use sha2::{Digest, Sha256};
 
-use super::json;
 use super::kv::ttl_ms_opt;
+use super::{charset, html, json};
 use crate::policy::Policy;
 use crate::runtime::RunError;
 
@@ -542,6 +542,26 @@ fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
         json::json_to_lua(lua, &parsed)
     })?;
     res.set("json", json_fn)?;
+
+    // Decoded with the Content-Type charset hint (last header wins, like
+    // `headers`); same rules as `lur.charset.decode`.
+    let content_type = raw
+        .headers
+        .iter()
+        .rev()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        .map(|(_, v)| String::from_utf8_lossy(v).into_owned());
+    let text_of = move |body: &mlua::LuaString| {
+        charset::decode_content_type(&body.as_bytes(), content_type.as_deref())
+    };
+    let (body_t, text_of_t) = (body.clone(), text_of.clone());
+    let text_fn = lua.create_function(move |lua, ()| lua.create_string(text_of_t(&body_t)))?;
+    res.set("text", text_fn)?;
+    let body_h = body.clone();
+    let html_fn = lua.create_function(move |lua, ()| {
+        lua.create_userdata(html::parse_document(text_of(&body_h)))
+    })?;
+    res.set("html", html_fn)?;
 
     Ok(res)
 }

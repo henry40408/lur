@@ -108,6 +108,11 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 - **`lur.time.try_parse`** returns `nil` for unparseable text and for `nil` text (a missing
   scraped node), but still raises on a bad `fmt`/`tz`: those are script bugs, not data. A well-formed `fmt`
   that can never yield a timestamp (`"%H:%M"`) just returns `nil`, as `parse` would raise.
+- **`res.text()` / `res.html()`** are dot-called closures like `res.json()` (one calling
+  convention per response object). They share `charset::decode_bytes` with
+  `lur.charset.decode`, but an unknown `charset=` in the *server's* header falls back to
+  sniffing/UTF-8 rather than raising (unlike a script-supplied label to `decode`). The raw
+  `body` is unchanged; the helpers decode on each call, so they work on cache hits too.
 - **Diagnostics**: chunk name is the CLI path as typed (not canonicalized or
   basenamed). Exit codes deliberately not split per error kind.
 - **`lur docs`**: hand-rolled ANSI renderer over `pulldown-cmark` (no default features);
