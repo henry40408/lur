@@ -174,6 +174,107 @@ fn duplicate_route_is_a_load_error() {
 }
 
 #[test]
+fn optional_param_matches_with_and_without_the_segment() {
+    let s = serve(
+        "lur.serve.http('GET', '/u/:id/:tab?', function(req)\n\
+         \treturn { body = req.params.id .. '|' .. tostring(req.params.tab) }\n\
+         end)",
+    );
+    let get = |path: &str| s.dispatch("GET", path, b"").unwrap();
+    assert_eq!(get("/u/7").body, b"7|nil");
+    assert_eq!(get("/u/7/posts").body, b"7|posts");
+    assert_eq!(get("/u").status, 404);
+    assert_eq!(get("/u/7/posts/extra").status, 404);
+}
+
+#[test]
+fn static_route_beats_optional_param_route() {
+    let s = serve(
+        "lur.serve.http('GET', '/:name?', function() return { body = 'param' } end)\n\
+         lur.serve.http('GET', '/about', function() return { body = 'static' } end)",
+    );
+    assert_eq!(s.dispatch("GET", "/about", b"").unwrap().body, b"static");
+    assert_eq!(s.dispatch("GET", "/", b"").unwrap().body, b"param");
+    assert_eq!(s.dispatch("GET", "/zed", b"").unwrap().body, b"param");
+}
+
+#[test]
+fn optional_param_overlap_and_misplacement_are_load_errors() {
+    for src in [
+        "lur.serve.http('GET', '/x/:p?', function() end)\n\
+         lur.serve.http('GET', '/x', function() end)",
+        "lur.serve.http('GET', '/x/:p?', function() end)\n\
+         lur.serve.http('GET', '/x/:q', function() end)",
+        "lur.serve.http('GET', '/x/:p?/y', function() end)",
+        "lur.serve.http('GET', '/x/:', function() end)",
+    ] {
+        assert!(
+            Server::load(src, RuntimeConfig::default()).is_err(),
+            "{src}"
+        );
+    }
+}
+
+#[test]
+fn req_origin_and_url_come_from_host_headers() {
+    let s = serve(
+        "lur.serve.http('GET', '/f', function(req)\n\
+         \treturn { body = tostring(req.origin) .. ' ' .. tostring(req.url) }\n\
+         end)",
+    );
+    let with = |headers: &[(&str, &str)]| {
+        let mut r = request("GET", "/f", "a=1");
+        r.headers = headers
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        String::from_utf8(s.dispatch_raw(&r).unwrap().body).unwrap()
+    };
+    assert_eq!(
+        with(&[("Host", "x.test")]),
+        "http://x.test http://x.test/f?a=1"
+    );
+    assert_eq!(
+        with(&[("host", "x.test:8080"), ("X-Forwarded-Proto", "https")]),
+        "https://x.test:8080 https://x.test:8080/f?a=1"
+    );
+    assert_eq!(with(&[]), "nil nil");
+    assert_eq!(with(&[("host", "evil.test/<script>")]), "nil nil");
+    for bad in [
+        ":",
+        "][",
+        "a:b:c",
+        "x.test:abc",
+        "x.test:",
+        "[::1]x",
+        "[]",
+        "x[a]:80",
+        "x[]",
+        "x.test:+80",
+        "u@x.test",
+        "a'b",
+        "a(b)",
+        "[g:z]",
+        "[::1%zz]",
+    ] {
+        assert_eq!(with(&[("host", bad)]), "nil nil", "{bad}");
+    }
+    assert_eq!(
+        with(&[("host", "[::1]:8080")]),
+        "http://[::1]:8080 http://[::1]:8080/f?a=1"
+    );
+    // first proxy value and first Host header win
+    assert_eq!(
+        with(&[
+            ("host", "a.test"),
+            ("host", "b.test"),
+            ("x-forwarded-proto", "https, http"),
+        ]),
+        "https://a.test https://a.test/f?a=1"
+    );
+}
+
+#[test]
 fn query_keeps_last_value_and_query_all_keeps_every_value() {
     let s = serve(
         "lur.serve.http('GET', '/s', function(req)\n\

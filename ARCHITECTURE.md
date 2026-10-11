@@ -123,10 +123,12 @@ per call is what makes the per-call env swap safe; pool size caps concurrent han
 
 ### Routing
 
-[`Router`](src/serve.rs) parses paths into `Static` / `Param` (`:name`) segments. `resolve`
-picks the most specific match regardless of registration order: static beats param at the
-same position; a concrete method beats `ANY` as tiebreak. Duplicate `(method, signature)` is
-rejected at load. Params are percent-decoded to raw bytes as `req.params`.
+[`Router`](src/serve.rs) parses paths into `Static` / `Param` (`:name`, or trailing `:name?`)
+segments. `resolve` picks the most specific match regardless of registration order: static
+beats param at the same position; a concrete method beats `ANY` as tiebreak. Two routes of
+the same method and the same static/param shape (counting every length an optional param
+allows) are rejected at load; `/u/:id` and `/u/me` coexist, `/u/:id?` and `/u` do not.
+Params are percent-decoded to raw bytes as `req.params`.
 
 ### Request lifecycle
 

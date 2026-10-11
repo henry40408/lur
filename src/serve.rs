@@ -113,10 +113,11 @@ impl Drop for CheckedOut<'_> {
 /// Decoded path parameters: `(name, raw-byte value)` pairs.
 type Params = Vec<(String, Vec<u8>)>;
 
-/// A route pattern segment: literal, or `:name` binding one segment.
+/// A route pattern segment: literal, `:name` binding one segment, or `:name?`
+/// binding one segment that may be absent (trailing segments only).
 enum Seg {
     Static(String),
-    Param(String),
+    Param { name: String, optional: bool },
 }
 
 /// `id` indexes every VM's handler list (same registration order in all VMs).
@@ -613,10 +614,14 @@ impl Router {
     fn build(registrations: &[(String, String)]) -> Result<Self, RunError> {
         let mut routes: Vec<Route> = Vec::new();
         for (id, (method, path)) in registrations.iter().enumerate() {
-            let pattern = parse_pattern(path);
+            let pattern = parse_pattern(path).map_err(|e| {
+                RunError::Script(mlua::Error::RuntimeError(format!(
+                    "lur.serve: route {method} {path}: {e}"
+                )))
+            })?;
             let clash = routes
                 .iter()
-                .any(|r| &r.method == method && same_signature(&r.pattern, &pattern));
+                .any(|r| &r.method == method && overlaps(&r.pattern, &pattern));
             if clash {
                 return Err(RunError::Script(mlua::Error::RuntimeError(format!(
                     "lur.serve: duplicate route {method} {path}"
@@ -654,29 +659,68 @@ impl Router {
     }
 }
 
-/// Empty segments are dropped, so `/a/` ≡ `/a`.
-fn parse_pattern(path: &str) -> Vec<Seg> {
-    path.split('/')
+/// Empty segments are dropped, so `/a/` ≡ `/a`. An optional `:name?` may only
+/// be followed by other optional params, so a request maps to one prefix.
+fn parse_pattern(path: &str) -> Result<Vec<Seg>, String> {
+    let segs: Vec<Seg> = path
+        .split('/')
         .filter(|s| !s.is_empty())
         .map(|s| match s.strip_prefix(':') {
-            Some(name) => Seg::Param(name.to_owned()),
+            Some(name) => match name.strip_suffix('?') {
+                Some(name) => Seg::Param {
+                    name: name.to_owned(),
+                    optional: true,
+                },
+                None => Seg::Param {
+                    name: name.to_owned(),
+                    optional: false,
+                },
+            },
             None => Seg::Static(s.to_owned()),
         })
-        .collect()
+        .collect();
+    if segs
+        .iter()
+        .any(|s| matches!(s, Seg::Param { name, .. } if name.is_empty()))
+    {
+        return Err("a `:` param needs a name".to_owned());
+    }
+    let mut seen_optional = false;
+    for seg in &segs {
+        match seg {
+            Seg::Param { optional: true, .. } => seen_optional = true,
+            _ if seen_optional => {
+                return Err("an optional `:name?` param must be the last segment(s)".to_owned());
+            }
+            _ => {}
+        }
+    }
+    Ok(segs)
 }
 
-/// Whether two patterns match the same request shape (param names ignored).
-fn same_signature(a: &[Seg], b: &[Seg]) -> bool {
-    a.len() == b.len()
-        && a.iter().zip(b).all(|(x, y)| match (x, y) {
+/// Fewest request segments a pattern matches (its required prefix).
+fn min_len(pattern: &[Seg]) -> usize {
+    pattern
+        .iter()
+        .take_while(|s| !matches!(s, Seg::Param { optional: true, .. }))
+        .count()
+}
+
+/// Whether two patterns can match the same request (param names ignored).
+fn overlaps(a: &[Seg], b: &[Seg]) -> bool {
+    let lo = min_len(a).max(min_len(b));
+    let hi = a.len().min(b.len());
+    (lo..=hi).any(|n| {
+        a[..n].iter().zip(&b[..n]).all(|(x, y)| match (x, y) {
             (Seg::Static(p), Seg::Static(q)) => p == q,
-            (Seg::Param(_), Seg::Param(_)) => true,
+            (Seg::Param { .. }, Seg::Param { .. }) => true,
             _ => false,
         })
+    })
 }
 
 fn match_pattern(pattern: &[Seg], req_segs: &[&str]) -> Option<Params> {
-    if pattern.len() != req_segs.len() {
+    if req_segs.len() < min_len(pattern) || req_segs.len() > pattern.len() {
         return None;
     }
     let mut params = Vec::new();
@@ -684,7 +728,9 @@ fn match_pattern(pattern: &[Seg], req_segs: &[&str]) -> Option<Params> {
         match seg {
             Seg::Static(s) if s == raw => {}
             Seg::Static(_) => return None,
-            Seg::Param(name) => params.push((name.clone(), percent_decode(raw.as_bytes(), false))),
+            Seg::Param { name, .. } => {
+                params.push((name.clone(), percent_decode(raw.as_bytes(), false)));
+            }
         }
     }
     Some(params)
@@ -695,12 +741,66 @@ fn match_pattern(pattern: &[Seg], req_segs: &[&str]) -> Option<Params> {
 fn more_specific(a: &Route, b: &Route) -> bool {
     for (x, y) in a.pattern.iter().zip(&b.pattern) {
         match (x, y) {
-            (Seg::Static(_), Seg::Param(_)) => return true,
-            (Seg::Param(_), Seg::Static(_)) => return false,
+            (Seg::Static(_), Seg::Param { .. }) => return true,
+            (Seg::Param { .. }, Seg::Static(_)) => return false,
             _ => {}
         }
     }
     a.method != "ANY" && b.method == "ANY"
+}
+
+/// `scheme://host[:port]` from `Host` and `X-Forwarded-Proto` (`http` unless the
+/// first proxy value is `https`); `None` if `Host` is absent or not a bare
+/// `host[:port]` / `[ipv6][:port]` authority.
+fn request_origin(headers: &[(String, String)]) -> Option<String> {
+    let find = |name: &str| {
+        headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.trim())
+    };
+    let host = find("host")?;
+    if !is_bare_authority(host) {
+        return None;
+    }
+    let scheme = match find("x-forwarded-proto").map(|p| p.split(',').next().unwrap_or("").trim()) {
+        Some(p) if p.eq_ignore_ascii_case("https") => "https",
+        _ => "http",
+    };
+    Some(format!("{scheme}://{host}"))
+}
+
+fn is_bare_authority(host: &str) -> bool {
+    let (name_ok, port) = if let Some(rest) = host.strip_prefix('[') {
+        let Some((v6, tail)) = rest.split_once(']') else {
+            return false;
+        };
+        let ok = !v6.is_empty()
+            && v6
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() || matches!(b, b':' | b'.'));
+        let port = match tail {
+            "" => None,
+            t => match t.strip_prefix(':') {
+                Some(p) => Some(p),
+                None => return false,
+            },
+        };
+        (ok, port)
+    } else {
+        let (name, port) = match host.split_once(':') {
+            Some((n, p)) => (n, Some(p)),
+            None => (host, None),
+        };
+        let ok = !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'));
+        (ok, port)
+    };
+    name_ok
+        && port
+            .is_none_or(|p| !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
 fn build_req(
@@ -711,6 +811,18 @@ fn build_req(
     let table = lua.create_table()?;
     table.set("method", req.method.to_uppercase())?;
     table.set("path", req.path.as_str())?;
+
+    // Both come from client-controlled headers: fine for building links,
+    // not for access decisions.
+    if let Some(origin) = request_origin(&req.headers) {
+        let mut url = format!("{origin}{}", req.path);
+        if !req.query.is_empty() {
+            url.push('?');
+            url.push_str(&req.query);
+        }
+        table.set("origin", origin)?;
+        table.set("url", url)?;
+    }
 
     let params_table = lua.create_table()?;
     for (name, value) in params {

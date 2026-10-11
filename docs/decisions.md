@@ -97,6 +97,17 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
     purpose: through a proxy the name is resolved remotely and bypasses the resolver.
   - Allowlist rules match IPs by address, strictly: an IPv4 rule does not match its
     IPv4-mapped IPv6 spelling, nor the reverse.
+- **Optional route params (`:name?`)** are trailing-only, so one request maps to exactly one
+  prefix and `req.params` is a plain table (absent = `nil`). Overlap with another route of
+  the same method (`/x/:p?` vs `/x`) is a load error rather than a silent specificity
+  tiebreak. Mid-path optionals and regex params were rejected as ambiguity for no real use.
+- **`req.origin` / `req.url`** are built from `Host` and `X-Forwarded-Proto` (`http` unless
+  the latter is `https`); `nil` when `Host` is missing or not a bare `host[:port]` / `[ipv6][:port]` (first `Host` header wins; `X-Forwarded-Proto` uses its first comma-separated value). Both are
+  client-controlled, so they are for building links only. A `--public-url` flag was
+  deferred: add it if feeds behind a proxy need a pinned origin.
+- **`lur.time.try_parse`** returns `nil` for unparseable text and for `nil` text (a missing
+  scraped node), but still raises on a bad `fmt`/`tz`: those are script bugs, not data. A well-formed `fmt`
+  that can never yield a timestamp (`"%H:%M"`) just returns `nil`, as `parse` would raise.
 - **Diagnostics**: chunk name is the CLI path as typed (not canonicalized or
   basenamed). Exit codes deliberately not split per error kind.
 - **`lur docs`**: hand-rolled ANSI renderer over `pulldown-cmark` (no default features);
