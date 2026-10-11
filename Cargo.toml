@@ -13,7 +13,7 @@ name = "lur"
 path = "src/main.rs"
 
 [dependencies]
-ammonia = "=4.1.4"
+ammonia = "=4.2.1"
 base64 = "0.23.0"
 cap-std = "4.0.3"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
