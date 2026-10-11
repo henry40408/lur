@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791734059224,
+  "lastUpdate": 1791735016512,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4241,6 +4241,54 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 143823,
             "range": "± 1485",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f0f6c4b71ecf94ca023ce85b4622ebda45a6907e",
+          "message": "fix(async): bound combinators with a sliding window and fail fast beyond 30 tasks (#147)\n\nAll lur.async combinators now run through one drive helper that keeps at\nmost a window of futures alive (--max-concurrency, plus map's limit),\ninstead of creating every future up front. Long lists no longer park\nthousands of futures on the semaphore (20k items, limit=64: 44ms -> 9.5ms),\nand all() returns the first error immediately instead of falling back to\nFuturesOrdered above 30 tasks.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T00:07:46+08:00",
+          "tree_id": "597b6fd511250131106fa2b05f9a2b5ad90c677b",
+          "url": "https://github.com/henry40408/lur/commit/f0f6c4b71ecf94ca023ce85b4622ebda45a6907e"
+        },
+        "date": 1791735015633,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 363221,
+            "range": "± 27788",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5983,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 183117,
+            "range": "± 1879",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 20297296,
+            "range": "± 434136",
             "unit": "ns/iter"
           }
         ]
