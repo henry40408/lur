@@ -280,9 +280,10 @@ assert(lur.env("LUR_GUIDE_DEFINITELY_UNSET") == nil)
 Returns `{ status, body, headers, headers_all, json(), text(), html() }`. Each request and hop is
 checked against the allowlist and SSRF guard; grant hosts with `--allow-net`.
 
-`json()`, `text()` and `html()` are closures: call them with a dot (`res.text()`), not a
-colon. `text()` decodes `body` using the `charset` in the response `Content-Type`
-(falling back to a BOM, `<meta charset>`, then UTF-8; invalid bytes become U+FFFD), so a
+`json()`, `text()` and `html()` are closures; the idiomatic form is the dot call
+(`res.text()`), matching `res.json()`. `text()` decodes `body` by a BOM, then the
+`charset` in the response `Content-Type`, then `<meta charset>` in the first 1 KiB, then
+UTF-8 (invalid bytes become U+FFFD), so a
 Big5 or Shift_JIS page arrives as proper UTF-8. `html()` returns the same document node as
 `lur.html.parse(res.text())`. All three work on cached responses.
 

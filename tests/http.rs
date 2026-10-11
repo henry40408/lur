@@ -364,3 +364,19 @@ fn http_res_text_and_html_work_on_cached_responses() {
     ))
     .expect("helpers work when cached");
 }
+
+#[test]
+fn http_res_text_bom_wins_over_content_type_charset() {
+    let srv = Server::start(
+        ResponseTemplate::new(200)
+            .insert_header("Content-Type", "text/html; charset=big5")
+            .set_body_bytes("\u{FEFF}<title>你好</title>".as_bytes().to_vec()),
+    );
+    let port = srv.port();
+    let rt = runtime_with(loopback_policy());
+    rt.run(&format!(
+        "local r = lur.http.get('http://127.0.0.1:{port}/')\n\
+         assert(r.text():find('你好', 1, true), 'BOM wins over header')",
+    ))
+    .expect("BOM precedence");
+}
