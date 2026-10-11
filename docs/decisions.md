@@ -165,15 +165,18 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   unless the header is listed in `vary`, and responses that set a cookie aren't stored: the
   cache is shared by every request, so a credentialed response must not be served to someone
   else.
-  **No size cap, on purpose; the script owns capacity.** lur keeps the levers sufficient:
-  `ttl_ms` bounds lifetime (expired entries are really freed: on lookup, and by a sweep at
-  most once a minute on insert), `--max-http-body` bounds each entry, `cache` is opt-in per
-  call so scripts choose what to cache, and `lur.http.cache_clear()` flushes everything and
-  reports the count. Rejected for now: a built-in LRU/byte cap (one more knob and eviction
-  policy to get wrong; add it if scripts turn out to need it). Memory is therefore bounded by
-  distinct keys per TTL window times `--max-http-body`; a script caching unbounded distinct
-  URLs with a long `ttl_ms` can grow the process, and the VM `--memory` limit does not cover
-  it.
+  **Size is bounded by operator config, not a Lua API.** The first version had no cap (the
+  script owned capacity), but a public service caching attacker-influenced URLs with a long
+  `ttl_ms` could grow the process without limit, and the VM `--memory` limit does not cover
+  Rust-side buffers. So `--http-cache-max-entries` (default 1024) and
+  `--http-cache-max-bytes` (default `64m`) cap the cache; `0` = unlimited. An insert over a
+  cap drops expired entries first (free), then evicts least recently used. A single response
+  larger than the byte cap is not cached rather than flushing everything for one entry.
+  Sizes are approximate (body + headers + key, not allocator overhead). Worst case is the
+  entry cap times `--max-http-body`, further bounded by the byte cap. LRU is a `BTreeMap`
+  recency index (no new dependency). Not done: per-call limits (`opts.cache` stays
+  `{ ttl_ms, vary }`; capacity is the operator's decision), and the flags are CLI-only like
+  `--max-http-body` because the config file holds only policy grants.
   Not done: serve-stale-on-error, stampede protection (N concurrent misses fetch N times),
   honoring `Cache-Control`/`ETag`, per-key invalidation.
 - **Release profile: `strip`, `lto = "fat"`, `codegen-units = 1`, never `panic = "abort"`.**

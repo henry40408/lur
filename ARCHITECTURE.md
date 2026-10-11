@@ -198,7 +198,10 @@ awaited, bounded by `--shutdown-grace`. Stragglers are aborted when the runtime 
   `opts.cache` and `lur.http.cache_clear()`. Policy check → build request → key → lookup; the
   key is a SHA-256 of method, final URL and all request headers. Entries are `Arc`s with an
   `Instant` expiry; expired ones are dropped on lookup and swept at most once a minute on
-  insert. There is no size cap by design (see decisions.md).
+  insert. Size is bounded by `--http-cache-max-entries` / `--http-cache-max-bytes` (`0` =
+  unlimited): a `BTreeMap<tick, key>` recency index gives LRU order, a hit re-stamps the
+  entry, and an insert over either cap drops expired entries and then pops the oldest; a
+  single entry larger than the byte cap is not stored. Sizes count body + headers + key.
 - **Invariants:** kv counters are integers; `kv.get` returns bytes; `db.tx`/`kv.update` are
   write transactions; integer steps (`kv.incr`/`decr`, `state.incr`/`decr`) reject fractions.
 
