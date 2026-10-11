@@ -239,6 +239,34 @@ pub fn install(lua: &Lua, time: &Table) -> Result<(), RunError> {
         .map_err(RunError::Init)?;
     time.set("parse", parse).map_err(RunError::Init)?;
 
+    // `try_parse(text, fmt?, tz?)` — `parse`, but unparseable text (or a `nil`
+    // text, as from a missing node) gives `nil`. A bad `fmt`/`tz` still raises.
+    let try_parse = lua
+        .create_function(|lua, (text, fmt, tz): (Value, Value, Value)| {
+            let f = "lur.time.try_parse";
+            let zone = zone_arg(lua, tz, f, 3)?;
+            let fmt = match fmt {
+                Value::Nil => None,
+                other => {
+                    let fmt = str_arg(lua, other, f, 2)?;
+                    check_format(&fmt).map_err(|e| Error::runtime(format!("{f}: {e}")))?;
+                    Some(fmt)
+                }
+            };
+            if matches!(text, Value::Nil) {
+                return Ok(None);
+            }
+            let text = str_arg(lua, text, f, 1)?;
+            let text = text.trim();
+            let result = match fmt {
+                None => parse_lenient(text, zone),
+                Some(fmt) => parse_with_format(text, &fmt, zone),
+            };
+            Ok(result.ok())
+        })
+        .map_err(RunError::Init)?;
+    time.set("try_parse", try_parse).map_err(RunError::Init)?;
+
     Ok(())
 }
 

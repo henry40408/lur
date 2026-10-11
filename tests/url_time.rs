@@ -140,6 +140,26 @@ assert(T.parse("2023-11-05 01:30", nil, "America/New_York") == T.parse("2023-11-
 }
 
 #[test]
+fn time_try_parse_returns_nil_instead_of_raising() {
+    run(r#"
+local T = lur.time
+assert(T.try_parse("1970-01-01T00:00:01Z") == 1000)
+assert(T.try_parse("1970-01-01 08:00:01", nil, "Asia/Taipei") == 1000)
+assert(T.try_parse("01/01/1970", "%d/%m/%Y") == 0)
+assert(T.try_parse("not a date") == nil)
+assert(T.try_parse("") == nil)
+assert(T.try_parse(nil) == nil)
+assert(T.try_parse("x", "%Y") == nil)
+-- a DST gap time is unparseable, not an error
+assert(T.try_parse("2024-03-10 02:30", nil, "America/New_York") == nil)
+-- programmer errors still raise
+assert(not pcall(T.try_parse, "1970-01-01", nil, "Mars/Base"))
+assert(not pcall(T.try_parse, "1970-01-01", "%"))
+assert(not pcall(T.try_parse, {}))
+"#);
+}
+
+#[test]
 fn time_round_trips_through_feed() {
     run(r#"
 local ms = lur.time.parse("2026-10-05 14:30", nil, "Asia/Taipei")

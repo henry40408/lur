@@ -161,6 +161,15 @@ assert(lur.time.parse_rfc2822("Thu, 01 Jan 1970 00:00:01 +0000") == 1000)
 assert(lur.time.parse("05/10/2026", "%d/%m/%Y") == lur.time.parse("2026-10-05"))
 ```
 
+`try_parse` takes the same arguments but returns `nil` for text it cannot read
+(or a `nil` text), so one bad date need not fail a whole feed.
+
+```lua
+assert(lur.time.try_parse("2026-10-05T06:30:00Z") == lur.time.parse("2026-10-05"
+  .. " 06:30"))
+assert(lur.time.try_parse("not a date") == nil)
+```
+
 ### lur.url
 
 Parse and build URLs; resolve the relative links found in scraped pages.
@@ -469,11 +478,14 @@ assert(winner == "winner")
 
 Only under `lur serve`; registration happens once at load.
 `serve.http(method, path, handler)` — `:name` path segments bind into
-`req.params`; the handler returns `{ status?, headers?, body? }`, where a
-header value is a string or an array of strings. `serve.cron(spec,
-handler, opts?)` takes a 6-field cron spec and optional `name`/`overlap`/
-`timeout`. `req` has `method`, `path`, `params`, `query`, `query_all`,
-`headers`, `cookies`, `body`, `json()`, and `read(n)`.
+`req.params`, and a trailing `:name?` is optional (`/feed/:tag?` matches `/feed`
+and `/feed/lua`; absent is `nil`). The handler returns `{ status?, headers?,
+body? }`, where a header value is a string or an array of strings.
+`serve.cron(spec, handler, opts?)` takes a 6-field cron spec and optional
+`name`/`overlap`/`timeout`. `req` has `method`, `path`, `origin`, `url`,
+`params`, `query`, `query_all`, `headers`, `cookies`, `body`, `json()`, and
+`read(n)`. `origin`/`url` come from `Host` and `X-Forwarded-Proto` (`nil`
+without a valid `Host`); they are client-controlled, so use them for links only.
 
 ```lua ignore
 lur.serve.http("POST", "/echo", function(req)

@@ -206,7 +206,8 @@ Lua error (catch with `pcall`).
   (`"+08:00"`), or `nil`/`"UTC"`. `parse` without `fmt` accepts RFC 3339, RFC 2822,
   HTTP-date, then `YYYY-MM-DD[ T]HH:MM[:SS[.f]]` and `YYYY/MM/DD[ HH:MM[:SS]]`; wall-clock
   text with no offset is read in `tz`. A local time in a DST gap raises; in an overlap the
-  earlier instant wins.
+  earlier instant wins. `try_parse(text, fmt?, tz?)` is `parse` that returns `nil` for
+  unparseable (or `nil`) text; a bad `fmt` or `tz` still raises.
 - **`lur.url`** — `parse(url) → { href, scheme, host?, port?, username?, password?, path,
   query?, fragment? }` (`port` only when explicit and non-default; invalid URL raises),
   `join(base, relative) → string` (resolves relative links, `base` must be absolute),
@@ -329,8 +330,10 @@ Postgres integration tests need a local Postgres: `docker compose up -d`.
 Handlers are registered once at load time.
 
 - **`lur.serve.http(method, path, handler)`** — `method` is `"GET"`…/`"ANY"`. `:name`
-  path segments (e.g. `/users/:id`) bind into `req.params`. The most specific route wins
-  regardless of order (more static segments, then a concrete method over `ANY`).
+  path segments (e.g. `/users/:id`) bind into `req.params`; a trailing `:name?` is optional
+  (`/feed/:tag?` matches `/feed` and `/feed/lua`, absent = `nil`; it may not share a
+  static/param shape with another route of the same method, e.g. `/feed`). The most specific route wins regardless of order (more static segments, then a
+  concrete method over `ANY`).
   `handler(req)` returns `{ status?, headers?, body? }` (`status` defaults to `200`, must
   be in `100..=599`; `body` defaults to empty). `headers` maps a name to a string or an
   array of strings (repeated header, e.g. two `Set-Cookie`). No `Content-Type` is
@@ -340,7 +343,9 @@ Handlers are registered once at load time.
   `opts`: `name`, `overlap` (default `false` = skip a tick while the previous run is
   going), `timeout` (ms).
 
-`req` has `method`, `path`, `params`, `query` (last value per key), `query_all` (all
+`req` has `method`, `path`, `origin` and `url` (`scheme://host` and the full URL, from `Host`
+and `X-Forwarded-Proto`; `nil` without a valid `Host`; client-controlled, so for links only),
+`params`, `query` (last value per key), `query_all` (all
 values), `headers` (lowercased), `cookies` (parsed `Cookie`; empty table if absent),
 `body` (raw bytes), and `json()`. `read(n)` streams large bodies in chunks; after that,
 `body`/`json()` raise.
