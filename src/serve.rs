@@ -770,19 +770,37 @@ fn request_origin(headers: &[(String, String)]) -> Option<String> {
     Some(format!("{scheme}://{host}"))
 }
 
-/// A bare `host[:port]` / `[ipv6][:port]`. `http` rejects malformed authorities
-/// but tolerates userinfo and a non-numeric port, so the parsed `host` + `port`
-/// must account for the whole string; a bracketed host must look like IPv6.
 fn is_bare_authority(host: &str) -> bool {
-    host.parse::<http::uri::Authority>().is_ok_and(|a| {
-        let port_len = a.port().map_or(0, |p| 1 + p.as_str().len());
-        let h = a.host();
-        let shape_ok = match h.strip_prefix('[') {
-            Some(inner) => inner.contains(':'),
-            None => !h.is_empty(),
+    let (name_ok, port) = if let Some(rest) = host.strip_prefix('[') {
+        let Some((v6, tail)) = rest.split_once(']') else {
+            return false;
         };
-        shape_ok && h.len() + port_len == host.len()
-    })
+        let ok = !v6.is_empty()
+            && v6
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() || matches!(b, b':' | b'.'));
+        let port = match tail {
+            "" => None,
+            t => match t.strip_prefix(':') {
+                Some(p) => Some(p),
+                None => return false,
+            },
+        };
+        (ok, port)
+    } else {
+        let (name, port) = match host.split_once(':') {
+            Some((n, p)) => (n, Some(p)),
+            None => (host, None),
+        };
+        let ok = !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'));
+        (ok, port)
+    };
+    name_ok
+        && port
+            .is_none_or(|p| !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
 fn build_req(
