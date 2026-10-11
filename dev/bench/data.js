@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791720231895,
+  "lastUpdate": 1791732299368,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4115,6 +4115,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 145559,
             "range": "± 972",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "aa834dc5895d3bce550407c07ea705c85667e37b",
+          "message": "feat: add optional route params, req.origin/url and lur.time.try_parse (#143)\n\n* feat: add optional route params, req.origin/url and lur.time.try_parse\n\n- serve: trailing :name? route params; overlapping routes fail at load\n- serve: req.origin / req.url from Host and X-Forwarded-Proto\n- time: try_parse returns nil for unparseable text\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* refactor: validate the Host header with http::uri::Authority\n\nReplaces the hand-written authority check. http is already in the tree via\nhyper; it tolerates userinfo and non-numeric ports, so the parsed host and\nport must still account for the whole string.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* Revert \"refactor: validate the Host header with http::uri::Authority\"\n\nThis reverts commit 8f7cf4855aa95131f1247380207e712bd1d5e168.\n\n* test: cover malformed Host values in req.origin validation\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-11T23:22:35+08:00",
+          "tree_id": "2c6c293d61080cee87d8c4d4561e4e844cd664e8",
+          "url": "https://github.com/henry40408/lur/commit/aa834dc5895d3bce550407c07ea705c85667e37b"
+        },
+        "date": 1791732298601,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 294426,
+            "range": "± 5368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4957,
+            "range": "± 50",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 444362,
+            "range": "± 2156",
             "unit": "ns/iter"
           }
         ]
