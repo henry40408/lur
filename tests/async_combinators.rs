@@ -273,6 +273,58 @@ fn map_fail_fast_is_immediate_beyond_thirty_items() {
 }
 
 #[test]
+fn all_fail_fast_is_immediate_beyond_thirty_tasks() {
+    let start = Instant::now();
+    run_ok(
+        "local tasks = {}\n\
+         tasks[1] = function() lur.async.sleep(1000) return 1 end\n\
+         tasks[2] = function() error('boom') end\n\
+         for i = 3, 40 do tasks[i] = function() lur.async.sleep(1000) return i end end\n\
+         local ok, err = pcall(lur.async.all, tasks)\n\
+         assert(not ok and string.find(tostring(err), 'boom'), 'error propagates')",
+    );
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(700),
+        "error must not wait for earlier sleeping tasks, took {elapsed:?}"
+    );
+}
+
+#[test]
+fn all_under_global_cap_keeps_order_and_does_not_start_queued_after_error() {
+    let rt = Runtime::with_config(lur::runtime::RuntimeConfig {
+        max_concurrency: Some(2),
+        ..Default::default()
+    })
+    .expect("runtime builds");
+    rt.run_with_timeout(
+        "local started, peak, cur = 0, 0, 0\n\
+         local tasks = {}\n\
+         for i = 1, 40 do tasks[i] = function()\n\
+         \tstarted = started + 1\n\
+         \tcur = cur + 1\n\
+         \tif cur > peak then peak = cur end\n\
+         \tlur.async.sleep(2)\n\
+         \tcur = cur - 1\n\
+         \treturn i\n\
+         end end\n\
+         local r = lur.async.all(tasks)\n\
+         assert(#r == 40 and r[1] == 1 and r[40] == 40, 'ordered results')\n\
+         assert(peak == 2, 'global cap holds, got ' .. peak)\n\
+         started = 0\n\
+         tasks[1] = function() started = started + 1 lur.async.sleep(1000) return 1 end\n\
+         tasks[2] = function() started = started + 1 error('boom') end\n\
+         local t0 = lur.time.monotonic_ms()\n\
+         local ok = pcall(lur.async.all, tasks)\n\
+         assert(not ok, 'error propagates')\n\
+         assert(lur.time.monotonic_ms() - t0 < 500, 'error must not wait behind task 1')\n\
+         assert(started <= 3, 'queued tasks not started, started=' .. started)",
+        Duration::from_secs(5),
+    )
+    .expect("all under global cap");
+}
+
+#[test]
 fn map_rejects_bad_arguments() {
     let cases = [
         ("lur.async.map(1, function() end)", "argument #1"),
