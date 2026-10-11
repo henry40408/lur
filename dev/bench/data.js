@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791733808016,
+  "lastUpdate": 1791734059224,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4199,6 +4199,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 181980,
             "range": "± 1105",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "92d1ec5b8564390b86576c23054055bec9881a87",
+          "message": "feat(async): add lur.async.map with limit and drop_errors (#146)\n\n* feat: add lur.async.map with limit and drop_errors\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* fix: make lur.async.map fail fast past 30 items and clamp huge limits\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-11T23:52:11+08:00",
+          "tree_id": "847e5be7e7cf3c9d7169ad182e6a53759db74746",
+          "url": "https://github.com/henry40408/lur/commit/92d1ec5b8564390b86576c23054055bec9881a87"
+        },
+        "date": 1791734058234,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 247435,
+            "range": "± 2121",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4242,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 143823,
+            "range": "± 1485",
             "unit": "ns/iter"
           }
         ]
