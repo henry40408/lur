@@ -60,12 +60,13 @@ fn install_format(
     render: Render,
 ) -> Result<(), RunError> {
     let f = lua
-        .create_function(move |lua, (meta, items): (Value, Value)| {
+        .create_function(move |lua, (meta, items, opts): (Value, Value, Value)| {
             let fname = format!("lur.feed.{name}");
             let meta: Table = argcheck::arg(lua, meta, &fname, 1, "table")?;
             let items: Table = argcheck::arg(lua, items, &fname, 2, "table")?;
+            let skip_invalid = skip_invalid_opt(lua, opts, &fname)?;
             let meta = read_meta(&meta, &fname)?;
-            let items = read_items(&items, &fname)?;
+            let items = read_items(&items, &fname, skip_invalid)?;
             render(&meta, &items).map_err(|e| Error::runtime(format!("lur.feed.{name}: {e}")))
         })
         .map_err(RunError::Init)?;
@@ -115,7 +116,34 @@ fn read_meta(t: &Table, fname: &str) -> mlua::Result<Meta> {
     })
 }
 
-fn read_items(t: &Table, fname: &str) -> mlua::Result<Vec<Item>> {
+/// `opts.skip_invalid` (third argument): skip items with no usable title
+/// instead of raising.
+fn skip_invalid_opt(lua: &Lua, opts: Value, fname: &str) -> mlua::Result<bool> {
+    let Some(opts) = argcheck::arg::<Option<Table>>(lua, opts, fname, 3, "table")? else {
+        return Ok(false);
+    };
+    match opts.get::<Value>("skip_invalid")? {
+        Value::Nil => Ok(false),
+        Value::Boolean(b) => Ok(b),
+        other => Err(Error::runtime(format!(
+            "{fname}: opts.skip_invalid must be boolean, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// A title that is absent, or empty/whitespace-only, is what `skip_invalid`
+/// skips; any other malformed field still raises.
+fn lacks_title(item: &Table) -> mlua::Result<bool> {
+    Ok(match item.get::<Value>("title")? {
+        Value::Nil => true,
+        // Unicode-aware like `node:text({trim})`; non-UTF-8 is left to later errors.
+        Value::String(s) => s.to_str().is_ok_and(|s| s.trim().is_empty()),
+        _ => false,
+    })
+}
+
+fn read_items(t: &Table, fname: &str, skip_invalid: bool) -> mlua::Result<Vec<Item>> {
     let mut items = Vec::new();
     for (i, value) in t.sequence_values::<Value>().enumerate() {
         let n = i + 1;
@@ -123,6 +151,9 @@ fn read_items(t: &Table, fname: &str) -> mlua::Result<Vec<Item>> {
         let Value::Table(item) = value? else {
             return Err(Error::runtime(format!("{ctx} must be a table")));
         };
+        if skip_invalid && lacks_title(&item)? {
+            continue;
+        }
         items.push(read_item(&item, &ctx)?);
     }
     Ok(items)

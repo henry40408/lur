@@ -536,28 +536,93 @@ fn apply_opts(
 
     let body = opts.get::<Option<mlua::LuaString>>("body")?;
     let json_val = opts.get::<Option<Value>>("json")?;
-    match (body, json_val) {
-        (Some(_), Some(_)) => {
-            return Err(Error::runtime(
-                "lur.http: opts.body and opts.json are mutually exclusive",
-            ));
+    let form = match opts.get::<Value>("form")? {
+        Value::Nil => None,
+        Value::Table(t) => Some(t),
+        other => {
+            return Err(Error::runtime(format!(
+                "lur.http: opts.form must be a table, got {}",
+                other.type_name()
+            )));
         }
-        (Some(b), None) => {
-            req = req.body(b.as_bytes().to_vec());
+    };
+    let given = [body.is_some(), json_val.is_some(), form.is_some()];
+    if given.iter().filter(|g| **g).count() > 1 {
+        return Err(Error::runtime(
+            "lur.http: opts.body, opts.json and opts.form are mutually exclusive",
+        ));
+    }
+    if let Some(b) = body {
+        req = req.body(b.as_bytes().to_vec());
+    } else if let Some(v) = json_val {
+        let json = json::lua_to_json(&v)?;
+        let bytes = serde_json::to_vec(&json)
+            .map_err(|e| Error::runtime(format!("lur.http: encoding opts.json: {e}")))?;
+        req = req.header("content-type", "application/json").body(bytes);
+    } else if let Some(form) = form {
+        let encoded = encode_form(&form)?;
+        // Unlike `json`, an explicit Content-Type from the caller is kept.
+        if !has_content_type(opts)? {
+            req = req.header("content-type", "application/x-www-form-urlencoded");
         }
-        (None, Some(v)) => {
-            let json = json::lua_to_json(&v)?;
-            let bytes = serde_json::to_vec(&json)
-                .map_err(|e| Error::runtime(format!("lur.http: encoding opts.json: {e}")))?;
-            req = req.header("content-type", "application/json").body(bytes);
-        }
-        (None, None) => {}
+        req = req.body(encoded.into_bytes());
     }
 
     if let Some(ms) = opts.get::<Option<u64>>("timeout")? {
         req = req.timeout(Duration::from_millis(ms));
     }
     Ok(req)
+}
+
+/// Whether `opts.headers` already names `Content-Type` (any case).
+fn has_content_type(opts: &Table) -> mlua::Result<bool> {
+    let Some(headers) = opts.get::<Option<Table>>("headers")? else {
+        return Ok(false);
+    };
+    for pair in headers.pairs::<String, Value>() {
+        let (k, _) = pair?;
+        if k.eq_ignore_ascii_case("content-type") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// `opts.form` → `application/x-www-form-urlencoded`: a flat table of
+/// string/number/boolean values, keys sorted so the body is deterministic.
+fn encode_form(form: &Table) -> mlua::Result<String> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for pair in form.pairs::<Value, Value>() {
+        let (k, v) = pair?;
+        let Value::String(k) = k else {
+            return Err(Error::runtime(format!(
+                "lur.http: opts.form keys must be strings, got {}",
+                k.type_name()
+            )));
+        };
+        let key = String::from_utf8_lossy(&k.as_bytes()).into_owned();
+        let value = match &v {
+            Value::Number(n) if !n.is_finite() => {
+                return Err(Error::runtime(format!(
+                    "lur.http: opts.form.{key} must be a finite number"
+                )));
+            }
+            Value::String(_) | Value::Integer(_) | Value::Number(_) | Value::Boolean(_) => {
+                value_to_string(&v)?
+            }
+            other => {
+                return Err(Error::runtime(format!(
+                    "lur.http: opts.form.{key} must be a string, number or boolean, got {}",
+                    other.type_name()
+                )));
+            }
+        };
+        pairs.push((key, value));
+    }
+    pairs.sort();
+    Ok(url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(&pairs)
+        .finish())
 }
 
 fn value_to_string(v: &Value) -> mlua::Result<String> {
@@ -641,10 +706,19 @@ fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
     res.set("headers_all", headers_all)?;
 
     let body_for_json = body.clone();
-    let json_fn = lua.create_function(move |lua, ()| {
+    let json_fn = lua.create_function(move |lua, opts: Value| {
+        // Options are checked first so a bad `opts` is reported even for a bad body.
+        // `r:json(...)` passes the response table itself as the first argument.
+        if let Value::Table(t) = &opts
+            && !t.get::<Value>("status")?.is_nil()
+            && !t.get::<Value>("body")?.is_nil()
+        {
+            return Err(Error::runtime("res.json: call with a dot, not a colon"));
+        }
+        let drop_null = json::parse_decode_opts(lua, opts, "res.json", 1)?;
         let parsed: serde_json::Value = serde_json::from_slice(&body_for_json.as_bytes())
             .map_err(|e| Error::runtime(format!("res.json: {e}")))?;
-        json::json_to_lua(lua, &parsed)
+        json::json_to_lua(lua, &parsed, drop_null)
     })?;
     res.set("json", json_fn)?;
 

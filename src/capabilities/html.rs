@@ -110,10 +110,12 @@ impl UserData for Node {
             let css = css_arg(lua, css, "lur.html.select_one")?;
             Ok(this.select(&css, true)?.into_iter().next())
         });
-        methods.add_method("text", |_, this, ()| {
+        methods.add_method("text", |lua, this, opts: Value| {
+            let trim = text_opts(lua, opts)?;
             this.with_element(|html, el| {
                 let el = el.unwrap_or_else(|| html.root_element());
-                el.text().collect::<String>()
+                let text = el.text().collect::<String>();
+                if trim { text.trim().to_owned() } else { text }
             })
         });
         methods.add_method("html", |_, this, ()| {
@@ -163,6 +165,21 @@ impl UserData for Node {
                     .collect::<Vec<_>>()
             })
         });
+    }
+}
+
+/// `node:text({ trim = true })`; returns whether to trim.
+fn text_opts(lua: &Lua, opts: Value) -> mlua::Result<bool> {
+    let Some(opts) = argcheck::arg::<Option<Table>>(lua, opts, "lur.html.text", 1, "table")? else {
+        return Ok(false);
+    };
+    match opts.get::<Value>("trim")? {
+        Value::Nil => Ok(false),
+        Value::Boolean(b) => Ok(b),
+        other => Err(Error::runtime(format!(
+            "lur.html.text: opts.trim must be boolean, got {}",
+            other.type_name()
+        ))),
     }
 }
 

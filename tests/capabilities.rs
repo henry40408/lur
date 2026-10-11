@@ -60,6 +60,36 @@ fn json_decode_basic_and_null() {
 }
 
 #[test]
+fn json_decode_null_drop_omits_keys_and_compacts_arrays() {
+    run(r#"
+local t = lur.json.decode('{"a":1,"b":null,"c":[1,null,2,null],"d":{"e":null,"f":[null]}}', { null = "drop" })
+assert(t.a == 1)
+assert(t.b == nil, "null key omitted")
+assert(#t.c == 2 and t.c[1] == 1 and t.c[2] == 2, "array compacted")
+assert(t.d.e == nil and #t.d.f == 0, "nested nulls dropped")
+-- a bare top-level null has no container to drop from
+assert(lur.json.decode("null", { null = "drop" }) == lur.null)
+-- explicit keep and an empty table are the default
+assert(lur.json.decode('{"b":null}', { null = "keep" }).b == lur.null)
+assert(lur.json.decode('{"b":null}', {}).b == lur.null)
+assert(lur.json.decode('{"b":null}', nil).b == lur.null)
+"#);
+}
+
+#[test]
+fn json_decode_rejects_bad_options() {
+    run(r#"
+local function fails(f, needle)
+  local ok, err = pcall(f)
+  assert(not ok and tostring(err):find(needle, 1, true), tostring(err))
+end
+fails(function() lur.json.decode("{}", { null = "nope" }) end, 'opts.null must be "keep" or "drop"')
+fails(function() lur.json.decode("{}", { null = true }) end, "got boolean")
+fails(function() lur.json.decode("{}", "drop") end, "argument #2 must be table, got string")
+"#);
+}
+
+#[test]
 fn json_round_trips_through_decode_encode() {
     // Keys already in sorted order so the comparison is order-stable.
     run("local s = '{\"x\":[1,2,3],\"y\":\"hi\"}'\n\
