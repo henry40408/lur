@@ -288,9 +288,12 @@ the method, final URL (query included) and all request headers; a request carryi
 `Authorization`, `Cookie` or `Proxy-Authorization` bypasses the cache unless that
 header is named in `vary`, e.g. `cache = { ttl_ms = 60000, vary = { "authorization" } }`.
 
-lur does not cap the cache's total size; you manage it. Each entry is bounded by
-`--max-http-body`, expired entries are freed (on lookup, and swept every minute on
-insert), so a short `ttl_ms` and caching only what you need keep memory small.
+The cache is bounded: `--http-cache-max-entries` (default 1024) and
+`--http-cache-max-bytes` (default `64m`); `0` means unlimited. When an insert goes over
+either cap, expired entries are freed first, then the least recently used ones. A single
+response larger than the byte cap is simply not cached (`res.cached` stays `false`), and
+each body is still bounded by `--max-http-body`. Expired entries are also freed on lookup
+and swept every minute on insert.
 `lur.http.cache_clear()` drops everything and returns how many entries it held.
 
 ```lua ignore

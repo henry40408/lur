@@ -246,3 +246,87 @@ fn cache_option_is_validated() {
     assert!(err.to_string().contains("only supports GET"), "{err}");
     assert_eq!(srv.hits(), 0);
 }
+
+/// Fetches `?p=<n>` for each `n` with a `ttl_ms` cache and asserts the `cached`
+/// flags, written as `F`/`T` per request (e.g. `"FFT"`).
+fn fetch(rt: &Runtime, port: u16, ttl_ms: u32, ps: &[u32], expect: &str) {
+    let mut lines = vec![
+        format!("local url = 'http://127.0.0.1:{port}/'"),
+        "local out = ''".to_string(),
+    ];
+    for p in ps {
+        lines.push(format!(
+            "out = out .. (lur.http.get(url, {{ query = {{ p = {p} }}, cache = {{ ttl_ms = {ttl_ms} }} }}).cached and 'T' or 'F')"
+        ));
+    }
+    lines.push(format!("assert(out == '{expect}', 'got ' .. out)"));
+    rt.run(&lines.join("\n")).expect("script runs");
+}
+
+fn limited(max_entries: usize, max_bytes: usize) -> Runtime {
+    runtime(
+        &Arc::new(HttpCache::with_limits(max_entries, max_bytes)),
+        loopback(),
+    )
+}
+
+fn big_body_server() -> Server {
+    Server::start(|_: &Request| ResponseTemplate::new(200).set_body_bytes(vec![b'x'; 100]))
+}
+
+#[test]
+fn max_entries_evicts_the_least_recently_used() {
+    let srv = serve(200, &[]);
+    let rt = limited(2, 0);
+    // 1, 2 fill; the hit on 1 makes 2 the oldest; 3 evicts 2.
+    fetch(&rt, srv.port(), 60_000, &[1, 2, 1, 3], "FFTF");
+    // 1 and 3 survived; 2 was evicted.
+    fetch(&rt, srv.port(), 60_000, &[3, 1, 2], "TTF");
+}
+
+#[test]
+fn max_bytes_evicts_to_stay_under_the_cap() {
+    let srv = big_body_server();
+    // One ~100-byte entry (plus headers and key) fits in 400 bytes; two do not.
+    let rt = limited(0, 400);
+    fetch(&rt, srv.port(), 60_000, &[1, 2, 2, 1], "FFTF");
+}
+
+#[test]
+fn a_body_larger_than_max_bytes_is_not_cached() {
+    let srv = big_body_server();
+    let rt = limited(0, 50);
+    fetch(&rt, srv.port(), 60_000, &[1, 1], "FF");
+    assert_eq!(srv.hits(), 2);
+}
+
+#[test]
+fn zero_means_unlimited() {
+    let srv = serve(200, &[]);
+    let rt = limited(0, 0);
+    let ps: Vec<u32> = (0..50).collect();
+    fetch(&rt, srv.port(), 60_000, &ps, &"F".repeat(50));
+    fetch(&rt, srv.port(), 60_000, &ps, &"T".repeat(50));
+}
+
+#[test]
+fn expired_entries_are_evicted_before_live_ones() {
+    let srv = serve(200, &[]);
+    let rt = limited(2, 0);
+    // 1 is long-lived and the oldest; 2 is short-lived and the newest.
+    fetch(&rt, srv.port(), 60_000, &[1], "F");
+    fetch(&rt, srv.port(), 50, &[2], "F");
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    // 3 overflows the cap: the expired 2 goes, not the LRU-but-live 1.
+    fetch(&rt, srv.port(), 60_000, &[3], "F");
+    fetch(&rt, srv.port(), 60_000, &[1, 3], "TT");
+}
+
+#[test]
+fn cache_clear_resets_the_accounting() {
+    let srv = serve(200, &[]);
+    let rt = limited(2, 0);
+    fetch(&rt, srv.port(), 60_000, &[1, 2], "FF");
+    rt.run("assert(lur.http.cache_clear() == 2)").unwrap();
+    fetch(&rt, srv.port(), 60_000, &[1, 2, 1, 2], "FFTT");
+}

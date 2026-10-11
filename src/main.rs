@@ -5,6 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
+use lur::capabilities::http::{
+    DEFAULT_HTTP_CACHE_MAX_BYTES, DEFAULT_HTTP_CACHE_MAX_ENTRIES, HttpCache,
+};
 use lur::config::{Config, Profile, expand_tilde};
 use lur::policy::Policy;
 use lur::runtime::{
@@ -74,6 +77,14 @@ struct CommonFlags {
     /// Cap on a buffered lur.http response body (e.g. `16m`).
     #[arg(long, value_name = "SIZE", default_value_t = DEFAULT_MAX_HTTP_BODY_BYTES, value_parser = parse_size)]
     max_http_body: usize,
+
+    /// Max cached lur.http responses before the least recently used are evicted (0 = unlimited).
+    #[arg(long, value_name = "N", default_value_t = DEFAULT_HTTP_CACHE_MAX_ENTRIES)]
+    http_cache_max_entries: usize,
+
+    /// Max total size of cached lur.http responses (e.g. `64m`; 0 = unlimited).
+    #[arg(long, value_name = "SIZE", default_value_t = DEFAULT_HTTP_CACHE_MAX_BYTES, value_parser = parse_size)]
+    http_cache_max_bytes: usize,
 
     /// Alias for `--loose`: full fs, env, and network access, private IPs included.
     #[arg(short = 'A', long = "allow-all")]
@@ -282,7 +293,10 @@ fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig,
         pool_size: 1,
         per_event_timeout: None,
         state: std::sync::Arc::default(),
-        http_cache: std::sync::Arc::default(),
+        http_cache: Arc::new(HttpCache::with_limits(
+            flags.http_cache_max_entries,
+            flags.http_cache_max_bytes,
+        )),
         shutdown_grace: Duration::from_millis(DEFAULT_SHUTDOWN_GRACE_MS),
         max_concurrency: flags.max_concurrency,
         chunk_name: None,

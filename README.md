@@ -130,6 +130,8 @@ lur docs                               # print the embedded usage guide
 | `--allow-private` | — | off | Permit loopback/private/link-local/CGNAT/multicast addresses, incl. IPv6 forms embedding them (SSRF guard off). |
 | `--memory` | SIZE | `256m` | Per-VM memory cap; `0` = unlimited. |
 | `--max-http-body` | SIZE | `16m` | Cap on a buffered `lur.http` response body. |
+| `--http-cache-max-entries` | N | `1024` | Cap on cached `lur.http` responses; least recently used are evicted; `0` = unlimited. |
+| `--http-cache-max-bytes` | SIZE | `64m` | Cap on the total size of cached `lur.http` responses; `0` = unlimited. |
 | `--max-concurrency` | N | unbounded | Cap on in-flight `lur.async.*` tasks per VM. |
 | `--db` | PATH or URL | | SQLite file or `postgres://`/`postgresql://` URL backing `lur.db` / `lur.kv`. |
 | `--config` | FILE | | Load a specific config file. Conflicts with `--no-config`. |
@@ -265,8 +267,9 @@ Lua error (catch with `pcall`).
   `cache = { ttl_ms = 60000, vary? }` (GET only; in memory, no `--db`) stores 2xx responses
   and adds `res.cached`; requests with `Authorization`/`Cookie` bypass it unless named in
   `vary`, and the policy check runs before the lookup. `lur.http.cache_clear()` drops all
-  entries and returns the count; the total size is otherwise unbounded, so scripts manage
-  it with `ttl_ms` and `--max-http-body` (per entry).
+  entries and returns the count. The cache is bounded by `--http-cache-max-entries` and
+  `--http-cache-max-bytes`: an insert over either cap evicts expired entries, then the least
+  recently used; a single response larger than the byte cap is simply not cached.
 - **`lur.env`** — `lur.env(name) → string | nil`; `nil` for both denied and unset, so it
   is not an oracle.
 

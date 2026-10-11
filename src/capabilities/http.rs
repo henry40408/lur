@@ -3,7 +3,7 @@
 //! Bodies are raw bytes, not auto-decompressed. `opts.cache` keeps 2xx GET
 //! responses in a process-wide in-memory [`HttpCache`] shared by the pool.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -207,70 +207,173 @@ struct Ctx<'a> {
 struct CacheEntry {
     expires: Instant,
     raw: Arc<RawResponse>,
+    /// Approximate resident size, charged against `max_bytes`.
+    size: usize,
+    /// Recency stamp; the key of this entry in `CacheInner::order`.
+    tick: u64,
 }
 
 #[derive(Default)]
 struct CacheInner {
     entries: HashMap<String, CacheEntry>,
+    /// Recency index: `tick` -> key, oldest first. Mirrors `entries` exactly.
+    order: BTreeMap<u64, String>,
+    next_tick: u64,
+    bytes: usize,
     last_sweep: Option<Instant>,
 }
 
+impl CacheInner {
+    fn stamp(&mut self) -> u64 {
+        self.next_tick += 1;
+        self.next_tick
+    }
+
+    fn remove(&mut self, key: &str) {
+        if let Some(e) = self.entries.remove(key) {
+            self.order.remove(&e.tick);
+            self.bytes -= e.size;
+        }
+    }
+
+    fn drop_expired(&mut self, now: Instant) {
+        let dead: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(_, e)| e.expires <= now)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in dead {
+            self.remove(&key);
+        }
+    }
+}
+
+/// Default cap on the number of cached responses.
+pub const DEFAULT_HTTP_CACHE_MAX_ENTRIES: usize = 1024;
+/// Default cap on the total size of cached responses.
+pub const DEFAULT_HTTP_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
 /// Process-wide response cache behind `opts.cache`, shared by every pooled VM
-/// (like `lur.state`). Deliberately unbounded in size: memory is managed by the
-/// script through `ttl_ms`, what it chooses to cache, `--max-http-body` (caps
-/// each entry) and [`HttpCache::clear`]. Expired entries are dropped on lookup
-/// and swept at most once a minute on insert, so a TTL does release memory.
-#[derive(Default)]
+/// (like `lur.state`). Bounded by `--http-cache-max-entries` and
+/// `--http-cache-max-bytes` (`0` = unlimited): an insert that exceeds either
+/// evicts expired entries first, then the least recently used. A single
+/// response larger than the byte cap is not stored. `--max-http-body` still caps
+/// each body, and [`HttpCache::clear`] drops everything. Expired entries are also
+/// dropped on lookup and swept at most once a minute on insert.
 pub struct HttpCache {
     inner: Mutex<CacheInner>,
+    max_entries: usize,
+    max_bytes: usize,
+}
+
+impl Default for HttpCache {
+    fn default() -> Self {
+        Self::with_limits(DEFAULT_HTTP_CACHE_MAX_ENTRIES, DEFAULT_HTTP_CACHE_MAX_BYTES)
+    }
 }
 
 impl std::fmt::Debug for HttpCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HttpCache").finish_non_exhaustive()
+        f.debug_struct("HttpCache")
+            .field("max_entries", &self.max_entries)
+            .field("max_bytes", &self.max_bytes)
+            .finish_non_exhaustive()
     }
 }
 
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
 
 impl HttpCache {
+    /// `0` for either limit means unlimited.
+    #[must_use]
+    pub fn with_limits(max_entries: usize, max_bytes: usize) -> Self {
+        Self {
+            inner: Mutex::default(),
+            max_entries,
+            max_bytes,
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, CacheInner> {
         self.inner.lock().expect("http cache mutex poisoned")
     }
 
+    fn over(&self, inner: &CacheInner) -> bool {
+        (self.max_entries != 0 && inner.entries.len() > self.max_entries)
+            || (self.max_bytes != 0 && inner.bytes > self.max_bytes)
+    }
+
     fn get(&self, key: &str) -> Option<Arc<RawResponse>> {
         let mut inner = self.lock();
-        match inner.entries.get(key) {
-            Some(e) if e.expires > Instant::now() => Some(Arc::clone(&e.raw)),
-            Some(_) => {
-                inner.entries.remove(key);
-                None
-            }
-            None => None,
+        let now = Instant::now();
+        let (live, old_tick) = {
+            let e = inner.entries.get(key)?;
+            (e.expires > now, e.tick)
+        };
+        if !live {
+            inner.remove(key);
+            return None;
         }
+        // Touch: most recently used.
+        let tick = inner.stamp();
+        inner.order.remove(&old_tick);
+        inner.order.insert(tick, key.to_string());
+        let e = inner.entries.get_mut(key)?;
+        e.tick = tick;
+        Some(Arc::clone(&e.raw))
     }
 
     fn put(&self, key: String, raw: RawResponse, ttl_ms: i64) {
+        let size = raw.body.len()
+            + raw
+                .headers
+                .iter()
+                .map(|(k, v)| k.len() + v.len())
+                .sum::<usize>()
+            + key.len();
+        if self.max_bytes != 0 && size > self.max_bytes {
+            return;
+        }
         let now = Instant::now();
         let mut inner = self.lock();
         if inner
             .last_sweep
             .is_none_or(|t| now.duration_since(t) >= SWEEP_EVERY)
         {
-            inner.entries.retain(|_, e| e.expires > now);
+            inner.drop_expired(now);
             inner.last_sweep = Some(now);
         }
         // `ttl_ms` is validated positive; an absurd one must not overflow `Instant`.
         let expires = now
             .checked_add(Duration::from_millis(ttl_ms.cast_unsigned()))
             .unwrap_or_else(|| now + Duration::from_secs(10 * 365 * 24 * 3600));
+        inner.remove(&key);
+        let tick = inner.stamp();
+        inner.order.insert(tick, key.clone());
+        inner.bytes += size;
         inner.entries.insert(
             key,
             CacheEntry {
                 expires,
                 raw: Arc::new(raw),
+                size,
+                tick,
             },
         );
+        if self.over(&inner) {
+            // Expired entries are free to drop; only then evict live ones.
+            inner.drop_expired(now);
+        }
+        // The new entry has the newest tick and fits alone, so this stops before it.
+        while self.over(&inner) {
+            let Some((_, oldest)) = inner.order.pop_first() else {
+                break;
+            };
+            if let Some(e) = inner.entries.remove(&oldest) {
+                inner.bytes -= e.size;
+            }
+        }
     }
 
     /// Drops every entry; returns how many were held.
@@ -278,6 +381,8 @@ impl HttpCache {
         let mut inner = self.lock();
         let n = inner.entries.len();
         inner.entries.clear();
+        inner.order.clear();
+        inner.bytes = 0;
         n
     }
 }
