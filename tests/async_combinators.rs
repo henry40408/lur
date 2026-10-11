@@ -235,6 +235,44 @@ fn map_empty_list_returns_empty_table() {
 }
 
 #[test]
+fn map_accepts_huge_valid_limit_and_rejects_math_huge() {
+    run_ok(
+        "local r = lur.async.map({ 1, 2, 3 }, function(x) return x end,\n\
+         { limit = 2^62 })\n\
+         assert(#r == 3 and r[3] == 3, 'huge limit works')\n\
+         local r2 = lur.async.map({ 1, 2 }, function(x) return x end,\n\
+         { limit = math.maxinteger })\n\
+         assert(#r2 == 2)",
+    );
+    let msg = run_err("lur.async.map({ 1 }, function() end, { limit = math.huge })");
+    assert!(msg.contains("opts.limit"), "{msg}");
+}
+
+#[test]
+fn map_fail_fast_is_immediate_beyond_thirty_items() {
+    let start = Instant::now();
+    run_ok(
+        "local started = 0\n\
+         local ok, err = pcall(lur.async.map, (function()\n\
+         \tlocal t = {} for i = 1, 40 do t[i] = i end return t end)(),\n\
+         \tfunction(x)\n\
+         \t\tstarted = started + 1\n\
+         \t\tif x == 1 then lur.async.sleep(1000) return x end\n\
+         \t\tif x == 2 then error('boom') end\n\
+         \t\tlur.async.sleep(5)\n\
+         \t\treturn x\n\
+         \tend, { limit = 3 })\n\
+         assert(not ok and string.find(tostring(err), 'boom'), 'error propagates')\n\
+         assert(started < 10, 'queued items were not started, started=' .. started)",
+    );
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(700),
+        "error must not wait for the sleeping item, took {elapsed:?}"
+    );
+}
+
+#[test]
 fn map_rejects_bad_arguments() {
     let cases = [
         ("lur.async.map(1, function() end)", "argument #1"),

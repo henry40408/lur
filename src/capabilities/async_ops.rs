@@ -1,11 +1,18 @@
 //! `lur.async`: `sleep` plus `all`/`race`/`settled`/`any`, mirroring
-//! JS `Promise.*`. Tasks interleave on one VM only at await points; when a
-//! combinator settles early the rest are dropped (cancelled).
+//! JS `Promise.*`, and `map` (concurrent `fn(item, index)` over an array).
+//! Tasks interleave on one VM only at await points; when a combinator
+//! settles early the rest are dropped (cancelled).
+//!
+//! `map` takes an optional per-call `limit` semaphore *before* the global
+//! `--max-concurrency` one, and drives a `FuturesUnordered` so the first
+//! error returns immediately regardless of list length.
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use futures_util::future::{join_all, select_all, try_join_all};
+use futures_util::stream::FuturesUnordered;
 use mlua::{Function, Lua, Table, Value};
 use tokio::sync::Semaphore;
 
@@ -197,7 +204,13 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
                 match opts {
                     Value::Nil => {}
                     Value::Table(o) => {
-                        limit = argcheck::integer_arg(o.get("limit")?, F, 3)?;
+                        let raw: Value = o.get("limit")?;
+                        let got = raw.type_name();
+                        limit = argcheck::integer_arg(raw, F, 3).map_err(|_e| {
+                            mlua::Error::RuntimeError(format!(
+                                "{F}: argument #3 opts.limit must be an integer >= 1, got {got}"
+                            ))
+                        })?;
                         if let Some(n) = limit
                             && n < 1
                         {
@@ -225,28 +238,36 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
                 }
                 let items = array_items(&list)?.ok_or_else(|| {
                     mlua::Error::RuntimeError(format!(
-                        "{F}: argument #1 must be an array, got a table with non-array keys"
+                        "{F}: argument #1 must be an array, got a table with holes or non-array keys"
                     ))
                 })?;
                 let local = limit.map(|n| {
-                    Arc::new(Semaphore::new(
-                        usize::try_from(n).unwrap_or(Semaphore::MAX_PERMITS),
-                    ))
+                    let permits = usize::try_from(n).map_or(Semaphore::MAX_PERMITS, |n| {
+                        n.min(Semaphore::MAX_PERMITS)
+                    });
+                    Arc::new(Semaphore::new(permits))
                 });
-                let futs = items.into_iter().enumerate().map(|(i, item)| {
-                    map_task(func.clone(), item, i + 1, local.clone(), global.clone())
-                });
+                // FuturesUnordered (not try_join_all, which becomes
+                // FuturesOrdered past 30 futures and would delay an early
+                // error behind earlier items): return on the first Err and
+                // drop the rest, placing results by index.
+                let count = items.len();
+                let mut pending = FuturesUnordered::new();
+                for (i, item) in items.into_iter().enumerate() {
+                    let (f, l, g) = (func.clone(), local.clone(), global.clone());
+                    pending.push(async move { (i, map_task(f, item, i + 1, l, g).await) });
+                }
+                let mut slots: Vec<Option<Value>> = vec![None; count];
+                while let Some((i, result)) = pending.next().await {
+                    match result {
+                        Ok(v) => slots[i] = Some(v),
+                        Err(e) if !drop_errors => return Err(e),
+                        Err(_) => {}
+                    }
+                }
                 let arr = lua.create_table()?;
-                if drop_errors {
-                    let mut n = 0;
-                    for v in join_all(futs).await.into_iter().flatten() {
-                        n += 1;
-                        arr.set(n, v)?;
-                    }
-                } else {
-                    for (i, v) in try_join_all(futs).await?.into_iter().enumerate() {
-                        arr.set(i + 1, v)?;
-                    }
+                for (n, v) in slots.into_iter().flatten().enumerate() {
+                    arr.set(n + 1, v)?;
                 }
                 Ok(arr)
             }
