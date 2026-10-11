@@ -240,7 +240,23 @@ fn req_origin_and_url_come_from_host_headers() {
     );
     assert_eq!(with(&[]), "nil nil");
     assert_eq!(with(&[("host", "evil.test/<script>")]), "nil nil");
-    for bad in [":", "][", "a:b:c", "x.test:abc", "x.test:", "[::1]x", "[]"] {
+    for bad in [
+        ":",
+        "][",
+        "a:b:c",
+        "x.test:abc",
+        "x.test:",
+        "[::1]x",
+        "[]",
+        "x[a]:80",
+        "x[]",
+        "x.test:+80",
+        "u@x.test",
+        "a'b",
+        "a(b)",
+        "[g:z]",
+        "[::1%zz]",
+    ] {
         assert_eq!(with(&[("host", bad)]), "nil nil", "{bad}");
     }
     assert_eq!(
