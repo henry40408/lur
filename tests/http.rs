@@ -94,6 +94,72 @@ fn http_json_opt_sets_body() {
 }
 
 #[test]
+fn http_res_json_null_drop() {
+    let srv = fixed(200, "{\"a\":null,\"b\":[1,null,2]}");
+    let port = srv.port();
+    let rt = runtime_with(loopback_policy());
+    rt.run(&format!(
+        "local r = lur.http.get('http://127.0.0.1:{port}/')\n\
+         assert(r.json().a == lur.null, 'default keeps null')\n\
+         local j = r.json({{ null = 'drop' }})\n\
+         assert(j.a == nil and #j.b == 2 and j.b[2] == 2, 'dropped')\n\
+         local ok, err = pcall(r.json, {{ null = 'x' }})\n\
+         assert(not ok and tostring(err):find('res.json: opts.null', 1, true), tostring(err))\n\
+         ok, err = pcall(r.json, 'drop')\n\
+         assert(not ok and tostring(err):find('argument #1', 1, true), tostring(err))\n\
+         ok, err = pcall(function() return r:json({{ null = 'drop' }}) end)\n\
+         assert(not ok and tostring(err):find('call with a dot, not a colon', 1, true), tostring(err))",
+    ))
+    .expect("res.json null option works");
+}
+
+#[test]
+fn http_form_opt_encodes_sorted_and_sets_content_type() {
+    let srv = Server::start(|req: &Request| {
+        let ct = req
+            .headers
+            .get("content-type")
+            .map(|v| v.to_str().unwrap().to_owned())
+            .unwrap_or_default();
+        let body = String::from_utf8_lossy(&req.body).into_owned();
+        ResponseTemplate::new(200).set_body_string(format!("{ct}|{body}"))
+    });
+    let port = srv.port();
+    let rt = runtime_with(loopback_policy());
+    rt.run(&format!(
+        "local u = 'http://127.0.0.1:{port}/'\n\
+         local r = lur.http.post(u, {{ form = {{ q = 'a b&c', n = 3, ok = true, b = 'x' }} }})\n\
+         assert(r.body == 'application/x-www-form-urlencoded|b=x&n=3&ok=true&q=a+b%26c', r.body)\n\
+         local r2 = lur.http.post(u, {{ headers = {{ ['Content-Type'] = 'text/plain' }}, form = {{ a = '1' }} }})\n\
+         assert(r2.body == 'text/plain|a=1', r2.body)",
+    ))
+    .expect("form opt works");
+}
+
+#[test]
+fn http_form_opt_rejects_bad_input() {
+    let srv = echo();
+    let port = srv.port();
+    let rt = runtime_with(loopback_policy());
+    rt.run(&format!(
+        "local u = 'http://127.0.0.1:{port}/'\n\
+         local function fails(opts, needle)\n\
+           local ok, err = pcall(lur.http.post, u, opts)\n\
+           assert(not ok and tostring(err):find(needle, 1, true), tostring(err))\n\
+         end\n\
+         fails({{ form = {{ a = 1 }}, body = 'x' }}, 'mutually exclusive')\n\
+         fails({{ form = {{ a = 1 }}, json = {{}} }}, 'mutually exclusive')\n\
+         fails({{ form = {{ a = {{ 1 }} }} }}, 'opts.form.a must be a string, number or boolean, got table')\n\
+         fails({{ form = {{ a = print }} }}, 'got function')\n\
+         fails({{ form = {{ a = math.huge }} }}, 'opts.form.a must be a finite number')\n\
+         fails({{ form = {{ a = 0/0 }} }}, 'opts.form.a must be a finite number')\n\
+         fails({{ form = {{ 'x' }} }}, 'keys must be strings')\n\
+         fails({{ form = 'a=1' }}, 'opts.form must be a table, got string')",
+    ))
+    .expect("form validation works");
+}
+
+#[test]
 fn http_denied_when_host_not_allowlisted() {
     let srv = fixed(200, "x");
     let port = srv.port();

@@ -20,11 +20,12 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     json.set("encode", encode).map_err(RunError::Init)?;
 
     let decode = lua
-        .create_function(|lua, text: Value| {
+        .create_function(|lua, (text, opts): (Value, Value)| {
             let text: mlua::LuaString = argcheck::arg(lua, text, "lur.json.decode", 1, "string")?;
+            let drop_null = parse_decode_opts(lua, opts, "lur.json.decode", 2)?;
             let parsed: Json = serde_json::from_slice(&text.as_bytes())
                 .map_err(|e| Error::runtime(e.to_string()))?;
-            json_to_lua(lua, &parsed)
+            json_to_lua(lua, &parsed, drop_null)
         })
         .map_err(RunError::Init)?;
     json.set("decode", decode).map_err(RunError::Init)?;
@@ -33,7 +34,36 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     Ok(())
 }
 
-pub(crate) fn json_to_lua(lua: &Lua, value: &Json) -> mlua::Result<Value> {
+/// `opts.null`: `"keep"` (default, JSON `null` becomes `lur.null`) or `"drop"`.
+/// Returns whether nulls are dropped. Shared by `lur.json.decode` and `res.json`.
+pub(crate) fn parse_decode_opts(
+    lua: &Lua,
+    opts: Value,
+    fname: &str,
+    pos: usize,
+) -> mlua::Result<bool> {
+    let Some(opts) = argcheck::arg::<Option<Table>>(lua, opts, fname, pos, "table")? else {
+        return Ok(false);
+    };
+    match opts.get::<Value>("null")? {
+        Value::Nil => Ok(false),
+        Value::String(s) => match &*s.as_bytes() {
+            b"keep" => Ok(false),
+            b"drop" => Ok(true),
+            _ => Err(Error::runtime(format!(
+                "{fname}: opts.null must be \"keep\" or \"drop\""
+            ))),
+        },
+        other => Err(Error::runtime(format!(
+            "{fname}: opts.null must be \"keep\" or \"drop\", got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// With `drop_null`, object fields and array elements that are `null` are
+/// omitted (arrays compact); a top-level `null` has no container, so it stays.
+pub(crate) fn json_to_lua(lua: &Lua, value: &Json, drop_null: bool) -> mlua::Result<Value> {
     match value {
         Json::Null => null::value(lua),
         Json::Bool(b) => Ok(Value::Boolean(*b)),
@@ -48,15 +78,23 @@ pub(crate) fn json_to_lua(lua: &Lua, value: &Json) -> mlua::Result<Value> {
         Json::String(s) => Ok(Value::String(lua.create_string(s)?)),
         Json::Array(items) => {
             let t = lua.create_table()?;
-            for (i, item) in items.iter().enumerate() {
-                t.raw_set(i as i64 + 1, json_to_lua(lua, item)?)?;
+            let mut n = 0i64;
+            for item in items {
+                if drop_null && item.is_null() {
+                    continue;
+                }
+                n += 1;
+                t.raw_set(n, json_to_lua(lua, item, drop_null)?)?;
             }
             Ok(Value::Table(t))
         }
         Json::Object(fields) => {
             let t = lua.create_table()?;
             for (k, v) in fields {
-                t.raw_set(lua.create_string(k)?, json_to_lua(lua, v)?)?;
+                if drop_null && v.is_null() {
+                    continue;
+                }
+                t.raw_set(lua.create_string(k)?, json_to_lua(lua, v, drop_null)?)?;
             }
             Ok(Value::Table(t))
         }

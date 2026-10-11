@@ -26,6 +26,23 @@ assert(#doc:select("table") == 0)
 }
 
 #[test]
+fn html_text_trim_option() {
+    run(r#"
+local doc = lur.html.parse("<p> \n  hi <b>there</b> \t</p><i>  </i>")
+local p = doc:select_one("p")
+assert(p:text() == " \n  hi there \t", "default untrimmed")
+assert(p:text({ trim = true }) == "hi there")
+assert(p:text({ trim = false }) == " \n  hi there \t")
+assert(p:text({}) == p:text())
+assert(doc:select_one("i"):text({ trim = true }) == "")
+local ok, err = pcall(function() return p:text({ trim = "yes" }) end)
+assert(not ok and tostring(err):find("opts.trim must be boolean", 1, true), tostring(err))
+ok, err = pcall(function() return p:text("trim") end)
+assert(not ok and tostring(err):find("must be table", 1, true), tostring(err))
+"#);
+}
+
+#[test]
 fn html_nested_select_and_navigation() {
     run(r#"
 local doc = lur.html.parse("<table><tr><td>1</td><td>2</td></tr><tr><td>3</td><td>4</td></tr></table>")
@@ -146,5 +163,45 @@ fails(function() lur.feed.rss({ title = "t", link = "l" }, { { title = 1.5 } }) 
 fails(function() lur.feed.rss({ title = "t", link = "l" }, { { title = "x", date = 1.5 } }) end, "items[1].date")
 fails(function() lur.feed.atom({ title = "t", link = "l" }, { { title = "x" } }) end, "needs guid or link")
 fails(function() lur.feed.json({ title = "t" }, { { title = "x", categories = { 1 } } }) end, "categories")
+"#);
+}
+
+#[test]
+fn feed_skip_invalid_skips_untitled_items() {
+    run(r#"
+local meta = { title = "T", link = "https://e.com" }
+local items = {
+  { title = "A", link = "https://e.com/a" },
+  { link = "https://e.com/no-title" },
+  { title = "   ", link = "https://e.com/blank" },
+  { title = "", link = "https://e.com/empty" },
+  { title = "B", link = "https://e.com/b" },
+}
+local opts = { skip_invalid = true }
+for _, fmt in ipairs({ "rss", "atom", "json" }) do
+  local out = lur.feed[fmt](meta, items, opts)
+  assert(out:find("no-title", 1, true) == nil, fmt)
+  assert(out:find("blank", 1, true) == nil, fmt)
+  assert(out:find("empty", 1, true) == nil, fmt)
+  assert(out:find("/b", 1, true) ~= nil, fmt)
+end
+-- Unicode whitespace counts as blank
+local u = lur.feed.rss(meta, { { title = "\u{3000}", link = "https://e.com/ideo" }, { title = "\u{00A0}", link = "https://e.com/nbsp" } }, opts)
+assert(u:find("ideo", 1, true) == nil and u:find("nbsp", 1, true) == nil)
+-- default still raises
+local ok, err = pcall(lur.feed.rss, meta, items)
+assert(not ok and tostring(err):find("items[2].title is required", 1, true), tostring(err))
+-- other problems still raise, even with skip_invalid
+ok, err = pcall(lur.feed.rss, meta, { { title = "x", date = 1.5 } }, opts)
+assert(not ok and tostring(err):find("items[1].date", 1, true), tostring(err))
+ok, err = pcall(lur.feed.rss, meta, { { title = 5 } }, opts)
+assert(not ok, "non-string title is not skipped")
+ok, err = pcall(lur.feed.rss, meta, { "x" }, opts)
+assert(not ok and tostring(err):find("must be a table", 1, true), tostring(err))
+-- bad opts
+ok, err = pcall(lur.feed.rss, meta, items, { skip_invalid = "yes" })
+assert(not ok and tostring(err):find("opts.skip_invalid must be boolean", 1, true), tostring(err))
+ok, err = pcall(lur.feed.rss, meta, items, true)
+assert(not ok and tostring(err):find("argument #3 must be table", 1, true), tostring(err))
 "#);
 }

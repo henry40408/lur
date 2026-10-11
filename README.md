@@ -186,7 +186,9 @@ Lua error (catch with `pcall`).
 - **`lur.null`** — sentinel distinct from `nil` (which means *absent*); round-trips JSON
   `null` and SQL `NULL`.
 - **`lur.json`** — `encode(value) → string`, `decode(text) → value`. JSON `null` decodes
-  to `lur.null`; strings must be UTF-8 (base64 binary first).
+  to `lur.null`; strings must be UTF-8 (base64 binary first). `decode(text, { null = "drop" })`
+  omits object keys whose value is `null` and removes `null` array elements (compacting the
+  array); `"keep"` is the default, and a bare top-level `null` stays `lur.null`.
 - **`lur.base64`** — `encode(bytes) → string`, `decode(text) → bytes`.
 - **`lur.crypto`** — `sha256`/`sha512`/`sha1`/`md5(data) → bytes`;
   `hmac_sha256`/`hmac_sha512`/`hmac_sha1(key, msg) → bytes`; `hex.encode(bytes)` /
@@ -224,7 +226,8 @@ Lua error (catch with `pcall`).
 - **`lur.html`** — `parse(html) → doc` (invalid UTF-8 is replaced; decode other encodings with
   `lur.charset` first). Nodes (the doc and its
   elements) share methods: `select(css) → array`, `select_one(css) → node | nil`
-  (descendants only; invalid selector raises), `text()`, `html()`, `inner_html()`, `tag()`,
+  (descendants only; invalid selector raises), `text(opts?)` (`{ trim = true }` strips
+  surrounding whitespace; `lur.html` only), `html()`, `inner_html()`, `tag()`,
   `attr(name) → string | nil`, `attrs()`, `parent()`, `children()` (elements only).
   Call with `:`. Parsing follows the HTML5 algorithm, so `<td>` outside a `<table>` is dropped.
 - **`lur.html.sanitize(html, opts?) → string`** — strips scripts, styles, event handlers and
@@ -244,7 +247,9 @@ Lua error (catch with `pcall`).
   `date`, `updated`, `summary`, `content` (HTML), `author`, `categories` (array of strings),
   `enclosure` (`{ url, type?, length? }`). Dates are epoch ms. RSS needs `meta.link`; Atom
   needs `meta.id` or `meta.link`; Atom/JSON items need `guid` or `link`. XML is escaped and
-  characters illegal in XML 1.0 are dropped.
+  characters illegal in XML 1.0 are dropped. An optional third argument `{ skip_invalid = true }`
+  skips items whose `title` is missing (these raise by default) and also drops empty or blank
+  titles, which are accepted by default; other item errors still raise.
 - **`lur.log`** — `info`/`warn`/`error(msg)` write `<level>: <msg>\n` to stderr (stdout is
   the data channel).
 - **`lur.stdin`** — `read()` drains all bytes, `read(n)` reads up to `n` (`nil` at EOF),
@@ -259,8 +264,9 @@ Lua error (catch with `pcall`).
   before the allowlist check, defeating `..` and symlink escapes, and files are opened
   confined to the granted root, so a symlink swapped in mid-call cannot escape either.
 - **`lur.http`** — `request(method, url, opts?)` plus `get`/`post`/`put`/`patch`/
-  `delete`/`head(url, opts?)`. `opts`: `headers`, `query`, `body` **or** `json`, `timeout`
-  (ms), `cache`. Returns `{ status, body, headers, headers_all, json(), text(), html() }`; the helpers are
+  `delete`/`head(url, opts?)`. `opts`: `headers`, `query`, `body` **or** `json` **or** `form`
+  (flat table of string/number/boolean, url-encoded with sorted keys; `Content-Type` set
+  unless `headers` has one), `timeout` (ms), `cache`. `res.json({ null = "drop" })` as in `lur.json.decode`. Returns `{ status, body, headers, headers_all, json(), text(), html() }`; the helpers are
   closures called with a dot, like `json()` (`res.text()`). `text()` decodes `body`
   by a BOM, then the `Content-Type` charset, then `<meta charset>` in the first 1 KiB, then
   UTF-8 (an unknown header charset falls back to the `<meta>`/UTF-8 steps; invalid bytes

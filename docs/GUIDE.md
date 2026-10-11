@@ -21,6 +21,16 @@ assert(v.ok == true and v.n == 3)
 assert(lur.json.decode("null") == lur.null)
 ```
 
+`decode(text, { null = "drop" })` omits object keys whose value is `null` and removes `null`
+array elements (the array is compacted, so later elements shift down). Nested values are
+handled the same way; a bare top-level `null` stays `lur.null`. `"keep"` is the default.
+`res.json({ null = "drop" })` takes the same option.
+
+```lua
+local v = lur.json.decode('{"a":1,"b":null,"c":[1,null,2]}', { null = "drop" })
+assert(v.b == nil and #v.c == 2 and v.c[2] == 2)
+```
+
 ### lur.base64
 
 ```lua
@@ -108,7 +118,26 @@ assert(clean:find('href="https://e.com/a"', 1, true))
 assert(not clean:find("script") and not clean:find("onclick"))
 ```
 
-`lur.feed.rss` / `.atom` / `.json` take `(meta, items)`; item `date` is epoch milliseconds.
+`lur.feed.rss` / `.atom` / `.json` take `(meta, items, opts?)`; item `date` is epoch milliseconds.
+
+`node:text({ trim = true })` strips leading and trailing whitespace from the text
+(default `false`: the text is returned as is). `opts.skip_invalid = true` skips items whose
+`title` is missing (these raise by default) and also drops empty or blank titles, which are
+accepted by default; any other problem
+(wrong types, bad dates, no `guid`/`link` for Atom/JSON) still raises.
+
+```lua
+local doc = lur.html.parse("<ul><li> A </li><li> </li></ul>")
+local items = {}
+for _, li in ipairs(doc:select("li")) do
+  items[#items + 1] = { title = li:text({ trim = true }), link = "https://e.com" }
+end
+assert(items[1].title == "A")
+local xml = lur.feed.rss({ title = "E", link = "https://e.com" }, items, { skip_invalid = true })
+assert(xml:find("<title>A</title>", 1, true))
+local _, count = xml:gsub("<item>", "")
+assert(count == 1)
+```
 
 ### lur.xml
 
@@ -276,7 +305,10 @@ assert(lur.env("LUR_GUIDE_DEFINITELY_UNSET") == nil)
 ### lur.http
 
 `request(method, url, opts?)` plus `get`/`post`/`put`/`patch`/`delete`/`head`.
-`opts` may set `headers`, `query`, `body` **or** `json`, and `timeout` (ms).
+`opts` may set `headers`, `query`, one of `body` / `json` / `form`, and `timeout` (ms).
+`form` is a flat table of string, number or boolean values, sent as
+`application/x-www-form-urlencoded` with keys sorted (so the body is deterministic);
+nested tables and functions raise, and `Content-Type` is only set when `headers` has none.
 Returns `{ status, body, headers, headers_all, json(), text(), html() }`. Each request and hop is
 checked against the allowlist and SSRF guard; grant hosts with `--allow-net`.
 
@@ -311,6 +343,12 @@ local posted = lur.http.post("https://api.example.com/items", {
   json = { name = "widget" },
 })
 local body = posted.json()
+
+-- url-encoded form; `res.json({ null = "drop" })` omits JSON nulls
+local login = lur.http.post("https://example.com/login", {
+  form = { user = "ann", remember = true },
+})
+local data = login.json({ null = "drop" })
 
 -- legacy-charset pages: decode via Content-Type, then query with CSS selectors
 local page = lur.http.get("https://example.com/big5.html")

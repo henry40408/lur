@@ -113,6 +113,23 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   `lur.charset.decode`, but an unknown `charset=` in the *server's* header falls back to
   sniffing/UTF-8 rather than raising (unlike a script-supplied label to `decode`). The raw
   `body` is unchanged; the helpers decode on each call, so they work on cache hits too.
+- **`null = "drop"` removes array elements and compacts** rather than leaving holes: a Lua
+  table with holes has an undefined `#`, so `{1, nil, 2}` would break `ipairs`/`#`. The
+  catch is that indices shift; use the default `"keep"` when positions matter. A bare
+  top-level `null` stays `lur.null` (no container to drop it from). Unknown values raise.
+  Compaction can turn `[null]` into an empty table, which `lur.json.encode` writes as `{}`.
+- **`opts.form`** is flat string/number/boolean only (nested tables raise: there is no
+  agreed encoding) with keys sorted, because Lua table order is unspecified and tests/
+  signatures need a stable body. A caller-set `Content-Type` is kept (unlike `json`, which
+  always adds its own), since some endpoints want a variant such as a charset suffix. Repeated keys
+  and multipart are not supported.
+- **`node:text({ trim = true })`** is opt-in so existing output is unchanged; it trims
+  Unicode whitespace at both ends only (inner whitespace is untouched). `lur.xml` nodes
+  do not take it.
+- **`lur.feed` `skip_invalid`** skips an item only when `title` is `nil` (which raises by
+  default) or empty/blank (which is accepted by default, so it also drops those); the one
+  field scrapes routinely lack. Wrong types, bad dates and a
+  missing `guid`/`link` still raise, so real bugs are not hidden; meta is never skipped.
 - **Sliding window for every `lur.async` combinator.** `all`/`settled`/`race`/`any`/`map`
   share one `drive` helper over a `FuturesUnordered` that holds at most a window of futures
   and creates the next only when one finishes. Two reasons: `try_join_all` silently becomes
@@ -242,7 +259,7 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   unless `--timeout` is set.
 - Cron: UTC only (no timezone setting), in-memory schedule, no missed-run replay, no
   `@every` interval syntax.
-- Not implemented: streaming response bodies / `lur.http` downloads, form bodies, retries,
+- Not implemented: streaming response bodies / `lur.http` downloads, multipart bodies, retries,
   cookie jar, proxies, a TLS-verification opt-out, managed migrations, in-memory DB, named SQL params, socket/queue trigger sources, `lur.serve.on_start`,
   configurable SQLite `busy_timeout`, machine-readable (`--error-format=json`) diagnostics,
   symmetric/asymmetric crypto and KDFs, signed cookies, `lur docs <section>`.
