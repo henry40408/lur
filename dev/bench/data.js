@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791735016512,
+  "lastUpdate": 1791735762229,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4289,6 +4289,54 @@ window.BENCHMARK_DATA = {
             "name": "async_map_20k_limit_64",
             "value": 20297296,
             "range": "± 434136",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e387552199ba585275097c5de8873fddecbd1489",
+          "message": "feat: add json null drop, http form bodies, html text trim and feed skip_invalid (#148)\n\n- lur.json.decode / res.json accept {null = \"drop\"}: null keys are omitted\n  and null array elements removed (arrays compact).\n- lur.http.* accept form = {...}, encoded as x-www-form-urlencoded with\n  sorted keys; mutually exclusive with body/json.\n- node:text({trim = true}) trims Unicode whitespace on lur.html nodes.\n- lur.feed.{rss,atom,json} accept {skip_invalid = true} to skip items with\n  a missing or blank title.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T00:20:26+08:00",
+          "tree_id": "1a0b6cf646cdad9a1a68080dd4a5fa801ea696db",
+          "url": "https://github.com/henry40408/lur/commit/e387552199ba585275097c5de8873fddecbd1489"
+        },
+        "date": 1791735761199,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 263309,
+            "range": "± 3225",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4199,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 144550,
+            "range": "± 3099",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 15502896,
+            "range": "± 108709",
             "unit": "ns/iter"
           }
         ]
