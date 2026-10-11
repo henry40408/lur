@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791732299368,
+  "lastUpdate": 1791733808016,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4157,6 +4157,48 @@ window.BENCHMARK_DATA = {
             "name": "compute_loop_hook_overhead",
             "value": 444362,
             "range": "± 2156",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "92e8193f486652eb7c863ba6917b1cda53b7e209",
+          "message": "feat(http): add res.text() and res.html() to lur.http responses (#145)\n\n* feat(http): add res.text() and res.html() response helpers\n\nDecode the body with the Content-Type charset via the lur.charset rules.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* docs(http): fix res.text() precedence wording and add BOM test\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-11T23:47:33+08:00",
+          "tree_id": "56229a709ae0bceae619ac3971dc96928f363f78",
+          "url": "https://github.com/henry40408/lur/commit/92e8193f486652eb7c863ba6917b1cda53b7e209"
+        },
+        "date": 1791733807619,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 349524,
+            "range": "± 13141",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5926,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 181980,
+            "range": "± 1105",
             "unit": "ns/iter"
           }
         ]
