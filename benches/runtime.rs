@@ -30,10 +30,23 @@ fn compute_loop_hook_overhead(c: &mut Criterion) {
     });
 }
 
+/// `lur.async.map` over a long list under a per-call limit: the window keeps
+/// this linear in list length (it was quadratic with all futures created up
+/// front).
+fn async_map_limit(c: &mut Criterion) {
+    let rt = Runtime::new().expect("runtime builds");
+    let src = "local t = {} for i = 1, 20000 do t[i] = i end \
+               return #lur.async.map(t, function(x) return x end, { limit = 64 })";
+    c.bench_function("async_map_20k_limit_64", |b| {
+        b.iter(|| rt.run(black_box(src)).unwrap());
+    });
+}
+
 criterion_group!(
     benches,
     vm_cold_start,
     trivial_script,
-    compute_loop_hook_overhead
+    compute_loop_hook_overhead,
+    async_map_limit
 );
 criterion_main!(benches);

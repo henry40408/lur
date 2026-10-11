@@ -3,15 +3,18 @@
 //! Tasks interleave on one VM only at await points; when a combinator
 //! settles early the rest are dropped (cancelled).
 //!
-//! `map` takes an optional per-call `limit` semaphore *before* the global
-//! `--max-concurrency` one, and drives a `FuturesUnordered` so the first
-//! error returns immediately regardless of list length.
+//! Every combinator runs through [`drive`]: a `FuturesUnordered` holding at
+//! most a *window* of futures (`--max-concurrency`, plus `map`'s per-call
+//! `limit`), refilled as items finish. A long list therefore never parks
+//! thousands of futures on the global semaphore (quadratic in list length),
+//! and the first error returns immediately regardless of list length.
 
+use std::future::Future;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use futures_util::future::{join_all, select_all, try_join_all};
 use futures_util::stream::FuturesUnordered;
 use mlua::{Function, Lua, Table, Value};
 use tokio::sync::Semaphore;
@@ -36,19 +39,43 @@ fn array_items(t: &Table) -> mlua::Result<Option<Vec<Value>>> {
         .map(Some)
 }
 
-/// One `map` item: take a per-call `limit` permit first, then the global
-/// `max_concurrency` permit, so queued items never hoard global permits.
+/// Poll `items` with at most `window` futures alive, creating the next only
+/// when one finishes. `on_result(index, result)` sees results in completion
+/// order; `Break(b)` stops early, dropping (cancelling) everything in flight
+/// and queued. Returns the break value, or `None` once every item finished.
+async fn drive<T, F, B>(
+    items: Vec<T>,
+    window: usize,
+    mut make: impl FnMut(usize, T) -> F,
+    mut on_result: impl FnMut(usize, mlua::Result<Value>) -> ControlFlow<B>,
+) -> Option<B>
+where
+    F: Future<Output = mlua::Result<Value>>,
+{
+    let window = window.max(1);
+    let mut queue = items.into_iter().enumerate();
+    let mut pending = FuturesUnordered::new();
+    loop {
+        while pending.len() < window {
+            let Some((i, item)) = queue.next() else { break };
+            let fut = make(i, item);
+            pending.push(async move { (i, fut.await) });
+        }
+        let (i, result) = pending.next().await?;
+        if let ControlFlow::Break(b) = on_result(i, result) {
+            return Some(b);
+        }
+    }
+}
+
+/// One `map` item. The per-call `limit` is enforced by the caller's window,
+/// so only the global `max_concurrency` permit is taken here.
 async fn map_task(
     f: Function,
     item: Value,
     index: usize,
-    local: Option<Arc<Semaphore>>,
     global: Option<Arc<Semaphore>>,
 ) -> mlua::Result<Value> {
-    let _local = match local {
-        Some(s) => Some(s.acquire_owned().await.expect("semaphore never closed")),
-        None => None,
-    };
     let _global = match global {
         Some(s) => Some(s.acquire_owned().await.expect("semaphore never closed")),
         None => None,
@@ -72,6 +99,9 @@ async fn run_task(f: Function, sem: Option<Arc<Semaphore>>) -> mlua::Result<Valu
 /// `max_concurrency` caps concurrently running combinator tasks per VM.
 pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result<(), RunError> {
     let sem = max_concurrency.map(|n| Arc::new(Semaphore::new(n)));
+    // A call can never run more than `max_concurrency` tasks, so that is also
+    // the most futures worth keeping alive for it.
+    let cap = max_concurrency.unwrap_or(usize::MAX);
     let async_tbl = lua.create_table().map_err(RunError::Init)?;
 
     // No Lua runs while parked, so only the wall-clock timeout (not the
@@ -91,10 +121,25 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
             let sem = sem_all.clone();
             async move {
                 let funcs = task_list(&tasks)?;
-                let futs = funcs.into_iter().map(|f| run_task(f, sem.clone()));
-                let results: Vec<Value> = try_join_all(futs).await?;
+                let mut slots = vec![Value::Nil; funcs.len()];
+                let failed = drive(
+                    funcs,
+                    cap,
+                    |_, f| run_task(f, sem.clone()),
+                    |i, result| match result {
+                        Ok(v) => {
+                            slots[i] = v;
+                            ControlFlow::Continue(())
+                        }
+                        Err(e) => ControlFlow::Break(e),
+                    },
+                )
+                .await;
+                if let Some(e) = failed {
+                    return Err(e);
+                }
                 let arr = lua.create_table()?;
-                for (i, v) in results.into_iter().enumerate() {
+                for (i, v) in slots.into_iter().enumerate() {
                     arr.set(i + 1, v)?;
                 }
                 Ok(arr)
@@ -110,19 +155,28 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
             let sem = sem_settled.clone();
             async move {
                 let funcs = task_list(&tasks)?;
-                let futs = funcs.into_iter().map(|f| run_task(f, sem.clone()));
-                let results = join_all(futs).await;
+                let mut slots: Vec<Option<Result<Value, String>>> = vec![None; funcs.len()];
+                drive(
+                    funcs,
+                    cap,
+                    |_, f| run_task(f, sem.clone()),
+                    |i, result| {
+                        slots[i] = Some(result.map_err(|e| e.to_string()));
+                        ControlFlow::<()>::Continue(())
+                    },
+                )
+                .await;
                 let arr = lua.create_table()?;
-                for (i, result) in results.into_iter().enumerate() {
+                for (i, slot) in slots.into_iter().enumerate() {
                     let entry = lua.create_table()?;
-                    match result {
+                    match slot.expect("every task settles") {
                         Ok(value) => {
                             entry.set("ok", true)?;
                             entry.set("value", value)?;
                         }
                         Err(e) => {
                             entry.set("ok", false)?;
-                            entry.set("err", e.to_string())?;
+                            entry.set("err", e)?;
                         }
                     }
                     arr.set(i + 1, entry)?;
@@ -143,12 +197,14 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
                 if funcs.is_empty() {
                     return Err(mlua::Error::RuntimeError("lur.async.race: no tasks".into()));
                 }
-                let futs = funcs
-                    .into_iter()
-                    .map(|f| Box::pin(run_task(f, sem.clone())))
-                    .collect::<Vec<_>>();
-                let (result, _index, _rest) = select_all(futs).await;
-                result
+                let first = drive(
+                    funcs,
+                    cap,
+                    |_, f| run_task(f, sem.clone()),
+                    |_, result| ControlFlow::Break(result),
+                )
+                .await;
+                first.expect("a non-empty race settles")
             }
         })
         .map_err(RunError::Init)?;
@@ -164,26 +220,28 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
                 if funcs.is_empty() {
                     return Err(mlua::Error::RuntimeError("lur.async.any: no tasks".into()));
                 }
-                let mut futs = funcs
-                    .into_iter()
-                    .map(|f| Box::pin(run_task(f, sem.clone())))
-                    .collect::<Vec<_>>();
                 let mut errors: Vec<String> = Vec::new();
-                while !futs.is_empty() {
-                    let (result, _index, rest) = select_all(futs).await;
-                    match result {
-                        Ok(value) => return Ok(value),
+                let won = drive(
+                    funcs,
+                    cap,
+                    |_, f| run_task(f, sem.clone()),
+                    |_, result| match result {
+                        Ok(value) => ControlFlow::Break(value),
                         Err(e) => {
                             errors.push(e.to_string());
-                            futs = rest;
+                            ControlFlow::Continue(())
                         }
-                    }
+                    },
+                )
+                .await;
+                match won {
+                    Some(value) => Ok(value),
+                    None => Err(mlua::Error::RuntimeError(format!(
+                        "lur.async.any: all {} tasks failed: {}",
+                        errors.len(),
+                        errors.join("; ")
+                    ))),
                 }
-                Err(mlua::Error::RuntimeError(format!(
-                    "lur.async.any: all {} tasks failed: {}",
-                    errors.len(),
-                    errors.join("; ")
-                )))
             }
         })
         .map_err(RunError::Init)?;
@@ -241,29 +299,26 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
                         "{F}: argument #1 must be an array, got a table with holes or non-array keys"
                     ))
                 })?;
-                let local = limit.map(|n| {
-                    let permits = usize::try_from(n).map_or(Semaphore::MAX_PERMITS, |n| {
-                        n.min(Semaphore::MAX_PERMITS)
-                    });
-                    Arc::new(Semaphore::new(permits))
-                });
-                // FuturesUnordered (not try_join_all, which becomes
-                // FuturesOrdered past 30 futures and would delay an early
-                // error behind earlier items): return on the first Err and
-                // drop the rest, placing results by index.
-                let count = items.len();
-                let mut pending = FuturesUnordered::new();
-                for (i, item) in items.into_iter().enumerate() {
-                    let (f, l, g) = (func.clone(), local.clone(), global.clone());
-                    pending.push(async move { (i, map_task(f, item, i + 1, l, g).await) });
-                }
-                let mut slots: Vec<Option<Value>> = vec![None; count];
-                while let Some((i, result)) = pending.next().await {
-                    match result {
-                        Ok(v) => slots[i] = Some(v),
-                        Err(e) if !drop_errors => return Err(e),
-                        Err(_) => {}
-                    }
+                let window = limit
+                    .map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX))
+                    .min(cap);
+                let mut slots: Vec<Option<Value>> = vec![None; items.len()];
+                let failed = drive(
+                    items,
+                    window,
+                    |i, item| map_task(func.clone(), item, i + 1, global.clone()),
+                    |i, result| match result {
+                        Ok(v) => {
+                            slots[i] = Some(v);
+                            ControlFlow::Continue(())
+                        }
+                        Err(e) if !drop_errors => ControlFlow::Break(e),
+                        Err(_) => ControlFlow::Continue(()),
+                    },
+                )
+                .await;
+                if let Some(e) = failed {
+                    return Err(e);
                 }
                 let arr = lua.create_table()?;
                 for (n, v) in slots.into_iter().flatten().enumerate() {

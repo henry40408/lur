@@ -113,17 +113,20 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   `lur.charset.decode`, but an unknown `charset=` in the *server's* header falls back to
   sniffing/UTF-8 rather than raising (unlike a script-supplied label to `decode`). The raw
   `body` is unchanged; the helpers decode on each call, so they work on cache hits too.
-- **`lur.async.map`** polls its futures on the calling task like `all`/`settled` (no new
-  mechanism) but through a `FuturesUnordered` rather than `try_join_all`, which silently
-  becomes `FuturesOrdered` above 30 futures: an early error would wait behind earlier items
-  and queued items would keep starting. `opts.limit` is a per-call semaphore taken *before*
-  the global `--max-concurrency` permit, so queued items never hoard global permits; for a
-  single flat `map` the two caps cannot deadlock and the effective bound is the smaller.
-  Nested combinators (a `map` inside `map`/`all`/`any`) under a tight `--max-concurrency`
-  can still starve, since a parent task holds a global permit while its children wait for
-  one, exactly as nested `all` does. `limit` must be an integer >= 1 (`math.huge`, floats
-  and strings raise naming `opts.limit`); huge valid limits are clamped to the semaphore
-  maximum. The first error returns immediately and the rest are cancelled. `drop_errors` compacts the
+- **Sliding window for every `lur.async` combinator.** `all`/`settled`/`race`/`any`/`map`
+  share one `drive` helper over a `FuturesUnordered` that holds at most a window of futures
+  and creates the next only when one finishes. Two reasons: `try_join_all` silently becomes
+  `FuturesOrdered` above 30 futures, so an early error waited behind earlier items and
+  queued items kept starting; and with every future created up front, thousands of them
+  parked on the semaphore and each wake-up rescheduled the lot (profiled: 80k items under
+  `limit` took ~500 ms, 20x the unbounded run; windowed it is linear). The window is
+  `--max-concurrency`, further narrowed by `map`'s `opts.limit` (a per-call bound, so
+  there is no per-call semaphore any more; only the global permit is still acquired inside
+  each task, since it is shared across calls). Nested combinators (a `map` inside
+  `map`/`all`/`any`) under a tight `--max-concurrency` can still starve, since a parent
+  task holds a global permit while its children wait for one. `limit` must be an integer
+  >= 1 (`math.huge`, floats and strings raise naming `opts.limit`); values above the item
+  count are harmless. The first error returns immediately and the rest are cancelled. `drop_errors` compacts the
   result in input order (failed items vanish, later indexes shift) and discards error
   messages; use `settled` when they matter. A `nil` return still leaves a hole, as in
   `all`. The list must be a pure array (non-sequence keys raise) so a typo'd dict is not

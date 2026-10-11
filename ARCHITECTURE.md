@@ -258,10 +258,13 @@ is an `Arc<Semaphore>`; each task takes an owned permit before running. Lua stil
 at a time — tasks interleave only at I/O awaits; `race`/`any` drop (cancel) the remaining
 futures on settlement.
 
-`map(list, fn, opts?)` runs `fn(item, index)` per element through a `FuturesUnordered`
-(results placed by index; the first error returns at once and drops the rest). `opts.limit`
-is a per-call `Semaphore` acquired *before* the global permit, so queued items never hold
-global permits; nested combinators under a tight `--max-concurrency` can still starve.
+Every combinator goes through one `drive` helper: a `FuturesUnordered` holding at most a
+*window* of futures (`--max-concurrency`, and for `map` also `opts.limit`), refilled as items
+finish, with results placed by index. The first error (or `race`/`any` winner) returns at once
+and drops the rest. Bounding the window keeps a long list from parking thousands of futures
+on the semaphore, which was quadratic in list length. `map(list, fn, opts?)` runs
+`fn(item, index)` per element; nested combinators under a tight `--max-concurrency` can
+still starve.
 
 ## Configuration resolution
 
