@@ -455,7 +455,9 @@ assert(ok or err ~= nil)
 
 `sleep(ms)` and combinators over arrays of zero-arg functions: `all`
 (fail-fast), `race`/`any` (first to settle/succeed), `settled` (never raises).
-Tasks interleave only at I/O awaits.
+Tasks interleave only at I/O awaits. `map(list, fn, opts?)` runs `fn(item, index)`
+over an array concurrently and returns results in input order; `opts.limit`
+bounds in-flight tasks and `opts.drop_errors` omits failed items.
 
 ```lua
 lur.async.sleep(1)
@@ -485,6 +487,20 @@ local winner = lur.async.any({
   function() return "winner" end,
 })
 assert(winner == "winner")
+
+-- map: concurrent, ordered; limit bounds in-flight tasks
+local doubled = lur.async.map({ 1, 2, 3, 4 }, function(n, i)
+  lur.async.sleep(5)
+  return n * 2
+end, { limit = 2 })
+assert(#doubled == 4 and doubled[4] == 8)
+
+-- drop_errors: failed items are omitted instead of raising
+local kept = lur.async.map({ 1, 2, 3 }, function(n)
+  if n == 2 then error("skip") end
+  return n
+end, { drop_errors = true })
+assert(#kept == 2 and kept[2] == 3)
 ```
 
 ## Server mode

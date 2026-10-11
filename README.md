@@ -325,8 +325,11 @@ Postgres integration tests need a local Postgres: `docker compose up -d`.
 
 - **`lur.async`** — `sleep(ms)`, and combinators over arrays of zero-arg functions:
   `all` (fail-fast), `race` (first to settle), `any` (first to succeed), `settled` (never
-  raises → `{ ok, value | err }`). Lua runs one step at a time; tasks interleave only at
-  I/O awaits. `--max-concurrency` caps in-flight tasks.
+  raises → `{ ok, value | err }`). `map(list, fn, opts?)` applies `fn(item, index)` to
+  every array element concurrently and returns results in input order; `opts.limit`
+  (integer ≥ 1) caps that call's in-flight tasks, `opts.drop_errors` omits failed items
+  instead of failing fast. Lua runs one step at a time; tasks interleave only at I/O
+  awaits. `--max-concurrency` caps in-flight tasks.
 - **`lur.state`** — process-wide state shared across the VM pool, primitives only:
   `get(key)`, `set(key, value)` (`nil` deletes), `incr`/`decr(key, n?)` (atomic; integer
   step, default 1), `add(key, value) → bool` (set-if-absent), `cas(key, expected, new) →

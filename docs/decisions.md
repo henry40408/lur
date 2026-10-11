@@ -113,6 +113,15 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   `lur.charset.decode`, but an unknown `charset=` in the *server's* header falls back to
   sniffing/UTF-8 rather than raising (unlike a script-supplied label to `decode`). The raw
   `body` is unchanged; the helpers decode on each call, so they work on cache hits too.
+- **`lur.async.map`** reuses the `all`/`settled` scheduling (futures joined on one task, no
+  new mechanism). `opts.limit` is a per-call semaphore taken *before* the global
+  `--max-concurrency` permit, so queued items never hoard global permits and the two caps
+  cannot deadlock; the effective bound is the smaller. Fail-fast drops the joined futures,
+  so queued and in-flight items are cancelled like `all`. `drop_errors` compacts the
+  result in input order (failed items vanish, later indexes shift) and discards error
+  messages; use `settled` when they matter. A `nil` return still leaves a hole, as in
+  `all`. The list must be a pure array (non-sequence keys raise) so a typo'd dict is not
+  silently ignored.
 - **Diagnostics**: chunk name is the CLI path as typed (not canonicalized or
   basenamed). Exit codes deliberately not split per error kind.
 - **`lur docs`**: hand-rolled ANSI renderer over `pulldown-cmark` (no default features);

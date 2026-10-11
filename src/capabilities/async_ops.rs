@@ -9,7 +9,45 @@ use futures_util::future::{join_all, select_all, try_join_all};
 use mlua::{Function, Lua, Table, Value};
 use tokio::sync::Semaphore;
 
+use super::argcheck;
 use crate::runtime::RunError;
+
+/// Elements of a dense array table, or `None` when it has non-sequence keys.
+fn array_items(t: &Table) -> mlua::Result<Option<Vec<Value>>> {
+    let len = t.raw_len();
+    let mut count = 0usize;
+    for pair in t.clone().pairs::<Value, Value>() {
+        pair?;
+        count += 1;
+    }
+    if count != len {
+        return Ok(None);
+    }
+    (1..=len)
+        .map(|i| t.raw_get(i))
+        .collect::<mlua::Result<Vec<Value>>>()
+        .map(Some)
+}
+
+/// One `map` item: take a per-call `limit` permit first, then the global
+/// `max_concurrency` permit, so queued items never hoard global permits.
+async fn map_task(
+    f: Function,
+    item: Value,
+    index: usize,
+    local: Option<Arc<Semaphore>>,
+    global: Option<Arc<Semaphore>>,
+) -> mlua::Result<Value> {
+    let _local = match local {
+        Some(s) => Some(s.acquire_owned().await.expect("semaphore never closed")),
+        None => None,
+    };
+    let _global = match global {
+        Some(s) => Some(s.acquire_owned().await.expect("semaphore never closed")),
+        None => None,
+    };
+    f.call_async::<Value>((item, index)).await
+}
 
 fn task_list(tasks: &Table) -> mlua::Result<Vec<Function>> {
     tasks.clone().sequence_values::<Function>().collect()
@@ -143,6 +181,78 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
         })
         .map_err(RunError::Init)?;
     async_tbl.set("any", any).map_err(RunError::Init)?;
+
+    // map: fn(item, index) over an array, results in input order. `limit`
+    // bounds this call's in-flight tasks; `drop_errors` omits failed items
+    // instead of failing fast.
+    let sem_map = sem.clone();
+    let map = lua
+        .create_async_function(move |lua, (list, func, opts): (Value, Value, Value)| {
+            let global = sem_map.clone();
+            async move {
+                const F: &str = "lur.async.map";
+                let list: Table = argcheck::arg(&lua, list, F, 1, "table")?;
+                let func: Function = argcheck::arg(&lua, func, F, 2, "function")?;
+                let (mut limit, mut drop_errors) = (None, false);
+                match opts {
+                    Value::Nil => {}
+                    Value::Table(o) => {
+                        limit = argcheck::integer_arg(o.get("limit")?, F, 3)?;
+                        if let Some(n) = limit
+                            && n < 1
+                        {
+                            return Err(mlua::Error::RuntimeError(format!(
+                                "{F}: argument #3 opts.limit must be >= 1, got {n}"
+                            )));
+                        }
+                        match o.get::<Value>("drop_errors")? {
+                            Value::Nil => {}
+                            Value::Boolean(b) => drop_errors = b,
+                            other => {
+                                return Err(mlua::Error::RuntimeError(format!(
+                                    "{F}: argument #3 opts.drop_errors must be boolean, got {}",
+                                    other.type_name()
+                                )));
+                            }
+                        }
+                    }
+                    other => {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "{F}: argument #3 must be table, got {}",
+                            other.type_name()
+                        )));
+                    }
+                }
+                let items = array_items(&list)?.ok_or_else(|| {
+                    mlua::Error::RuntimeError(format!(
+                        "{F}: argument #1 must be an array, got a table with non-array keys"
+                    ))
+                })?;
+                let local = limit.map(|n| {
+                    Arc::new(Semaphore::new(
+                        usize::try_from(n).unwrap_or(Semaphore::MAX_PERMITS),
+                    ))
+                });
+                let futs = items.into_iter().enumerate().map(|(i, item)| {
+                    map_task(func.clone(), item, i + 1, local.clone(), global.clone())
+                });
+                let arr = lua.create_table()?;
+                if drop_errors {
+                    let mut n = 0;
+                    for v in join_all(futs).await.into_iter().flatten() {
+                        n += 1;
+                        arr.set(n, v)?;
+                    }
+                } else {
+                    for (i, v) in try_join_all(futs).await?.into_iter().enumerate() {
+                        arr.set(i + 1, v)?;
+                    }
+                }
+                Ok(arr)
+            }
+        })
+        .map_err(RunError::Init)?;
+    async_tbl.set("map", map).map_err(RunError::Init)?;
 
     lur.set("async", async_tbl).map_err(RunError::Init)?;
     Ok(())
