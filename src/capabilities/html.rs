@@ -54,7 +54,7 @@ impl Source {
 
 /// A document root or an element.
 #[derive(Clone)]
-struct Node {
+pub(crate) struct Node {
     source: Arc<Source>,
     id: NodeId,
 }
@@ -173,6 +173,16 @@ fn css_arg(lua: &Lua, value: Value, fname: &str) -> mlua::Result<String> {
         .map_err(|e| Error::runtime(format!("{fname}: {e}")))
 }
 
+/// The document node `lur.html.parse` returns; also used by `res.html()`.
+pub(crate) fn parse_document(text: String) -> Node {
+    let source = Arc::new(Source {
+        id: NEXT_DOC_ID.fetch_add(1, Ordering::Relaxed),
+        text: text.into_boxed_str(),
+    });
+    let root = source.tree().tree.root().id();
+    Node { source, id: root }
+}
+
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let html = lua.create_table().map_err(RunError::Init)?;
 
@@ -181,12 +191,7 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
         .create_function(|lua, text: Value| {
             let text: mlua::LuaString = argcheck::arg(lua, text, "lur.html.parse", 1, "string")?;
             let text = String::from_utf8_lossy(&text.as_bytes()).into_owned();
-            let source = Arc::new(Source {
-                id: NEXT_DOC_ID.fetch_add(1, Ordering::Relaxed),
-                text: text.into_boxed_str(),
-            });
-            let root = source.tree().tree.root().id();
-            Ok(Node { source, id: root })
+            Ok(parse_document(text))
         })
         .map_err(RunError::Init)?;
     html.set("parse", parse).map_err(RunError::Init)?;

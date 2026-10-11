@@ -277,8 +277,15 @@ assert(lur.env("LUR_GUIDE_DEFINITELY_UNSET") == nil)
 
 `request(method, url, opts?)` plus `get`/`post`/`put`/`patch`/`delete`/`head`.
 `opts` may set `headers`, `query`, `body` **or** `json`, and `timeout` (ms).
-Returns `{ status, body, headers, headers_all, json() }`. Each request and hop is
+Returns `{ status, body, headers, headers_all, json(), text(), html() }`. Each request and hop is
 checked against the allowlist and SSRF guard; grant hosts with `--allow-net`.
+
+`json()`, `text()` and `html()` are closures; the idiomatic form is the dot call
+(`res.text()`), matching `res.json()`. `text()` decodes `body` by a BOM, then the
+`charset` in the response `Content-Type`, then `<meta charset>` in the first 1 KiB, then
+UTF-8 (invalid bytes become U+FFFD), so a
+Big5 or Shift_JIS page arrives as proper UTF-8. `html()` returns the same document node as
+`lur.html.parse(res.text())`. All three work on cached responses.
 
 `cache = { ttl_ms = … }` (GET only) serves repeat requests from an in-memory cache
 shared by the whole process and sets `res.cached` (`true` on a hit). It needs no
@@ -304,6 +311,11 @@ local posted = lur.http.post("https://api.example.com/items", {
   json = { name = "widget" },
 })
 local body = posted.json()
+
+-- legacy-charset pages: decode via Content-Type, then query with CSS selectors
+local page = lur.http.get("https://example.com/big5.html")
+local utf8 = page.text()
+local title = page.html():select_one("title"):text()
 
 -- `request` takes any method
 lur.http.request("OPTIONS", "https://api.example.com/items")

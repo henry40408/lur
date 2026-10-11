@@ -260,7 +260,12 @@ Lua error (catch with `pcall`).
   confined to the granted root, so a symlink swapped in mid-call cannot escape either.
 - **`lur.http`** — `request(method, url, opts?)` plus `get`/`post`/`put`/`patch`/
   `delete`/`head(url, opts?)`. `opts`: `headers`, `query`, `body` **or** `json`, `timeout`
-  (ms), `cache`. Returns `{ status, body, headers, headers_all, json() }`. Every request and
+  (ms), `cache`. Returns `{ status, body, headers, headers_all, json(), text(), html() }`; the helpers are
+  closures called with a dot, like `json()` (`res.text()`). `text()` decodes `body`
+  by a BOM, then the `Content-Type` charset, then `<meta charset>` in the first 1 KiB, then
+  UTF-8 (an unknown header charset falls back to the `<meta>`/UTF-8 steps; invalid bytes
+  become U+FFFD), the `lur.charset` rules, and
+  `html()` is `lur.html.parse(res.text())`. Every request and
   redirect hop is checked against the allowlist and the private-IP (SSRF) guard; TLS is
   always verified; the body is capped by `--max-http-body`. Proxy environment variables
   (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) are ignored.

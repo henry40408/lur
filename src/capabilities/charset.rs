@@ -20,12 +20,10 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
                 argcheck::arg(lua, data, "lur.charset.decode", 1, "string")?;
             let bytes = data.as_bytes();
             let enc = match hint.as_deref().and_then(label_of) {
-                Some(label) => lookup("lur.charset.decode", label)?,
-                None => sniff_meta(&bytes).unwrap_or(UTF_8),
+                Some(label) => Some(lookup("lur.charset.decode", label)?),
+                None => None,
             };
-            // `decode` honors a BOM over `enc`, and replaces invalid sequences.
-            let (text, _, _) = enc.decode(&bytes);
-            lua.create_string(text.as_bytes())
+            lua.create_string(decode_bytes(&bytes, enc).as_bytes())
         })
         .map_err(RunError::Init)?;
     charset.set("decode", decode).map_err(RunError::Init)?;
@@ -58,6 +56,26 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 
     lur.set("charset", charset).map_err(RunError::Init)?;
     Ok(())
+}
+
+/// Decodes `bytes` to text: a BOM wins, then `enc` (the already-resolved
+/// header/label hint), then a `<meta charset>` in the first kilobyte, then
+/// UTF-8. Invalid sequences become U+FFFD. Shared by `lur.charset.decode` and
+/// `res:text()` in `lur.http`.
+pub(crate) fn decode_bytes(bytes: &[u8], enc: Option<&'static Encoding>) -> String {
+    let enc = enc.unwrap_or_else(|| sniff_meta(bytes).unwrap_or(UTF_8));
+    let (text, _, _) = enc.decode(bytes);
+    text.into_owned()
+}
+
+/// Like [`decode_bytes`] for a `Content-Type` header value. An unknown or
+/// absent charset falls back to sniffing instead of raising (a server's
+/// header is not the script's mistake).
+pub(crate) fn decode_content_type(bytes: &[u8], content_type: Option<&str>) -> String {
+    let enc = content_type
+        .and_then(label_of)
+        .and_then(|l| Encoding::for_label(l.trim().as_bytes()));
+    decode_bytes(bytes, enc)
 }
 
 fn lookup(fname: &str, label: &str) -> mlua::Result<&'static Encoding> {
