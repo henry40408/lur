@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791775431645,
+  "lastUpdate": 1791775712113,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4433,6 +4433,54 @@ window.BENCHMARK_DATA = {
             "name": "async_map_20k_limit_64",
             "value": 21779391,
             "range": "± 368292",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b02041e231a115fd3446b90ddfa321ff8a1623db",
+          "message": "feat(validate): add lur.validate schema toolkit with structured errors (#154)\n\n* feat(validate): add lur.validate schema toolkit with structured errors\n\nComposable str/int/number/bool/one_of/list/object/optional schemas, plain\nfunction validators, parse/try entry points and a {kind, message, issues}\nerror table. Table errors are raised through one Lua wrapper (capabilities/\nraise.rs) and survive pcall and lur.async combinators.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* fix(validate): drop async rescue trampoline, lock error metatable, honour optional defaults\n\n- Revert lur.async/runtime changes (xpcall trampoline cost +24-49% on\n  vm_cold_start/async_map/async.all); a table error raised inside an async\n  task now arrives as its message string (documented).\n- Compile the raise wrapper factory to bytecode once per process.\n- Error metatable is read-only with __metatable = false.\n- optional(x{default}) still fills the default.\n- Function validators raising a table without __tostring get a fixed message.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T11:25:58+08:00",
+          "tree_id": "51b5b951df743811b8dbbefef228e312f63eb002",
+          "url": "https://github.com/henry40408/lur/commit/b02041e231a115fd3446b90ddfa321ff8a1623db"
+        },
+        "date": 1791775711284,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 376358,
+            "range": "± 3554",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5912,
+            "range": "± 137",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 194320,
+            "range": "± 6824",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 21565915,
+            "range": "± 127663",
             "unit": "ns/iter"
           }
         ]
