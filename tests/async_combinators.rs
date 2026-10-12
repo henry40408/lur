@@ -427,6 +427,25 @@ fn error_table_survives_nested_combinators() {
 }
 
 #[test]
+fn wrapped_combinators_return_one_value_and_reuse_the_sentinel() {
+    // all/race/map return exactly one value (the wrapper's sentinel never
+    // escapes), and back-to-back raises each hand back their own table.
+    run_table_err(
+        "local t = {}\n\
+         assert(select('#', lur.async.all({ function() return 1 end })) == 1)\n\
+         assert(select('#', lur.async.race({ function() return nil end })) == 1)\n\
+         assert(lur.async.race({ function() return nil end }) == nil)\n\
+         assert(lur.async.race({ function() return t end }) == t)\n\
+         assert(select('#', lur.async.map({ 1 }, function(i) return i end)) == 1)\n\
+         for i, s in { 'a', 'b', 'c' } do\n\
+         \tlocal ok, e = pcall(lur.async.all, { function() return bad(s) end })\n\
+         \tassert(not ok and e.issues[1].message == 'must be an integer (got \"' .. s .. '\")', i)\n\
+         \tassert(lur.async.race({ function() return t end }) == t)\n\
+         end",
+    );
+}
+
+#[test]
 fn caught_then_reraised_table_survives() {
     run_table_err(
         "local ok, e = pcall(lur.async.all, { function()\n\

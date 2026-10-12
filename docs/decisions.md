@@ -195,7 +195,11 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   table's `__tostring` — ours — which records the table in a per-VM slot; the combinator
   takes it back right after the task fails and re-raises it, so
   `pcall` around `all`/`race`/`map` sees the table and `settled` returns it in `err`. This
-  costs nothing per task on success. Rejected: an `xpcall` trampoline around every task
+  costs nothing per task on success; per combinator call it costs one Lua wrapper frame,
+  whose inner function returns one value and signals failure by returning a private
+  sentinel table that carries the error (`raise::raising_hot`): returning `(true, value)`
+  instead measured ~700 extra instructions per `all` call (~+4% on `async_all_small`, vs
+  ~+2.5%). Rejected: an `xpcall` trampoline around every task
   (+24–49% on `vm_cold_start`, `async_map` and `async.all`, budget 5%), and recording the
   table at raise time (wrong after a task catches one error and later re-raises it while
   another task raised in between). Accepted limits: only `error_meta` tables are recovered

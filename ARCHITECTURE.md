@@ -41,7 +41,7 @@ One binary, two modes, one shared core:
 | `src/capabilities/storage/` | Backend seam: `Backend`/`Transaction` enums (`Sqlite`/`Postgres`), lazy `Shared` handle, `ExecResult`; `sqlite.rs` and `postgres.rs` own all backend-specific SQL, binding, row mapping, transactions, and kv. |
 | `src/capabilities/db.rs` | `lur.db` (`exec`/`query`/`tx`) over `storage::Backend`; hands `storage::Shared` to `kv`. |
 | `src/capabilities/validate.rs` | `lur.validate`: schema nodes (opaque userdata), `parse`/`try`, issue collection; pure compute. |
-| `src/capabilities/raise.rs` | The one way to raise a *table* as a Lua error (`raising`), give it a locked `__tostring` metatable (`error_meta`), and recover it after a `lur.async` task flattened it (`recover`). |
+| `src/capabilities/raise.rs` | The one way to raise a *table* as a Lua error (`raising`, or `raising_hot` + `Sentinel` on hot paths), give it a locked `__tostring` metatable (`error_meta`), and recover it after a `lur.async` task flattened it (`recover`). |
 | `src/capabilities/kv.rs` | `lur.kv` over the backend's kv methods; owns the `IN_KV_UPDATE` reentrancy guard. |
 
 ## Shared core: `build_lua`
@@ -342,7 +342,9 @@ the table if the error text is that `message`, alone or followed by a newline (w
 appends the traceback): any string starting with `message` + `"\n"` matches. Only the script
 can produce such a string, and a match only hands it back a table it already held, so this
 cannot forge an error.
-`all`/`race`/`map` are `raising` wrappers, so a recovered table is re-raised with
+`all`/`race`/`map` are `raising_hot` wrappers (the inner function returns one value, or a
+private per-VM sentinel table carrying the error, which the wrapper empties before raising;
+cheaper than `raising`'s `(ok, value)` pair), so a recovered table is re-raised with
 `error(tbl, 0)` and `pcall` around the combinator gets the same table (`.status`, `.issues`);
 `settled` puts it in `err`; `any` still aggregates failures as text. Other errors, including
 plain script tables without `error_meta`, pass through as before. Nesting works because the

@@ -68,9 +68,19 @@ pub(crate) fn recover(lua: &Lua, e: &mlua::Error) -> Option<Table> {
     is_flattened(e, &message).then_some(table)
 }
 
-/// Each wrapper is one closure call of the compiled factory.
+/// Each wrapper is one closure call of the compiled factory. With a `fail`
+/// sentinel (see [`raising_hot`]) the inner function returns one value.
 const FACTORY: &str = "local error = error
-return function(inner)
+return function(inner, fail)
+  if fail then
+    return function(a, b, c)
+      local r = inner(a, b, c)
+      if r ~= fail then return r end
+      r = fail[1]
+      fail[1] = nil
+      error(r, 0)
+    end
+  end
   return function(...)
     local ok, r = inner(...)
     if ok then return r end
@@ -100,6 +110,38 @@ pub(crate) fn factory(lua: &Lua) -> mlua::Result<Function> {
 /// the table with `error(tbl, 0)`.
 pub(crate) fn raising(factory: &Function, inner: Function) -> mlua::Result<Function> {
     factory.call(inner)
+}
+
+/// A private table only Rust and [`raising_hot`] wrappers hold. An inner
+/// function returns the error table through [`Sentinel::raise`] instead of
+/// `(false, tbl)`, so its success path returns one value: measured ~700
+/// instructions per call cheaper than `(true, value)` on `lur.async.all`.
+pub(crate) struct Sentinel(Table);
+
+impl Sentinel {
+    pub(crate) fn new(lua: &Lua) -> mlua::Result<Self> {
+        lua.create_table().map(Self)
+    }
+
+    /// The value an inner function returns to have its wrapper raise `err`.
+    /// The wrapper takes `err` back out before raising, so the sentinel never
+    /// holds a table past the call.
+    pub(crate) fn raise(&self, err: Table) -> mlua::Result<mlua::Value> {
+        self.0.raw_set(1, err)?;
+        Ok(mlua::Value::Table(self.0.clone()))
+    }
+}
+
+/// Wrap `inner` (taking at most 3 arguments; extra ones are dropped) so a
+/// returned [`Sentinel::raise`] value raises its table with `error(tbl, 0)`;
+/// any other value is returned as is. The sentinel is identity-compared and
+/// unreachable from scripts, so no script value can be mistaken for it.
+pub(crate) fn raising_hot(
+    factory: &Function,
+    inner: Function,
+    sentinel: &Sentinel,
+) -> mlua::Result<Function> {
+    factory.call((inner, sentinel.0.clone()))
 }
 
 /// Metatable for error tables: `tostring(err)` is `err.message`. Locked:

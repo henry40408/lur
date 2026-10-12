@@ -12,8 +12,8 @@
 //! Error tables (`lur.validate`, `lur.serve.abort`) raised in a task reach
 //! the combinator flattened to a string; [`fail`] recovers the table
 //! ([`raise::recover`]) and `all`/`race`/`map` re-raise it through a
-//! [`raise::raising`] wrapper, so `pcall` around the combinator sees the
-//! table. Nothing extra runs while tasks succeed.
+//! [`raise::raising_hot`] wrapper, so `pcall` around the combinator sees the
+//! table. While tasks succeed the only extra cost is that wrapper's frame.
 
 use std::future::Future;
 use std::ops::ControlFlow;
@@ -43,11 +43,11 @@ fn fail(lua: &Lua, e: mlua::Error) -> Failure {
     }
 }
 
-/// What a wrapped combinator's inner function returns: `(true, value)`,
-/// `(false, error_table)` for the wrapper to raise, or a plain `Err`.
-fn outcome(failure: Failure) -> mlua::Result<(bool, Value)> {
+/// What a wrapped combinator's inner function returns on failure: the
+/// sentinel carrying the error table for the wrapper to raise, or a plain `Err`.
+fn outcome(sentinel: &raise::Sentinel, failure: Failure) -> mlua::Result<Value> {
     match failure {
-        Failure::Table(t) => Ok((false, Value::Table(t))),
+        Failure::Table(t) => sentinel.raise(t),
         Failure::Other(e) => Err(e),
     }
 }
@@ -154,10 +154,14 @@ pub fn install(
     async_tbl.set("sleep", sleep).map_err(RunError::Init)?;
 
     // all: results in order; the first error re-raises and cancels the rest.
+    // Arc: cloned into every call, and a `Table` clone is a registry ref.
+    let sentinel = Arc::new(raise::Sentinel::new(lua).map_err(RunError::Init)?);
     let sem_all = sem.clone();
+    let fail_all = sentinel.clone();
     let all = lua
         .create_async_function(move |lua, tasks: Table| {
             let sem = sem_all.clone();
+            let sentinel = fail_all.clone();
             async move {
                 let funcs = task_list(&tasks)?;
                 let mut slots = vec![Value::Nil; funcs.len()];
@@ -175,17 +179,17 @@ pub fn install(
                 )
                 .await;
                 if let Some(f) = failed {
-                    return outcome(f);
+                    return outcome(&sentinel, f);
                 }
                 let arr = lua.create_table()?;
                 for (i, v) in slots.into_iter().enumerate() {
                     arr.set(i + 1, v)?;
                 }
-                Ok((true, Value::Table(arr)))
+                Ok(Value::Table(arr))
             }
         })
         .map_err(RunError::Init)?;
-    let all = raise::raising(factory, all).map_err(RunError::Init)?;
+    let all = raise::raising_hot(factory, all, &sentinel).map_err(RunError::Init)?;
     async_tbl.set("all", all).map_err(RunError::Init)?;
 
     // settled: never raises; { ok = true, value } / { ok = false, err } per task.
@@ -234,9 +238,11 @@ pub fn install(
 
     // race: the first task to settle wins, success or failure.
     let sem_race = sem.clone();
+    let fail_race = sentinel.clone();
     let race = lua
         .create_async_function(move |lua, tasks: Table| {
             let sem = sem_race.clone();
+            let sentinel = fail_race.clone();
             async move {
                 let funcs = task_list(&tasks)?;
                 if funcs.is_empty() {
@@ -250,13 +256,13 @@ pub fn install(
                 )
                 .await;
                 match first.expect("a non-empty race settles") {
-                    Ok(v) => Ok((true, v)),
-                    Err(f) => outcome(f),
+                    Ok(v) => Ok(v),
+                    Err(f) => outcome(&sentinel, f),
                 }
             }
         })
         .map_err(RunError::Init)?;
-    let race = raise::raising(factory, race).map_err(RunError::Init)?;
+    let race = raise::raising_hot(factory, race, &sentinel).map_err(RunError::Init)?;
     async_tbl.set("race", race).map_err(RunError::Init)?;
 
     // any: the first success wins; raises an aggregate error if all fail.
@@ -302,9 +308,11 @@ pub fn install(
     // bounds this call's in-flight tasks; `drop_errors` omits failed items
     // instead of failing fast.
     let sem_map = sem.clone();
+    let fail_map = sentinel.clone();
     let map = lua
         .create_async_function(move |lua, (list, func, opts): (Value, Value, Value)| {
             let global = sem_map.clone();
+            let sentinel = fail_map.clone();
             async move {
                 const F: &str = "lur.async.map";
                 let list: Table = argcheck::arg(&lua, list, F, 1, "table")?;
@@ -372,17 +380,17 @@ pub fn install(
                 )
                 .await;
                 if let Some(f) = failed {
-                    return outcome(f);
+                    return outcome(&sentinel, f);
                 }
                 let arr = lua.create_table()?;
                 for (n, v) in slots.into_iter().flatten().enumerate() {
                     arr.set(n + 1, v)?;
                 }
-                Ok((true, Value::Table(arr)))
+                Ok(Value::Table(arr))
             }
         })
         .map_err(RunError::Init)?;
-    let map = raise::raising(factory, map).map_err(RunError::Init)?;
+    let map = raise::raising_hot(factory, map, &sentinel).map_err(RunError::Init)?;
     async_tbl.set("map", map).map_err(RunError::Init)?;
 
     lur.set("async", async_tbl).map_err(RunError::Init)?;
