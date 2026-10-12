@@ -184,90 +184,10 @@ allowlists are additive (config ∪ flags). `~` in config paths expands to `$HOM
 Everything lives under the `lur` global. Failures, including policy denials, raise a
 Lua error (catch with `pcall`). Every `lur.*` table is read-only.
 
-Sections: [Validation](#validation-lurvalidate) · [Data & I/O](#data--io) ·
+Sections: [Data & I/O](#data--io) · [Validation](#validation-lurvalidate) ·
 [Capabilities](#capabilities-policy-gated) · [Storage](#storage-requires---db) ·
 [Concurrency](#concurrency) · [Server mode](#server-mode-lur-serve) ·
 [Diagnostics](#diagnostics)
-
-### Validation (`lur.validate`)
-
-Validate and convert untrusted input (query strings, JSON bodies) with small composable
-schemas. Pure compute, no policy, same in one-shot and serve mode. The result is always a
-new table; the input is never modified.
-
-#### Entry points
-
-| Call | Returns | On failure |
-| --- | --- | --- |
-| `parse(schema, value)` | converted value | raises `err` |
-| `try(schema, value)` | `true, converted` or `false, err` | returns the same `err` |
-
-#### Schemas
-
-`opts` is always optional.
-
-| Schema | Options | Accepts |
-| --- | --- | --- |
-| `str{ … }` | `pattern?`, `min_len?`, `max_len?`, `default?` | strings only (numbers are not coerced); `pattern` is a Lua pattern as in `string.find`, unanchored; lengths count characters |
-| `int{ … }` | `min?`, `max?`, `default?`, `clamp?` | a number with an integral value, or a string that is strictly `-?%d+`; \|n\| must be <= 2^53 |
-| `number{ … }` | `min?`, `max?`, `default?`, `clamp?` | finite numbers only; strings must be decimal floats |
-| `bool{ … }` | `default?` | a boolean, or the strings `"true"` / `"false"` |
-| `one_of{ … }` | the allowed values | strict equality over strings / numbers / booleans |
-| `list(item, opts?)` | `min_items?`, `max_items?` | an array whose items match `item` |
-| `object(fields, opts?)` | `strict?` | a table whose fields match `fields` |
-| `optional(schema)` | | `schema`, or an absent value |
-| `function(value) → value` | | a plain function is a schema anywhere one is accepted; raising rejects (the message, minus its position, becomes the issue message) |
-
-- `clamp = true` clamps into `[min, max]` instead of failing.
-- Unknown `object` keys are dropped; `strict = true` makes them issues.
-- Bad arguments (unknown option, `min > max`) raise `lur.validate.<fn>: …`.
-- Schemas nest at most 64 levels.
-
-#### Missing values and defaults
-
-- Values are required unless wrapped in `optional(...)` or given a `default` (which fills
-  a missing value as-is).
-- For `int`/`number`/`bool`, `""` counts as missing, so `?limit=` falls back to the default.
-- `optional(x)` only waives "required": an inner `default` still fills.
-- A `lur.null` (JSON `null`) given for an object field or the root counts as absent:
-  `optional` yields `nil`, `default` fills, and a required value reports `is required`.
-  Function validators still receive the raw `lur.null`, and `null` list items are not
-  absent (they fail normally).
-- `default` values are returned as given, not checked against `min`/`max`/`pattern`.
-- A function validator's result is used as is, so returning (or mutating) its input table
-  aliases it — the input is not deep-copied there.
-
-#### Errors
-
-On failure `err` is a table:
-
-```lua
-{ kind = "validation", message = "…", issues = { { path = "a.b[2].c", message = "…" }, … } }
-```
-
-- All issues are collected; paths read `a.b[2].c`, the root is `""`.
-- At most 100 issues are kept, then `truncated = true`.
-- `tostring(err)` is `message`, an uncaught one prints that message, and it is catchable
-  with `pcall`.
-- Raised inside a `lur.async` task it reaches the combinator's caller as a plain string
-  (its message), not a table; use `try` there.
-
-#### Examples
-
-```lua
-local v = lur.validate
-local q = v.parse(v.object({
-  q = v.str({ min_len = 1 }),
-  limit = v.int({ min = 1, max = 100, default = 20 }),
-}), { q = "luau", limit = "5" })           -- { q = "luau", limit = 5 }
-print(q.q, q.limit)
-```
-
-```lua
-local v = lur.validate
-local ok, err = v.try(v.int({ max = 10 }), "11")
-print(ok, err.issues[1].message)           -- false   must be <= 10
-```
 
 ### Data & I/O
 
@@ -511,6 +431,86 @@ newline-stripped lines.
 `positional` (1-indexed array) and `flags` (`--name value`/`--name=value` → `"value"`,
 bare `--flag` → `true`). Read-only, like every `lur.*` table; copy into a local table to
 modify.
+
+### Validation (`lur.validate`)
+
+Validate and convert untrusted input (query strings, JSON bodies) with small composable
+schemas. Pure compute, no policy, same in one-shot and serve mode. The result is always a
+new table; the input is never modified.
+
+#### Entry points
+
+| Call | Returns | On failure |
+| --- | --- | --- |
+| `parse(schema, value)` | converted value | raises `err` |
+| `try(schema, value)` | `true, converted` or `false, err` | returns the same `err` |
+
+#### Schemas
+
+`opts` is always optional.
+
+| Schema | Options | Accepts |
+| --- | --- | --- |
+| `str{ … }` | `pattern?`, `min_len?`, `max_len?`, `default?` | strings only (numbers are not coerced); `pattern` is a Lua pattern as in `string.find`, unanchored; lengths count characters |
+| `int{ … }` | `min?`, `max?`, `default?`, `clamp?` | a number with an integral value, or a string that is strictly `-?%d+`; \|n\| must be <= 2^53 |
+| `number{ … }` | `min?`, `max?`, `default?`, `clamp?` | finite numbers only; strings must be decimal floats |
+| `bool{ … }` | `default?` | a boolean, or the strings `"true"` / `"false"` |
+| `one_of{ … }` | the allowed values | strict equality over strings / numbers / booleans |
+| `list(item, opts?)` | `min_items?`, `max_items?` | an array whose items match `item` |
+| `object(fields, opts?)` | `strict?` | a table whose fields match `fields` |
+| `optional(schema)` | | `schema`, or an absent value |
+| `function(value) → value` | | a plain function is a schema anywhere one is accepted; raising rejects (the message, minus its position, becomes the issue message) |
+
+- `clamp = true` clamps into `[min, max]` instead of failing.
+- Unknown `object` keys are dropped; `strict = true` makes them issues.
+- Bad arguments (unknown option, `min > max`) raise `lur.validate.<fn>: …`.
+- Schemas nest at most 64 levels.
+
+#### Missing values and defaults
+
+- Values are required unless wrapped in `optional(...)` or given a `default` (which fills
+  a missing value as-is).
+- For `int`/`number`/`bool`, `""` counts as missing, so `?limit=` falls back to the default.
+- `optional(x)` only waives "required": an inner `default` still fills.
+- A `lur.null` (JSON `null`) given for an object field or the root counts as absent:
+  `optional` yields `nil`, `default` fills, and a required value reports `is required`.
+  Function validators still receive the raw `lur.null`, and `null` list items are not
+  absent (they fail normally).
+- `default` values are returned as given, not checked against `min`/`max`/`pattern`.
+- A function validator's result is used as is, so returning (or mutating) its input table
+  aliases it — the input is not deep-copied there.
+
+#### Errors
+
+On failure `err` is a table:
+
+```lua
+{ kind = "validation", message = "…", issues = { { path = "a.b[2].c", message = "…" }, … } }
+```
+
+- All issues are collected; paths read `a.b[2].c`, the root is `""`.
+- At most 100 issues are kept, then `truncated = true`.
+- `tostring(err)` is `message`, an uncaught one prints that message, and it is catchable
+  with `pcall`.
+- Raised inside a `lur.async` task it reaches the combinator's caller as a plain string
+  (its message), not a table; use `try` there.
+
+#### Examples
+
+```lua
+local v = lur.validate
+local q = v.parse(v.object({
+  q = v.str({ min_len = 1 }),
+  limit = v.int({ min = 1, max = 100, default = 20 }),
+}), { q = "luau", limit = "5" })           -- { q = "luau", limit = 5 }
+print(q.q, q.limit)
+```
+
+```lua
+local v = lur.validate
+local ok, err = v.try(v.int({ max = 10 }), "11")
+print(ok, err.issues[1].message)           -- false   must be <= 10
+```
 
 ### Capabilities (policy-gated)
 
