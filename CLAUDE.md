@@ -46,3 +46,7 @@ Violating these compiles but breaks the sandbox or the pool.
 - Integration tests: one file per surface under `tests/`; unit tests inline.
 - Design rationale, rejected alternatives, and known limitations live in
   [docs/decisions.md](docs/decisions.md); update it when making a non-obvious design call.
+- Docs ship with the change: a user-visible behaviour or `lur.*` API change updates, in the
+  same PR, [README.md](README.md) (reference) and [docs/GUIDE.md](docs/GUIDE.md) (examples;
+  every `lua` block is a test in `tests/guide.rs`). A change to an invariant, module or
+  lifecycle updates [ARCHITECTURE.md](ARCHITECTURE.md).
