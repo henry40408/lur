@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791784878345,
+  "lastUpdate": 1791785238704,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4721,6 +4721,54 @@ window.BENCHMARK_DATA = {
             "name": "async_map_20k_limit_64",
             "value": 21295806,
             "range": "± 266807",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cf6183318196618e1f2938ab69acf329a9b85381",
+          "message": "docs(claude): require docs to ship with behaviour changes (#160)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T14:04:46+08:00",
+          "tree_id": "8d1c9463ab744c006db031ec516ad60397e1b14a",
+          "url": "https://github.com/henry40408/lur/commit/cf6183318196618e1f2938ab69acf329a9b85381"
+        },
+        "date": 1791785238127,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 390633,
+            "range": "± 2592",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5843,
+            "range": "± 55",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 185855,
+            "range": "± 2314",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 20746910,
+            "range": "± 212846",
             "unit": "ns/iter"
           }
         ]
