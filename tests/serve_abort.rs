@@ -348,6 +348,96 @@ fn valid_query_with_non_object_schema_gets_req_query() {
 }
 
 #[test]
+fn abort_with_cyclic_or_very_deep_data_is_a_catchable_error() {
+    let s = serve(
+        "local function deep(n) local t = {} local cur = t for _ = 1, n do cur.x = {} cur = cur.x end return t end\n\
+         lur.serve.http('GET', '/cyclic', function()\n\
+         \tlocal t = {} t.self = t\n\
+         \tlur.serve.abort(400, 'x', t)\n\
+         end)\n\
+         lur.serve.http('GET', '/deep', function()\n\
+         \tlur.serve.abort(400, 'x', deep(200))\n\
+         end)\n\
+         lur.serve.http('GET', '/caught', function()\n\
+         \tlocal t = {} t.self = t\n\
+         \tlocal ok, e = pcall(lur.serve.abort, 400, 'x', t)\n\
+         \treturn { body = tostring(ok) .. ':' .. tostring(e):match('^[^\\n]*') }\n\
+         end)\n\
+         lur.serve.http('GET', '/ok', function()\n\
+         \tlur.serve.abort(400, 'x', deep(50))\n\
+         end)",
+    );
+    for p in ["/cyclic", "/deep"] {
+        let e = get_err(&s, p, "");
+        assert!(e.contains("cyclic or nested deeper"), "{p}: {e}");
+    }
+    let text = body(&get(&s, "/caught", ""));
+    assert!(
+        text.starts_with("false:") && text.contains("not JSON-encodable"),
+        "{text}"
+    );
+    // Reasonable nesting still works.
+    assert_eq!(get(&s, "/ok", "").status, 400);
+}
+
+#[test]
+fn json_encode_rejects_cycles_and_extreme_depth_but_allows_normal_nesting() {
+    let rt = lur::runtime::Runtime::new().expect("runtime builds");
+    rt.run(
+        "local t = {} t.self = t\n\
+         local ok, e = pcall(lur.json.encode, t)\n\
+         assert(not ok and tostring(e):find('cyclic'), tostring(e))\n\
+         local d, cur = {}, nil\n\
+         cur = d\n\
+         for _ = 1, 200 do cur.x = {} cur = cur.x end\n\
+         local ok2, e2 = pcall(lur.json.encode, d)\n\
+         assert(not ok2 and tostring(e2):find('deeper'), tostring(e2))\n\
+         local n, c = {}, nil\n\
+         c = n\n\
+         for _ = 1, 100 do c.x = {} c = c.x end\n\
+         assert(#lur.json.encode(n) > 100)\n\
+         local arr = { { { { 1 } } } }\n\
+         assert(lur.json.encode(arr) == '[[[[1]]]]')",
+    )
+    .expect("script passes");
+}
+
+#[test]
+fn overwriting_validate_try_cannot_forge_later_requests() {
+    let s = serve(
+        "local v = lur.validate\n\
+         lur.serve.http('GET', '/poison', function()\n\
+         \tlocal ok = pcall(function() lur.validate.try = function() return true, { forged = true } end end)\n\
+         \treturn { body = tostring(ok) }\n\
+         end)\n\
+         lur.serve.http('GET', '/s', function(req)\n\
+         \tlocal q = req.valid_query(v.object({ n = v.int() }))\n\
+         \treturn { body = tostring(q.n) }\n\
+         end)",
+    );
+    get(&s, "/poison", "");
+    assert_eq!(body(&get(&s, "/s", "n=5")), "5");
+    assert_eq!(get(&s, "/s", "n=x").status, 400);
+}
+
+#[test]
+fn readme_valid_query_example_behaves_as_documented() {
+    let s = serve(
+        "lur.serve.http('GET', '/users', function(req)\n\
+         \tlocal v = lur.validate\n\
+         \tlocal q = req.valid_query(v.object({\n\
+         \t\tlimit = v.int({ min = 1, max = 100, default = 20 }),\n\
+         \t\ttag = v.optional(v.list(v.str())),\n\
+         \t}))\n\
+         \tif not q.tag then lur.serve.abort(422, 'need at least one tag') end\n\
+         \treturn { body = lur.json.encode(q) }\n\
+         end)",
+    );
+    assert_eq!(get(&s, "/users", "").status, 422);
+    assert_eq!(get(&s, "/users", "tag=a&tag=b").status, 200);
+}
+
+#[test]
 fn valid_timeout_in_validator_is_not_a_4xx() {
     let s = Server::load(
         "lur.serve.http('GET', '/slow', function(req)\n\

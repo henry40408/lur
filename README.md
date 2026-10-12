@@ -442,9 +442,9 @@ lur.serve.http("GET", "/users", function(req)
   local v = lur.validate
   local q = req.valid_query(v.object({
     limit = v.int({ min = 1, max = 100, default = 20 }),
-    tag = v.list(v.str()),
+    tag = v.optional(v.list(v.str())), -- absent => nil (a plain list is required)
   }))
-  if #q.tag == 0 then lur.serve.abort(422, "need at least one tag") end
+  if not q.tag then lur.serve.abort(422, "need at least one tag") end
   return { body = lur.json.encode(q) }
 end)
 

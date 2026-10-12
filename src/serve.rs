@@ -512,10 +512,17 @@ enum CallError {
 /// The JSON response for an uncaught abort. A 4xx is the client's doing, so
 /// it is logged at `info`; a 5xx chosen by the script at `warn`.
 fn abort_response(a: PendingAbort) -> Response {
-    if a.status >= 500 {
-        warn!("handler aborted with {}: {}", a.status, a.message);
+    // The message can carry client input; keep the log line bounded.
+    let shown: String = a.message.chars().take(200).collect();
+    let ellipsis = if shown.len() < a.message.len() {
+        "…"
     } else {
-        info!("handler aborted with {}: {}", a.status, a.message);
+        ""
+    };
+    if a.status >= 500 {
+        warn!("handler aborted with {}: {shown}{ellipsis}", a.status);
+    } else {
+        info!("handler aborted with {}: {shown}{ellipsis}", a.status);
     }
     Response {
         status: a.status,
@@ -1022,11 +1029,7 @@ fn valid_fn(lua: &Lua, req: &mlua::Table, query: bool) -> mlua::Result<Value> {
             mlua::Error::runtime(format!("{fname} is only available under `lur serve`"))
         })?;
     let factory = ctx.factory.clone();
-    let try_fn: Function = lua
-        .globals()
-        .get::<mlua::Table>("lur")?
-        .get::<mlua::Table>("validate")?
-        .get("try")?;
+    let try_fn = ctx.try_fn.clone();
     let source: mlua::Table = req.raw_get(if query { "query" } else { "params" })?;
     let query_all: Option<mlua::Table> = if query {
         req.raw_get("query_all")?

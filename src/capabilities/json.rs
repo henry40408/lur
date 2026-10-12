@@ -101,7 +101,15 @@ pub(crate) fn json_to_lua(lua: &Lua, value: &Json, drop_null: bool) -> mlua::Res
     }
 }
 
+/// Nesting cap for encoding. A cyclic table would otherwise recurse until the
+/// native stack overflows and kills the process, so a cycle simply hits this.
+const MAX_ENCODE_DEPTH: usize = 128;
+
 pub(crate) fn lua_to_json(value: &Value) -> mlua::Result<Json> {
+    encode_value(value, 0)
+}
+
+fn encode_value(value: &Value, depth: usize) -> mlua::Result<Json> {
     match value {
         Value::Nil => Ok(Json::Null),
         Value::Boolean(b) => Ok(Json::Bool(*b)),
@@ -114,7 +122,14 @@ pub(crate) fn lua_to_json(value: &Value) -> mlua::Result<Json> {
             )),
         },
         Value::UserData(_) if null::is_null(value) => Ok(Json::Null),
-        Value::Table(t) => table_to_json(t),
+        Value::Table(t) => {
+            if depth >= MAX_ENCODE_DEPTH {
+                return Err(Error::runtime(format!(
+                    "lur.json.encode: value is cyclic or nested deeper than {MAX_ENCODE_DEPTH} levels"
+                )));
+            }
+            table_to_json(t, depth + 1)
+        }
         other => Err(Error::runtime(format!(
             "lur.json.encode: cannot encode a {} value",
             other.type_name()
@@ -138,7 +153,7 @@ fn number_to_json(f: f64) -> mlua::Result<Json> {
 }
 
 /// Array iff the keys are exactly `1..#t`; otherwise (and when empty) an object.
-fn table_to_json(t: &Table) -> mlua::Result<Json> {
+fn table_to_json(t: &Table, depth: usize) -> mlua::Result<Json> {
     let len = t.raw_len();
     let mut count = 0usize;
     let mut in_sequence = true;
@@ -160,7 +175,7 @@ fn table_to_json(t: &Table) -> mlua::Result<Json> {
     if len > 0 && in_sequence && count == len {
         let mut arr = Vec::with_capacity(len);
         for i in 1..=len {
-            arr.push(lua_to_json(&t.raw_get::<Value>(i as i64)?)?);
+            arr.push(encode_value(&t.raw_get::<Value>(i as i64)?, depth)?);
         }
         return Ok(Json::Array(arr));
     }
@@ -179,7 +194,7 @@ fn table_to_json(t: &Table) -> mlua::Result<Json> {
                 ));
             }
         };
-        map.insert(key, lua_to_json(&v)?);
+        map.insert(key, encode_value(&v, depth)?);
     }
     Ok(Json::Object(map))
 }

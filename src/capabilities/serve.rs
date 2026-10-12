@@ -39,6 +39,9 @@ pub(crate) struct ServeCtx {
     pub slot: AbortSlot,
     pub factory: Function,
     pub meta: Table,
+    /// `lur.validate.try` as installed, so a script that overwrites the
+    /// (per-request writable) `lur` table cannot forge validation results.
+    pub try_fn: Function,
 }
 
 /// Status must be an integer in `400..=599`.
@@ -71,12 +74,13 @@ pub(crate) fn abort_table(
     message: &str,
     data: Value,
 ) -> mlua::Result<Table> {
-    let mut slot = ctx.slot.lock().expect("abort slot poisoned");
-    if !slot.in_request {
+    let in_request = ctx.slot.lock().expect("abort slot poisoned").in_request;
+    if !in_request {
         return Err(mlua::Error::runtime(
             "lur.serve.abort: no request to abort (only valid inside an HTTP handler)",
         ));
     }
+    // Encode before taking the lock again; `data` can be large.
     let mut body = serde_json::Map::new();
     body.insert(
         "error".into(),
@@ -90,12 +94,11 @@ pub(crate) fn abort_table(
     }
     let body = serde_json::to_vec(&serde_json::Value::Object(body))
         .map_err(|e| mlua::Error::runtime(format!("lur.serve.abort: {e}")))?;
-    slot.pending = Some(PendingAbort {
+    ctx.slot.lock().expect("abort slot poisoned").pending = Some(PendingAbort {
         status,
         message: message.to_owned(),
         body,
     });
-    drop(slot);
 
     let err = lua.create_table()?;
     err.set("kind", "abort")?;
@@ -160,6 +163,10 @@ pub fn install(lua: &Lua, lur: &Table, registry: Option<&Registry>) -> Result<()
                 slot: registry.abort_slot(),
                 factory: raise::factory(lua).map_err(RunError::Init)?,
                 meta: raise::error_meta(lua).map_err(RunError::Init)?,
+                try_fn: lur
+                    .get::<Table>("validate")
+                    .and_then(|v| v.get::<Function>("try"))
+                    .map_err(RunError::Init)?,
             };
             let inner = {
                 let ctx = ctx.clone();

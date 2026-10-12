@@ -207,8 +207,10 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   uncontended locks per run. Rejected: an `xpcall` trampoline per handler/task (+24%
   async cost, see above) and encoding the status into the error string (spoofable by any
   `error("...")`, visible in logs). The message match means a script that catches an abort
-  and re-raises a string with the identical message is still treated as that abort; that
-  is harmless (same status the script chose earlier). Because it matches by message, an
+  and re-raises a string with the identical message is still treated as that abort; the
+  status is the one the script chose earlier, but the body is the earlier abort's, so a
+  later plain `error()` whose text equals a swallowed abort's message in the same run
+  returns that abort's `data` (script-only: only the script itself can cause it). Because it matches by message, an
   abort raised inside a `lur.async` task, whose table the combinator's caller only sees as
   a string, is still honored when uncaught. A bare `lur.validate.parse` that fails
   uncaught in a handler stays a **500** on purpose: it signals a bug (or an unchecked
