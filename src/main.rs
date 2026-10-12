@@ -135,7 +135,7 @@ struct CommonFlags {
     db: Option<PathBuf>,
 
     /// Cap on concurrently in-flight lur.async.* tasks per VM (unbounded if omitted).
-    #[arg(long = "max-concurrency", value_name = "N")]
+    #[arg(long = "max-concurrency", value_name = "N", value_parser = parse_max_concurrency)]
     max_concurrency: Option<usize>,
 
     /// Load a policy config file (default: `$XDG_CONFIG_HOME/lur/config`, else
@@ -214,6 +214,16 @@ struct ServeCli {
 
 fn default_pool_size() -> usize {
     std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
+}
+
+/// `--max-concurrency` must be at least 1: a zero-permit semaphore would park
+/// every task until the timeout.
+fn parse_max_concurrency(s: &str) -> Result<usize, String> {
+    match s.parse::<usize>() {
+        Ok(0) => Err("must be at least 1".to_owned()),
+        Ok(n) => Ok(n),
+        Err(e) => Err(format!("invalid number '{s}': {e}")),
+    }
 }
 
 /// `--config` must exist; the default location is optional.

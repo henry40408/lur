@@ -321,6 +321,17 @@ fn max_concurrency_caps_inflight_async_tasks() {
 }
 
 #[test]
+fn max_concurrency_zero_is_rejected() {
+    lur()
+        .arg("--max-concurrency")
+        .arg("0")
+        .arg(fixture("ok.lua"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--max-concurrency"));
+}
+
+#[test]
 fn async_tasks_are_uncapped_by_default() {
     // Uncapped: peak == task count (6).
     lur()

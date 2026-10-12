@@ -134,7 +134,7 @@ lur docs                               # print the embedded usage guide
 | `--http-cache-max-bytes` | SIZE | `64m` | Cap on the total size of cached `lur.http` responses; `0` = unlimited. |
 | `--state-max-entries` | N | `0` | Cap on `lur.state` entries; only `evictable` ones are dropped for room, otherwise the write raises; `0` = unlimited. |
 | `--state-max-bytes` | SIZE | `0` | Cap on the total size of `lur.state`; same rule; `0` = unlimited. |
-| `--max-concurrency` | N | unbounded | Cap on in-flight `lur.async.*` tasks per VM. |
+| `--max-concurrency` | N (>= 1) | unbounded | Cap on in-flight `lur.async.*` tasks per VM. |
 | `--db` | PATH or URL | | SQLite file or `postgres://`/`postgresql://` URL backing `lur.db` / `lur.kv`. |
 | `--config` | FILE | | Load a specific config file. Conflicts with `--no-config`. |
 | `--no-config` | — | | Ignore all config — pure strict, zero grants. |
