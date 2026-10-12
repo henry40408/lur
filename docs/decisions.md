@@ -183,7 +183,13 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   message), because mlua flattens error values crossing `call_async`; an `xpcall`
   trampoline around every task fixed that but cost +24–49% on `vm_cold_start`,
   `async_map` and `async.all` (budget 5%), so it was rejected — use `try` inside tasks.
-  `optional` only waives "required" (an inner `default` still fills); `default` values are
+  `optional` only waives "required" (an inner `default` still fills). `lur.null` is treated
+  as absent for object fields and the root (normalized in `check_object` / the entry
+  point, so `optional`/`default` see `nil` and a required field says "is required" rather
+  than a type error); it is deliberately *not* normalized for list items, where silently
+  dropping a `null` would change the list, and function validators keep seeing the raw
+  value. This is what makes `req.valid_body` accept the usual JSON clients that send
+  `{"x": null}`. `default` values are
   not checked against `min`/`max`/`pattern`; a function validator's returned table is not
   copied, so it may alias its input. Rejected: raising a Rust error (scripts would get an
   opaque userdata), a global `pcall`, and a regex crate. Not done: coercion defaults beyond
@@ -355,8 +361,10 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   unless `--timeout` is set.
 - Cron: UTC only (no timezone setting), in-memory schedule, no missed-run replay, no
   `@every` interval syntax.
-- Not implemented: streaming response bodies / `lur.http` downloads, multipart bodies (`req.valid_body` answers 415; no `req.multipart`), retries,
-  cookie jar, proxies, a TLS-verification opt-out, managed migrations, in-memory DB, named SQL params, socket/queue trigger sources, `lur.serve.on_start`,
+- Not implemented: streaming response bodies / `lur.http` downloads, multipart bodies
+  (`req.valid_body` answers 415; no `req.multipart`), retries, cookie jar, proxies, a
+  TLS-verification opt-out, managed migrations, in-memory DB, named SQL params,
+  socket/queue trigger sources, `lur.serve.on_start`,
   configurable SQLite `busy_timeout`, machine-readable (`--error-format=json`) diagnostics,
   symmetric/asymmetric crypto and KDFs, signed cookies, `lur docs <section>`.
 - `chrono` → `jiff` migration is blocked on replacing the `cron` crate.

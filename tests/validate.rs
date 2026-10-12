@@ -539,6 +539,38 @@ assert(ok and out == nil)
     );
 }
 
+#[test]
+fn null_is_absent_for_fields_and_root() {
+    run_with_prelude(
+        r#"
+local n = lur.null
+local s = v.object({
+  name = v.optional(v.str()),
+  age = v.int({ default = 7 }),
+  inner = v.optional(v.object({ a = v.optional(v.int()), b = v.str({ default = "d" }) })),
+  must = v.str(),
+})
+local out = good(s, { name = n, age = n, inner = { a = n, b = n }, must = "x" })
+assert(out.name == nil and out.age == 7 and out.inner.a == nil and out.inner.b == "d")
+assert(good(s, { inner = n, must = "x" }).inner == nil)
+-- non-optional field given null: required, not a type error
+assert(msg(s, { must = n }) == "must|is required")
+-- root
+local ok, o = v.try(v.optional(v.str()), n)
+assert(ok and o == nil)
+assert(msg(v.str(), n) == "|is required")
+assert(good(v.str({ default = "z" }), n) == "z")
+-- list items: null is a normal failure, not absence
+assert(msg(v.list(v.str()), { "a", n }) == "[2]|must be a string")
+assert(msg(v.list(v.optional(v.str())), { n }) == "[1]|must be a string")
+-- function validators still see the raw null
+local seen
+good(v.object({ f = function(x) seen = x return x end }), { f = n })
+assert(seen == n)
+"#,
+    );
+}
+
 mod cli {
     use assert_cmd::Command;
     use predicates::prelude::*;

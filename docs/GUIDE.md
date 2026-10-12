@@ -616,8 +616,9 @@ body? }`, where a header value is a string or an array of strings.
 `serve.cron(spec, handler, opts?)` takes a 6-field cron spec and optional
 `name`/`overlap`/`timeout`. `req` has `method`, `path`, `origin`, `url`,
 `params`, `query`, `query_all`, `headers`, `cookies`, `body`, `json()`,
-`form()`, `form_all()`, and `read(n)`. `origin`/`url` come from `Host` and `X-Forwarded-Proto` (`nil`
-without a valid `Host`); they are client-controlled, so use them for links only.
+`form()`, `form_all()`, and `read(n)`. `origin`/`url` come from `Host` and
+`X-Forwarded-Proto` (`nil` without a valid `Host`); they are client-controlled, so use
+them for links only.
 
 `serve.abort(status, message, data?)` ends the handler with an error response: `status`
 is an integer in 400–599 and the client gets `{"error": message, "data": data}` as JSON

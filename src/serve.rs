@@ -1277,17 +1277,15 @@ fn valid_body_fn(
                         (Value::Table(input), false)
                     }
                     _ => {
-                        let data = lua.create_table()?;
-                        if let Some(mt) = &mt {
-                            data.set("content_type", mt.as_str())?;
-                        }
-                        let err = abort_table(
-                            &lua,
-                            &ctx,
-                            415,
-                            "unsupported content type",
-                            Value::Table(data),
-                        )?;
+                        let data = match &mt {
+                            Some(mt) => {
+                                let data = lua.create_table()?;
+                                data.set("content_type", mt.as_str())?;
+                                Value::Table(data)
+                            }
+                            None => Value::Nil,
+                        };
+                        let err = abort_table(&lua, &ctx, 415, "unsupported content type", data)?;
                         return Ok((false, Value::Table(err)));
                     }
                 }

@@ -342,3 +342,111 @@ fn form_and_valid_body_respect_max_body() {
     );
     assert_eq!(r.status, 413);
 }
+
+fn post_headers(s: &Server, path: &str, headers: Vec<(&str, &str)>, body: &str) -> Response {
+    s.dispatch_raw(&RawRequest {
+        method: "POST".into(),
+        path: path.into(),
+        headers: headers
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect(),
+        body: body.as_bytes().to_vec(),
+        ..Default::default()
+    })
+    .expect("dispatch ok")
+}
+
+#[test]
+fn valid_body_json_null_is_absent_for_optional_and_default() {
+    let s = serve(
+        "local v = lur.validate\n\
+         lur.serve.http('POST', '/n', function(req)\n\
+         \tlocal b = req.valid_body(v.object({\n\
+         \t\tname = v.optional(v.str()),\n\
+         \t\tn = v.int({ default = 5 }),\n\
+         \t\tneed = v.str(),\n\
+         \t}))\n\
+         \treturn { body = tostring(b.name) .. '|' .. b.n .. '|' .. b.need }\n\
+         end)\n\
+         lur.serve.http('POST', '/root', function(req)\n\
+         \tlocal b = req.valid_body(v.optional(v.object({ a = v.int() })))\n\
+         \treturn { body = tostring(b) }\n\
+         end)\n\
+         lur.serve.http('POST', '/rootreq', function(req)\n\
+         \treq.valid_body(v.object({ a = v.int() }))\n\
+         end)",
+    );
+    let j = Some("application/json");
+    let r = post_ct(&s, "/n", j, r#"{"name":null,"n":null,"need":"x"}"#);
+    assert_eq!(r.status, 200, "{}", text(&r));
+    assert_eq!(text(&r), "nil|5|x");
+    // Non-optional null: "is required".
+    let r = post_ct(&s, "/n", j, r#"{"need":null}"#);
+    assert_eq!(r.status, 400);
+    let body: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+    assert_eq!(body["data"][0]["path"], "need");
+    assert_eq!(body["data"][0]["message"], "is required");
+    // Top level.
+    let r = post_ct(&s, "/root", j, "null");
+    assert_eq!(r.status, 200);
+    assert_eq!(text(&r), "nil");
+    assert_eq!(post_ct(&s, "/rootreq", j, "null").status, 400);
+}
+
+#[test]
+fn valid_body_only_json_and_plus_json_types_are_json() {
+    let s = serve(VALID);
+    for ct in ["text/json", "application/x-json", "application/jsonp"] {
+        let r = post_ct(&s, "/v", Some(ct), r#"{"name":"a","age":1}"#);
+        assert_eq!(r.status, 415, "{ct}");
+    }
+}
+
+#[test]
+fn missing_content_type_415_has_no_data() {
+    let s = serve(VALID);
+    let r = post_ct(&s, "/v", None, "x");
+    assert_eq!(r.status, 415);
+    assert_eq!(text(&r), r#"{"error":"unsupported content type"}"#);
+}
+
+#[test]
+fn duplicate_content_type_header_last_one_wins() {
+    let s = serve(VALID);
+    let r = post_headers(
+        &s,
+        "/v",
+        vec![
+            ("Content-Type", "text/plain"),
+            ("content-type", "application/json"),
+        ],
+        r#"{"name":"a","age":1}"#,
+    );
+    assert_eq!(r.status, 200, "{}", text(&r));
+    let r = post_headers(
+        &s,
+        "/v",
+        vec![
+            ("Content-Type", "application/json"),
+            ("content-type", "text/plain"),
+        ],
+        r#"{"name":"a","age":1}"#,
+    );
+    assert_eq!(r.status, 415);
+}
+
+#[test]
+fn form_semicolon_is_not_a_separator_and_percent_00_is_a_nul_byte() {
+    let s = serve(
+        "lur.serve.http('POST', '/f', function(req)\n\
+         \tlocal f = req.form()\n\
+         \tlocal keys = 0\n\
+         \tfor _ in pairs(f) do keys = keys + 1 end\n\
+         \treturn { body = keys .. '|' .. f.a .. '|' .. #f.z .. '|' .. f.z:byte(2) }\n\
+         end)",
+    );
+    let r = form(&s, "a=1;b=2&z=x%00y");
+    assert_eq!(r.status, 200, "{}", text(&r));
+    assert_eq!(text(&r), "2|1;b=2|3|0");
+}
