@@ -615,8 +615,8 @@ and `/feed/lua`; absent is `nil`). The handler returns `{ status?, headers?,
 body? }`, where a header value is a string or an array of strings.
 `serve.cron(spec, handler, opts?)` takes a 6-field cron spec and optional
 `name`/`overlap`/`timeout`. `req` has `method`, `path`, `origin`, `url`,
-`params`, `query`, `query_all`, `headers`, `cookies`, `body`, `json()`, and
-`read(n)`. `origin`/`url` come from `Host` and `X-Forwarded-Proto` (`nil`
+`params`, `query`, `query_all`, `headers`, `cookies`, `body`, `json()`,
+`form()`, `form_all()`, and `read(n)`. `origin`/`url` come from `Host` and `X-Forwarded-Proto` (`nil`
 without a valid `Host`); they are client-controlled, so use them for links only.
 
 `serve.abort(status, message, data?)` ends the handler with an error response: `status`
@@ -626,6 +626,12 @@ is an integer in 400–599 and the client gets `{"error": message, "data": data}
 an HTTP handler. `req.valid_query(schema, opts?)` / `req.valid_params(schema, opts?)`
 validate `req.query` / `req.params` with `lur.validate` and abort with `opts.fail_status`
 (default 400) and `data = issues` on failure; `list(...)` fields read `query_all`.
+
+`req.form()` parses an `application/x-www-form-urlencoded` body into `{key = last value}`
+(`req.form_all()` gives `{key = {values...}}`); any other content type raises.
+`req.valid_body(schema, opts?)` validates a JSON or urlencoded body by `Content-Type`
+(`list(...)` fields read every form value) and answers 415 for other types, 400
+`invalid JSON body` for malformed JSON, and `opts.fail_status` (default 400) for issues.
 
 ```lua ignore
 lur.serve.http("POST", "/echo", function(req)
@@ -647,6 +653,17 @@ lur.serve.http("GET", "/items/:id", function(req)
     lur.serve.abort(410, "gone", { id = p.id })
   end
   return { body = lur.json.encode({ id = p.id, limit = q.limit, tags = q.tag }) }
+end)
+
+lur.serve.http("POST", "/signup", function(req)
+  local v = lur.validate
+  -- JSON or urlencoded; anything else is a 415
+  local b = req.valid_body(v.object({
+    email = v.str(),
+    age = v.int({ min = 13 }),
+    interests = v.optional(v.list(v.str())),
+  }), { fail_status = 422 })
+  return { status = 201, body = lur.json.encode(b) }
 end)
 
 lur.serve.cron("0 */5 * * * *", function()

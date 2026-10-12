@@ -423,8 +423,25 @@ Handlers are registered once at load time.
 and `X-Forwarded-Proto`; `nil` without a valid `Host`; client-controlled, so for links only),
 `params`, `query` (last value per key), `query_all` (all
 values), `headers` (lowercased), `cookies` (parsed `Cookie`; empty table if absent),
-`body` (raw bytes), and `json()`. `read(n)` streams large bodies in chunks; after that,
-`body`/`json()` raise.
+`body` (raw bytes), `json()`, `form()` and `form_all()`. `read(n)` streams large bodies in
+chunks; after that, `body`/`json()`/`form()`/`form_all()`/`valid_body` raise.
+
+`req.form()` parses an `application/x-www-form-urlencoded` body (the media type is matched
+case-insensitively, parameters such as `; charset=utf-8` are ignored) into `{key = last
+value}`; `req.form_all()` returns `{key = {values...}}`, like `query` / `query_all`. Decoding
+is the query-string decoding: `+` is a space, `%XX` is decoded, a malformed `%` stays
+literal, a key without `=` has value `""`, an empty body gives `{}`. Any other content type
+(or none) raises an ordinary error naming it, so branch on `req.headers["content-type"]`
+first if you accept several. Multipart is not supported. `--max-body` applies as usual.
+
+`req.valid_body(schema, opts?)` validates the body like `valid_query`, picking the decoder
+from `Content-Type`: `application/json` and `+json` types decode as `req.json()`;
+urlencoded forms are validated with `list(...)` fields of an `object` schema fed from
+`form_all`. Anything else, including a missing type and `multipart/*`, aborts with **415**
+`unsupported content type`. A body that is not valid JSON aborts with **400**
+`invalid JSON body` (always 400, regardless of `fail_status`); so does an empty JSON body,
+unless the schema accepts `nil` (`v.optional(...)`), in which case it returns `nil`.
+Validation failures abort with `opts.fail_status` (default 400) and `data = issues`.
 
 `req.valid_query(schema, opts?)` and `req.valid_params(schema, opts?)` run
 `lur.validate.parse` over `req.query` / `req.params` and return the converted value (a
@@ -446,6 +463,12 @@ lur.serve.http("GET", "/users", function(req)
   }))
   if not q.tag then lur.serve.abort(422, "need at least one tag") end
   return { body = lur.json.encode(q) }
+end)
+
+lur.serve.http("POST", "/signup", function(req)
+  local v = lur.validate
+  local b = req.valid_body(v.object({ email = v.str(), age = v.int({ min = 13 }) }))
+  return { status = 201, body = lur.json.encode(b) } -- 415 unless JSON or urlencoded
 end)
 
 lur.serve.http("POST", "/echo", function(req)

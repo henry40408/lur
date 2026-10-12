@@ -893,20 +893,9 @@ fn build_req(
     table.set("params", params_table)?;
 
     // Query: `query` keeps the last value per key, `query_all` the full list.
-    let query = lua.create_table()?;
-    let query_all = lua.create_table()?;
-    for (key, value) in parse_query(&req.query) {
-        let k = lua.create_string(&key)?;
-        query.set(k.clone(), lua.create_string(&value)?)?;
-        let list: mlua::Table = if let Some(t) = query_all.get::<Option<mlua::Table>>(k.clone())? {
-            t
-        } else {
-            let t = lua.create_table()?;
-            query_all.set(k, t.clone())?;
-            t
-        };
-        list.push(lua.create_string(&value)?)?;
-    }
+    let pairs = parse_query(&req.query);
+    let query = last_table(lua, &pairs)?;
+    let query_all = all_table(lua, &pairs)?;
     table.set("query", query)?;
     table.set("query_all", query_all)?;
 
@@ -915,7 +904,7 @@ fn build_req(
     for (name, value) in &req.headers {
         headers.set(name.to_lowercase(), value.as_str())?;
     }
-    table.set("headers", headers)?;
+    table.set("headers", headers.clone())?;
 
     // All `Cookie` headers fold into one table (later wins; never `nil`).
     // Cookie names are case-sensitive, so not lowered.
@@ -983,12 +972,31 @@ fn build_req(
     // Served via `__index` so the streamed guard can fire.
     let index_state = Arc::clone(&state);
     let index = lua.create_function(move |lua, (t, key): (mlua::Table, Value)| {
-        // `req.valid_query` / `req.valid_params` are built on first access, so
-        // requests that never validate pay nothing for them.
+        // `req.valid_*` and `req.form*` are built on first access, so requests
+        // that never use them pay nothing.
         if let Value::String(s) = &key {
             match &*s.as_bytes() {
                 b"valid_query" => return valid_fn(lua, &t, true),
                 b"valid_params" => return valid_fn(lua, &t, false),
+                b"valid_body" => return valid_body_fn(lua, &index_state, &headers),
+                b"form" | b"form_all" => {
+                    let all = &*s.as_bytes() == b"form_all";
+                    let state = Arc::clone(&index_state);
+                    let headers = headers.clone();
+                    let f = lua.create_function(move |lua, ()| {
+                        let pairs = form_pairs(
+                            &state,
+                            &headers,
+                            if all { "req.form_all()" } else { "req.form()" },
+                        )?;
+                        if all {
+                            all_table(lua, &pairs)
+                        } else {
+                            last_table(lua, &pairs)
+                        }
+                    })?;
+                    return Ok(Value::Function(f));
+                }
                 _ => {}
             }
         }
@@ -1058,25 +1066,9 @@ fn valid_fn(lua: &Lua, req: &mlua::Table, query: bool) -> mlua::Result<Value> {
             };
 
             // Lists read every value (`query_all`); other fields the last one.
-            let input = match (
-                &query_all,
-                crate::capabilities::validate::list_field_names(&schema),
-            ) {
-                (Some(all), Some(lists)) if !lists.is_empty() => {
-                    let copy = lua.create_table()?;
-                    for pair in source.pairs::<Value, Value>() {
-                        let (k, v) = pair?;
-                        copy.raw_set(k, v)?;
-                    }
-                    for name in &lists {
-                        let v: Value = all.raw_get(name.as_str())?;
-                        if !v.is_nil() {
-                            copy.raw_set(name.as_str(), v)?;
-                        }
-                    }
-                    copy
-                }
-                _ => source,
+            let input = match &query_all {
+                Some(all) => feed_lists(&lua, source, &schema, || Ok(all.clone()))?,
+                None => source,
             };
 
             let (ok, value): (bool, Value) = try_fn.call_async((schema, input)).await?;
@@ -1092,6 +1084,233 @@ fn valid_fn(lua: &Lua, req: &mlua::Table, query: bool) -> mlua::Result<Value> {
         }
     })?;
     // Fresh `error(tbl, 0)` wrapper so `pcall` sees the table.
+    Ok(Value::Function(crate::capabilities::raise::raising(
+        &factory, inner,
+    )?))
+}
+
+/// `{key = last value}` over ordered pairs.
+fn last_table(lua: &Lua, pairs: &[(Vec<u8>, Vec<u8>)]) -> mlua::Result<mlua::Table> {
+    let t = lua.create_table()?;
+    for (k, v) in pairs {
+        t.set(lua.create_string(k)?, lua.create_string(v)?)?;
+    }
+    Ok(t)
+}
+
+/// `{key = {values...}}` over ordered pairs.
+fn all_table(lua: &Lua, pairs: &[(Vec<u8>, Vec<u8>)]) -> mlua::Result<mlua::Table> {
+    let all = lua.create_table()?;
+    for (key, value) in pairs {
+        let k = lua.create_string(key)?;
+        let list: mlua::Table = if let Some(t) = all.get::<Option<mlua::Table>>(k.clone())? {
+            t
+        } else {
+            let t = lua.create_table()?;
+            all.set(k, t.clone())?;
+            t
+        };
+        list.push(lua.create_string(value)?)?;
+    }
+    Ok(all)
+}
+
+/// For an `object` schema with `list(...)` fields, a copy of `source` whose
+/// list fields come from the all-values table (built only when needed);
+/// otherwise `source` itself.
+fn feed_lists(
+    lua: &Lua,
+    source: mlua::Table,
+    schema: &Value,
+    all: impl FnOnce() -> mlua::Result<mlua::Table>,
+) -> mlua::Result<mlua::Table> {
+    match crate::capabilities::validate::list_field_names(schema) {
+        Some(lists) if !lists.is_empty() => {
+            let all = all()?;
+            let copy = lua.create_table()?;
+            for pair in source.pairs::<Value, Value>() {
+                let (k, v) = pair?;
+                copy.raw_set(k, v)?;
+            }
+            for name in &lists {
+                let v: Value = all.raw_get(name.as_str())?;
+                if !v.is_nil() {
+                    copy.raw_set(name.as_str(), v)?;
+                }
+            }
+            Ok(copy)
+        }
+        _ => Ok(source),
+    }
+}
+
+/// Lower-cased media type of the request's `Content-Type`, parameters dropped.
+fn media_type(headers: &mlua::Table) -> mlua::Result<Option<String>> {
+    let ct: Option<mlua::LuaString> = headers.raw_get("content-type")?;
+    Ok(ct.map(|ct| {
+        let raw = String::from_utf8_lossy(&ct.as_bytes()).into_owned();
+        raw.split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase()
+    }))
+}
+
+const FORM_TYPE: &str = "application/x-www-form-urlencoded";
+
+fn is_json_type(mt: &str) -> bool {
+    mt == "application/json" || mt.ends_with("+json")
+}
+
+/// Pairs of an urlencoded body, for `req.form()` / `req.form_all()`. Raises
+/// after `read(n)` or for any other content type.
+fn form_pairs(
+    state: &Mutex<BodyStream>,
+    headers: &mlua::Table,
+    fname: &str,
+) -> mlua::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    let st = state.lock().expect("body stream mutex poisoned");
+    if st.streamed {
+        return Err(mlua::Error::runtime(format!(
+            "{fname} is unavailable after req.read(n) consumed part of the body"
+        )));
+    }
+    match media_type(headers)? {
+        Some(mt) if mt == FORM_TYPE => {}
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "{fname}: content type is {}, expected {FORM_TYPE}",
+                match other {
+                    Some(mt) => format!("`{mt}`"),
+                    None => "missing".to_owned(),
+                }
+            )));
+        }
+    }
+    Ok(parse_query(&String::from_utf8_lossy(&st.body)))
+}
+
+/// `req.valid_body(schema, opts?)`: decode the body by `Content-Type` (JSON or
+/// urlencoded), then `lur.validate.try`; failures abort like `req.valid_query`.
+fn valid_body_fn(
+    lua: &Lua,
+    state: &Arc<Mutex<BodyStream>>,
+    headers: &mlua::Table,
+) -> mlua::Result<Value> {
+    use crate::capabilities::serve::{ServeCtx, abort_table, status_arg};
+    const F: &str = "req.valid_body";
+
+    let ctx = lua
+        .app_data_ref::<ServeCtx>()
+        .map(|c| c.clone())
+        .ok_or_else(|| mlua::Error::runtime(format!("{F} is only available under `lur serve`")))?;
+    let factory = ctx.factory.clone();
+    let try_fn = ctx.try_fn.clone();
+    let decode: mlua::Function = lua
+        .globals()
+        .get::<mlua::Table>("lur")?
+        .get::<mlua::Table>("json")?
+        .get("decode")?;
+    let state = Arc::clone(state);
+    let headers = headers.clone();
+
+    let inner = lua.create_async_function(move |lua, (schema, opts): (Value, Value)| {
+        let ctx = ctx.clone();
+        let try_fn = try_fn.clone();
+        let decode = decode.clone();
+        let state = Arc::clone(&state);
+        let headers = headers.clone();
+        async move {
+            let fail_status = match opts {
+                Value::Nil => 400,
+                Value::Table(o) => match o.get::<Value>("fail_status")? {
+                    Value::Nil => 400,
+                    v => status_arg(&v, F, "opts.fail_status")?,
+                },
+                other => {
+                    return Err(mlua::Error::runtime(format!(
+                        "{F}: argument #2 must be table, got {}",
+                        other.type_name()
+                    )));
+                }
+            };
+
+            // Everything before the await is synchronous: the lock must not
+            // be held across it.
+            let (input, empty_json) = {
+                let st = state.lock().expect("body stream mutex poisoned");
+                if st.streamed {
+                    return Err(mlua::Error::runtime(
+                        "req.valid_body is unavailable after req.read(n) consumed part of the body",
+                    ));
+                }
+                let mt = media_type(&headers)?;
+                match mt.as_deref() {
+                    Some(mt) if is_json_type(mt) => {
+                        if st.body.iter().all(u8::is_ascii_whitespace) {
+                            (Value::Nil, true)
+                        } else {
+                            let raw = lua.create_string(&st.body)?;
+                            match decode.call::<Value>(raw) {
+                                Ok(v) => (v, false),
+                                Err(mlua::Error::MemoryError(m)) => {
+                                    return Err(mlua::Error::MemoryError(m));
+                                }
+                                Err(_) => {
+                                    let err = abort_table(
+                                        &lua,
+                                        &ctx,
+                                        400,
+                                        "invalid JSON body",
+                                        Value::Nil,
+                                    )?;
+                                    return Ok((false, Value::Table(err)));
+                                }
+                            }
+                        }
+                    }
+                    Some(FORM_TYPE) => {
+                        let pairs = parse_query(&String::from_utf8_lossy(&st.body));
+                        let source = last_table(&lua, &pairs)?;
+                        let input = feed_lists(&lua, source, &schema, || all_table(&lua, &pairs))?;
+                        (Value::Table(input), false)
+                    }
+                    _ => {
+                        let data = lua.create_table()?;
+                        if let Some(mt) = &mt {
+                            data.set("content_type", mt.as_str())?;
+                        }
+                        let err = abort_table(
+                            &lua,
+                            &ctx,
+                            415,
+                            "unsupported content type",
+                            Value::Table(data),
+                        )?;
+                        return Ok((false, Value::Table(err)));
+                    }
+                }
+            };
+
+            let (ok, value): (bool, Value) = try_fn.call_async((schema, input)).await?;
+            if ok {
+                return Ok((true, value));
+            }
+            // An empty JSON body is only acceptable to a schema taking `nil`.
+            let (status, message, issues) = if empty_json {
+                (400, "invalid JSON body", Value::Nil)
+            } else {
+                let issues = match &value {
+                    Value::Table(e) => e.get::<Value>("issues")?,
+                    _ => Value::Nil,
+                };
+                (fail_status, "validation failed", issues)
+            };
+            let err = abort_table(&lua, &ctx, status, message, issues)?;
+            Ok((false, Value::Table(err)))
+        }
+    })?;
     Ok(Value::Function(crate::capabilities::raise::raising(
         &factory, inner,
     )?))
