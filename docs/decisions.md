@@ -190,11 +190,28 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   through a small Lua wrapper — see ARCHITECTURE.md "Validation & structured errors" — so
   `pcall` hands scripts a real table; it has `__tostring`, which is also what the CLI
   prints, and a locked metatable (`__metatable = false`, read-only) so a script cannot
-  rewrite it for later errors on a pooled VM. Accepted limitation: a table error raised
-  inside a `lur.async` task reaches the combinator's caller as a plain string (its
-  message), because mlua flattens error values crossing `call_async`; an `xpcall`
-  trampoline around every task fixed that but cost +24–49% on `vm_cold_start`,
-  `async_map` and `async.all` (budget 5%), so it was rejected — use `try` inside tasks.
+  rewrite it for later errors on a pooled VM. *Across `lur.async` tasks*: mlua flattens a
+  failed task's error value to text inside `call_async`, but that rendering calls the
+  table's `__tostring` — ours — which records the table in a per-VM slot; the combinator
+  takes it back right after the task fails and re-raises it, so
+  `pcall` around `all`/`race`/`map` sees the table and `settled` returns it in `err`. This
+  costs nothing per task on success; per combinator call it costs one Lua wrapper frame,
+  whose inner function returns one value and signals failure by returning a private
+  sentinel table that carries the error (`raise::raising_hot`): returning `(true, value)`
+  instead measured ~700 extra instructions per `all` call (~+4% on `async_all_small`, vs
+  ~+2.5%; `async_race_small` ~+5%, about 0.8 µs per call, since the wrapper frame is a
+  larger share of a cheap call). Rejected: an `xpcall` trampoline around every task
+  (+24–49% on `vm_cold_start`, `async_map` and `async.all`, budget 5%), and recording the
+  table at raise time (wrong after a task catches one error and later re-raises it while
+  another task raised in between). Accepted limits: only `error_meta` tables are recovered
+  (a script's own `error({...})` in a task still arrives as text, since a plain table has no
+  hook); `any` keeps aggregating failures as text; and the match is by text: the error
+  must be the table's message, alone or followed by a newline (where mlua appends the
+  traceback), so any string starting with message + `"\n"` matches. A string error raised
+  in the same run that begins with the text of an error table rendered earlier and not yet
+  consumed would come back as that table. That is script-only and cannot forge a table the
+  script does not already hold; the slot is reset at the start and end of every run, so
+  nothing crosses runs on a pooled VM (same match as the abort slot below).
   `optional` only waives "required" (an inner `default` still fills). `lur.null` is treated
   as absent for object fields and the root (normalized in `check_object` / the entry
   point, so `optional`/`default` see `nil` and a required field says "is required" rather
@@ -220,17 +237,19 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   a table error to a string across `call_async`, so the server cannot read `status` from
   the error. `abort` stashes the encoded response in a per-VM slot that `call_handler`
   clears before every run and consults only on `Err`, matching it to the failing error by
-  message; so a `pcall`-caught abort cannot leak into a later request on the pooled VM, a
+  message (the error text is the message, alone or followed by a newline and traceback, so
+  `error("xy")` does not match an abort `"x"`); so a `pcall`-caught abort cannot leak into a later request on the pooled VM, a
   caught-then-returned handler is a normal response, and the happy path pays two
   uncontended locks per run. Rejected: an `xpcall` trampoline per handler/task (+24%
   async cost, see above) and encoding the status into the error string (spoofable by any
-  `error("...")`, visible in logs). The message match means a script that catches an abort
+  `error("...")`, visible in logs). Since error tables now survive `lur.async` (above), a
+  `pcall` around a combinator also sees an abort's `.status`; the slot stays the source of
+  truth for the uncaught response. The message match means a script that catches an abort
   and re-raises a string with the identical message is still treated as that abort; the
   status is the one the script chose earlier, but the body is the earlier abort's, so a
   later plain `error()` whose text equals a swallowed abort's message in the same run
-  returns that abort's `data` (script-only: only the script itself can cause it). Because it matches by message, an
-  abort raised inside a `lur.async` task, whose table the combinator's caller only sees as
-  a string, is still honored when uncaught. A bare `lur.validate.parse` that fails
+  returns that abort's `data` (script-only: only the script itself can cause it). An abort raised inside a `lur.async` task is honored when
+  uncaught, nested combinators included. A bare `lur.validate.parse` that fails
   uncaught in a handler stays a **500** on purpose: it signals a bug (or an unchecked
   assumption) in the script, while client input goes through `req.valid_*`. Data that
   is not JSON-encodable fails at the `abort` call (ordinary, catchable error), not later

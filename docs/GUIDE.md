@@ -502,8 +502,8 @@ On failure `err` is a table:
 - At most 100 issues are kept, then `truncated = true`.
 - `tostring(err)` is `message`, an uncaught one prints that message, and it is catchable
   with `pcall`.
-- Raised inside a `lur.async` task it reaches the combinator's caller as a plain string
-  (its message), not a table; use `try` there.
+- Raised inside a `lur.async` task it stays a table: `pcall` around `all`/`race`/`map`
+  gets it, and `settled` puts it in `err` (see lur.async).
 
 ```lua
 local schema = lur.validate.object({
@@ -811,6 +811,10 @@ assert(ok or err ~= nil)
   `opts.drop_errors` omits failed items instead of failing fast.
 - Lua runs one step at a time; tasks interleave only at I/O awaits.
 - `--max-concurrency` caps in-flight tasks per VM.
+- Errors from tasks: a `lur.validate` or `lur.serve.abort` table reaches `pcall` around
+  `all`/`race`/`map` as the original table, and `settled`'s `err` as that table. `any`
+  still reports failures as text (joined). Any other error, including a script's own
+  `error({ ... })` table, arrives as text, as before.
 
 ```lua
 lur.async.sleep(1)
@@ -856,6 +860,23 @@ local kept = lur.async.map({ 1, 2, 3 }, function(n)
   return n
 end, { drop_errors = true })
 assert(#kept == 2 and kept[2] == 3)
+```
+
+```lua
+-- a validation error raised in a task reaches pcall as the original table
+local ok, err = pcall(lur.async.all, {
+  function() return 1 end,
+  function() lur.validate.parse(lur.validate.int(), "x") end,
+})
+assert(not ok and err.kind == "validation")
+assert(err.issues[1].path == "")
+
+local r = lur.async.settled({
+  function() lur.validate.parse(lur.validate.int(), "x") end,
+  function() error({ code = 1 }) end,
+})
+assert(r[1].err.kind == "validation")
+assert(type(r[2].err) == "string") -- a script's own error table arrives as text
 ```
 
 ### lur.state
@@ -998,8 +1019,8 @@ Ends the handler at once with an HTTP error.
   side effects made before the abort (db writes, …) are **not** rolled back.
 - Only valid inside an HTTP handler: in a cron job or one-shot script it is an ordinary
   runtime error.
-- Raised inside a `lur.async` task, `pcall` around the combinator sees a string, not the
-  table (use it in the handler itself).
+- Raised inside a `lur.async` task it stays a table: `pcall` around `all`/`race`/`map`
+  sees it, and uncaught it still sets the response status.
 
 ```lua serve
 lur.serve.http("GET", "/items/:id", function(req)

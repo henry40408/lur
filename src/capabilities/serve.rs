@@ -154,14 +154,20 @@ impl Registry {
     }
 }
 
-pub fn install(lua: &Lua, lur: &Table, registry: Option<&Registry>) -> Result<(), RunError> {
+/// `factory` is the VM's [`raise::factory`].
+pub fn install(
+    lua: &Lua,
+    lur: &Table,
+    factory: &Function,
+    registry: Option<&Registry>,
+) -> Result<(), RunError> {
     let serve = lua.create_table().map_err(RunError::Init)?;
 
     let abort = match registry {
         Some(registry) => {
             let ctx = ServeCtx {
                 slot: registry.abort_slot(),
-                factory: raise::factory(lua).map_err(RunError::Init)?,
+                factory: factory.clone(),
                 meta: raise::error_meta(lua).map_err(RunError::Init)?,
                 try_fn: lur
                     .get::<Table>("validate")

@@ -213,6 +213,7 @@ impl Runtime {
     ) -> Result<T, RunError> {
         let at = timeout.map(|d| Instant::now() + d);
         *self.deadline.lock().expect("deadline mutex poisoned") = at;
+        crate::capabilities::raise::reset(&self.lua);
 
         // Outer Err = the tokio wall-clock layer fired (I/O-parked code).
         let outcome: Result<mlua::Result<T>, ()> = self.rt.block_on(async {
@@ -223,6 +224,8 @@ impl Runtime {
         });
 
         *self.deadline.lock().expect("deadline mutex poisoned") = None;
+        // Don't keep a rendered error table alive between runs.
+        crate::capabilities::raise::reset(&self.lua);
 
         match outcome {
             Err(()) => Err(RunError::Timeout),

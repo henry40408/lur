@@ -493,8 +493,8 @@ On failure `err` is a table:
 - At most 100 issues are kept, then `truncated = true`.
 - `tostring(err)` is `message`, an uncaught one prints that message, and it is catchable
   with `pcall`.
-- Raised inside a `lur.async` task it reaches the combinator's caller as a plain string
-  (its message), not a table; use `try` there.
+- Raised inside a `lur.async` task it stays a table: `pcall` around `all`/`race`/`map`
+  gets it, and `settled` puts it in `err` (see [`lur.async`](#lurasync)).
 
 #### Examples
 
@@ -646,6 +646,10 @@ Expiry: pass `{ ttl_ms = n }` (positive milliseconds) as the last argument of
   `opts.drop_errors` omits failed items instead of failing fast.
 - Lua runs one step at a time; tasks interleave only at I/O awaits.
 - `--max-concurrency` caps in-flight tasks per VM.
+- Errors from tasks: a `lur.validate` or `lur.serve.abort` table reaches `pcall` around
+  `all`/`race`/`map` as the original table, and `settled`'s `err` as that table. `any`
+  still reports failures as text (joined). Any other error, including a script's own
+  `error({ ... })` table, arrives as text, as before.
 
 ```lua
 local r = lur.async.map({ 1, 2, 3 }, function(n) lur.async.sleep(10); return n * 2 end,
@@ -730,8 +734,8 @@ Ends the handler at once with an HTTP error.
   side effects made before the abort (db writes, …) are **not** rolled back.
 - Only valid inside an HTTP handler: in a cron job or one-shot script it is an ordinary
   runtime error.
-- Raised inside a `lur.async` task, `pcall` around the combinator sees a string, not the
-  table (use it in the handler itself).
+- Raised inside a `lur.async` task it stays a table: `pcall` around `all`/`race`/`map`
+  sees it, and uncaught it still sets the response status.
 
 #### The `req` object
 

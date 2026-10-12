@@ -355,7 +355,7 @@ assert(#big.issues == 100 and big.truncated == true)
 }
 
 #[test]
-fn error_is_a_table_under_pcall_but_a_string_across_async_tasks() {
+fn error_is_a_table_under_pcall_also_across_async_tasks() {
     run_with_prelude(
         r#"
 local schema = v.int()
@@ -372,13 +372,12 @@ local inside = lur.async.all({ function()
 end })
 assert(inside[1] == "validation")
 
--- documented limitation: raised inside a lur.async task, the error reaches
--- the combinator's caller as its message string, not a table
+-- raised inside a lur.async task, the combinator re-raises the same table
 local ok3, e3 = pcall(lur.async.all, { bad, function() return 1 end })
-assert(not ok3 and type(e3) ~= "table", type(e3))
-assert(tostring(e3):find('validation failed: must be an integer (got "x")', 1, true), tostring(e3))
+assert(not ok3 and type(e3) == "table" and e3.kind == "validation", type(e3))
+assert(tostring(e3) == 'validation failed: must be an integer (got "x")', tostring(e3))
 local ok5, e5 = pcall(lur.async.map, { "1", "x" }, function(s) return v.parse(schema, s) end)
-assert(not ok5 and type(e5) ~= "table" and tostring(e5):find("validation failed", 1, true))
+assert(not ok5 and type(e5) == "table" and e5.issues[1].message == 'must be an integer (got "x")')
 -- try() has no such problem: it returns the table
 local results = lur.async.all({ function() return select(2, v.try(schema, "x")) end })
 assert(type(results[1]) == "table" and results[1].kind == "validation")

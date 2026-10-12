@@ -40,6 +40,8 @@ pub fn install(
     serve_registry: Option<&serve::Registry>,
 ) -> Result<(), RunError> {
     let lur = lua.create_table().map_err(RunError::Init)?;
+    // One table-raising wrapper factory per VM, shared by every capability.
+    let factory = raise::factory(lua).map_err(RunError::Init)?;
 
     null::install(lua, &lur)?;
     log::install(lua, &lur)?;
@@ -53,7 +55,7 @@ pub fn install(
     html::install(lua, &lur)?;
     xml::install(lua, &lur)?;
     feed::install(lua, &lur)?;
-    validate::install(lua, &lur)?;
+    validate::install(lua, &lur, &factory)?;
     io::install(lua, &lur)?;
     fs::install(lua, &lur, config.policy.clone())?;
     http::install(
@@ -66,9 +68,9 @@ pub fn install(
     env::install(lua, &lur, config.policy.clone())?;
     let shared = db::install(lua, &lur, config.db_path.clone())?;
     kv::install(lua, &lur, &shared)?;
-    async_ops::install(lua, &lur, config.max_concurrency)?;
+    async_ops::install(lua, &lur, &factory, config.max_concurrency)?;
     args::install(lua, &lur, &config.args)?;
-    serve::install(lua, &lur, serve_registry)?;
+    serve::install(lua, &lur, &factory, serve_registry)?;
     state::install(lua, &lur, config.state.clone())?;
 
     freeze_children(&lur);
