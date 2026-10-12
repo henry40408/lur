@@ -422,6 +422,10 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut row: Vec<String> = Vec::new();
     let mut parked = String::new();
+    let mut in_cell = false;
+    // Inline style open on the terminal; the quote prefix's RESET cancels it at
+    // a line break, so it is re-emitted after the prefix.
+    let mut bold_open = false;
 
     for ev in Parser::new_ext(markdown, Options::ENABLE_TABLES) {
         match ev {
@@ -449,8 +453,12 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
                     }
                 }
             }
-            Event::Start(Tag::TableCell) => parked = std::mem::take(&mut out),
+            Event::Start(Tag::TableCell) => {
+                in_cell = true;
+                parked = std::mem::take(&mut out);
+            }
             Event::End(TagEnd::TableCell) => {
+                in_cell = false;
                 let cell = std::mem::replace(&mut out, std::mem::take(&mut parked));
                 row.push(cell);
             }
@@ -506,8 +514,14 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
                     out.push_str(&" ".repeat(margin));
                 }
             }
-            Event::Start(Tag::Strong | Tag::Emphasis) => out.push_str(st(BOLD)),
-            Event::End(TagEnd::Strong | TagEnd::Emphasis) => out.push_str(st(RESET)),
+            Event::Start(Tag::Strong | Tag::Emphasis) => {
+                bold_open = true;
+                out.push_str(st(BOLD));
+            }
+            Event::End(TagEnd::Strong | TagEnd::Emphasis) => {
+                bold_open = false;
+                out.push_str(st(RESET));
+            }
             Event::Start(Tag::List(_)) => {
                 if quotes > 0 {
                     let marker = open.is_some_and(|(len, _)| len == out.len());
@@ -633,6 +647,9 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
                 out.push('\n');
                 if quotes > 0 {
                     out.push_str(&compose_prefix(&stack, 0, margin, color, false));
+                    if bold_open && !in_cell {
+                        out.push_str(st(BOLD));
+                    }
                 } else {
                     out.push_str(&" ".repeat(margin + list_depth * 2));
                 }
@@ -969,6 +986,47 @@ mod table_tests {
     fn loose_list_in_quote_keeps_bars_between_items() {
         let md = "> - one\n>\n> - two\n>\n> after\n";
         assert_eq!(lines(md, None), ["│ - one", "│", "│ - two", "│", "│ after"]);
+    }
+
+    #[test]
+    fn bold_continues_across_quoted_soft_break() {
+        let out = render("> **bold\n> continues** after\n", true);
+        assert!(
+            out.contains("\u{2502}\x1b[0m \x1b[1mcontinues"),
+            "bold re-opened after the prefix: {out:?}"
+        );
+    }
+
+    #[test]
+    fn italic_continues_across_nested_quote_soft_break() {
+        let out = render("> > *it\n> > goes* on\n", true);
+        assert!(
+            out.contains("\u{2502}\x1b[0m \x1b[1mgoes"),
+            "style re-opened after nested prefix: {out:?}"
+        );
+    }
+
+    #[test]
+    fn bold_continues_across_list_item_line_in_quote() {
+        let out = render("> - **a\n>   b** c\n", true);
+        assert!(
+            out.contains("\x1b[0m   \x1b[1mb"),
+            "list continuation: {out:?}"
+        );
+    }
+
+    #[test]
+    fn closed_style_does_not_leak_across_break() {
+        let out = render("> **a** b\n> c\n", true);
+        assert_eq!(out.matches("\x1b[1m").count(), 1, "{out:?}");
+    }
+
+    #[test]
+    fn colour_off_soft_break_unchanged() {
+        let out = render("> **bold\n> continues** after\n", false);
+        assert!(!out.contains('\x1b'));
+        assert!(out.contains("\u{2502} bold\n"));
+        assert!(out.contains("\u{2502} continues after"));
     }
 
     #[test]
