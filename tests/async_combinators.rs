@@ -463,6 +463,26 @@ fn non_table_errors_are_unchanged() {
 }
 
 #[test]
+fn rendered_error_table_does_not_cross_runs() {
+    // Run 1 renders an error table (tostring) and leaves it unconsumed; run 2
+    // on the same VM raises a string with the same text through a task. The
+    // per-run reset keeps run 1's table from coming back.
+    let rt = Runtime::new().expect("runtime builds");
+    rt.run(&format!(
+        "{TABLE_ERR_PRELUDE}local _, e = pcall(bad, 'p')\n\
+         assert(tostring(e) == 'validation failed: must be an integer (got \"p\")')"
+    ))
+    .expect("run 1");
+    rt.run(
+        "local ok, e = pcall(lur.async.all, { function()\n\
+         \terror('validation failed: must be an integer (got \"p\")', 0)\n\
+         end })\n\
+         assert(not ok and typeof(e) == 'error', 'leaked across runs: ' .. typeof(e))",
+    )
+    .expect("run 2");
+}
+
+#[test]
 fn uncaught_error_table_from_a_task_reports_its_message() {
     let msg = run_err(&format!(
         "{TABLE_ERR_PRELUDE}lur.async.all({{ function() return bad() end }})"

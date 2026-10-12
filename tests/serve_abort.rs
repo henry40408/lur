@@ -201,6 +201,50 @@ fn abort_inside_async_task_reaches_the_caller_as_the_table() {
 }
 
 #[test]
+fn rendered_error_table_does_not_cross_requests() {
+    // One pooled VM: request 1 renders an error table and leaves it
+    // unconsumed; request 2 raises a string with the same text in a task.
+    let s = serve(
+        "local v = lur.validate\n\
+         lur.serve.http('GET', '/render', function()\n\
+         \tlocal _, e = pcall(v.parse, v.int(), 'p')\n\
+         \treturn { body = tostring(e) }\n\
+         end)\n\
+         lur.serve.http('GET', '/plain', function()\n\
+         \tlocal ok, e = pcall(lur.async.all, { function()\n\
+         \t\terror('validation failed: must be an integer (got \"p\")', 0)\n\
+         \tend })\n\
+         \treturn { body = typeof(e) }\n\
+         end)",
+    );
+    let r = get(&s, "/render", "");
+    assert_eq!(
+        body(&r),
+        r#"validation failed: must be an integer (got "p")"#
+    );
+    assert_eq!(body(&get(&s, "/plain", "")), "error");
+}
+
+#[test]
+fn abort_message_match_needs_a_newline_boundary() {
+    // A caught abort "x" stays pending; an uncaught "xy" is not that abort.
+    let s = serve(
+        "lur.serve.http('GET', '/a', function()\n\
+         \tpcall(lur.serve.abort, 418, 'x')\n\
+         \tlur.async.all({ function() error('xy', 0) end })\n\
+         end)\n\
+         lur.serve.http('GET', '/b', function()\n\
+         \tpcall(lur.serve.abort, 418, 'x')\n\
+         \terror('xy', 0)\n\
+         end)",
+    );
+    let e = get_err(&s, "/a", "");
+    assert!(e.contains("xy"), "{e}");
+    let e = get_err(&s, "/b", "");
+    assert!(e.contains("xy"), "{e}");
+}
+
+#[test]
 fn abort_in_one_shot_is_an_error() {
     let rt = lur::runtime::Runtime::new().expect("runtime builds");
     let e = rt

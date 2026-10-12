@@ -224,6 +224,8 @@ impl Runtime {
         });
 
         *self.deadline.lock().expect("deadline mutex poisoned") = None;
+        // Don't keep a rendered error table alive between runs.
+        crate::capabilities::raise::reset(&self.lua);
 
         match outcome {
             Err(()) => Err(RunError::Timeout),

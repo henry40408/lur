@@ -564,6 +564,8 @@ async fn call_handler(
     };
 
     *vm.deadline.lock().expect("deadline mutex poisoned") = None;
+    // Don't keep a rendered error table alive on an idle pooled VM.
+    raise::reset(&vm.lua);
 
     let pending = {
         let mut abort = vm.abort.lock().expect("abort slot poisoned");

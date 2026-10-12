@@ -193,16 +193,20 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   rewrite it for later errors on a pooled VM. *Across `lur.async` tasks*: mlua flattens a
   failed task's error value to text inside `call_async`, but that rendering calls the
   table's `__tostring` — ours — which records the table in a per-VM slot; the combinator
-  takes it back right after the task fails (matched by message) and re-raises it, so
+  takes it back right after the task fails and re-raises it, so
   `pcall` around `all`/`race`/`map` sees the table and `settled` returns it in `err`. This
   costs nothing per task on success. Rejected: an `xpcall` trampoline around every task
   (+24–49% on `vm_cold_start`, `async_map` and `async.all`, budget 5%), and recording the
   table at raise time (wrong after a task catches one error and later re-raises it while
   another task raised in between). Accepted limits: only `error_meta` tables are recovered
   (a script's own `error({...})` in a task still arrives as text, since a plain table has no
-  hook); `any` keeps aggregating failures as text; and a string error whose text equals an
-  error table rendered earlier in the same run and not yet consumed would come back as that
-  table (script-only, like the abort message match below).
+  hook); `any` keeps aggregating failures as text; and the match is by text: the error
+  must be the table's message, alone or followed by a newline (where mlua appends the
+  traceback), so any string starting with message + `"\n"` matches. A string error raised
+  in the same run that begins with the text of an error table rendered earlier and not yet
+  consumed would come back as that table. That is script-only and cannot forge a table the
+  script does not already hold; the slot is reset at the start and end of every run, so
+  nothing crosses runs on a pooled VM (same match as the abort slot below).
   `optional` only waives "required" (an inner `default` still fills). `lur.null` is treated
   as absent for object fields and the root (normalized in `check_object` / the entry
   point, so `optional`/`default` see `nil` and a required field says "is required" rather
@@ -228,7 +232,8 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   a table error to a string across `call_async`, so the server cannot read `status` from
   the error. `abort` stashes the encoded response in a per-VM slot that `call_handler`
   clears before every run and consults only on `Err`, matching it to the failing error by
-  message; so a `pcall`-caught abort cannot leak into a later request on the pooled VM, a
+  message (the error text is the message, alone or followed by a newline and traceback, so
+  `error("xy")` does not match an abort `"x"`); so a `pcall`-caught abort cannot leak into a later request on the pooled VM, a
   caught-then-returned handler is a normal response, and the happy path pays two
   uncontended locks per run. Rejected: an `xpcall` trampoline per handler/task (+24%
   async cost, see above) and encoding the status into the error string (spoofable by any

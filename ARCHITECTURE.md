@@ -338,14 +338,18 @@ table's `__tostring`, and for error tables that is `error_meta`'s Rust function:
 returning `message`, it records `(table, message)` in the VM's `raise::Flattened` slot
 (`lua` app data). Right after a task fails (synchronously, in `drive`'s `on_result`, before
 any other Lua runs) the combinator calls `raise::recover`, which *takes* the slot and returns
-the table if the error text is that `message` (alone or followed by a traceback).
+the table if the error text is that `message`, alone or followed by a newline (where mlua
+appends the traceback): any string starting with `message` + `"\n"` matches. Only the script
+can produce such a string, and a match only hands it back a table it already held, so this
+cannot forge an error.
 `all`/`race`/`map` are `raising` wrappers, so a recovered table is re-raised with
 `error(tbl, 0)` and `pcall` around the combinator gets the same table (`.status`, `.issues`);
 `settled` puts it in `err`; `any` still aggregates failures as text. Other errors, including
 plain script tables without `error_meta`, pass through as before. Nesting works because the
 re-raise is flattened (and recorded) again by the outer task. Nothing runs while tasks
-succeed; the cost is one Lua wrapper frame per `all`/`race`/`map` call and a slot reset per
-run (`Runtime::guarded`, `call_handler`), so a table never outlives its run on a pooled VM.
+succeed; the cost is one Lua wrapper frame per `all`/`race`/`map` call and a slot reset at the
+start and end of every run (`Runtime::guarded`, `call_handler`), so a table never outlives its
+run, nor stays alive on an idle pooled VM.
 The `AbortSlot` match above still decides the HTTP response for an uncaught abort.
 
 ## Async core

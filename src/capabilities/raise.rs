@@ -27,7 +27,7 @@ use mlua::{Function, Lua, Table};
 
 /// The error table whose `__tostring` ran last, with the text it rendered.
 /// Per VM (`lua` app data); taken by [`recover`] and cleared by [`reset`] at
-/// the start of every run, so it never outlives the run that set it.
+/// the start and end of every run, so it never outlives the run that set it.
 #[derive(Default)]
 pub(crate) struct Flattened(Option<(Table, String)>);
 
@@ -39,7 +39,10 @@ pub(crate) fn reset(lua: &Lua) {
 }
 
 /// Whether `e` is the flattened form of an error whose `__tostring` is
-/// `message`: exactly the text, or the text followed by a traceback.
+/// `message`: exactly the text, or the text followed by a newline (where mlua
+/// appends the traceback). Any text starting with `message` + `"\n"` matches;
+/// only the script itself can produce such a string, and a match can only
+/// hand it back a table it already held.
 pub(crate) fn is_flattened(e: &mlua::Error, message: &str) -> bool {
     match e {
         mlua::Error::RuntimeError(s) => s

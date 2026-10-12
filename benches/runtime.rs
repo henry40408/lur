@@ -53,12 +53,23 @@ fn async_all_small(c: &mut Criterion) {
     });
 }
 
+/// Many small `lur.async.race` calls (same wrapper, early-settling path).
+fn async_race_small(c: &mut Criterion) {
+    let rt = Runtime::new().expect("runtime builds");
+    let src = "local f = function() return 1 end \
+               local n = 0 for _ = 1, 1000 do n = n + lur.async.race({ f, f }) end return n";
+    c.bench_function("async_race_small_x1000", |b| {
+        b.iter(|| rt.run(black_box(src)).unwrap());
+    });
+}
+
 criterion_group!(
     benches,
     vm_cold_start,
     trivial_script,
     compute_loop_hook_overhead,
     async_map_limit,
-    async_all_small
+    async_all_small,
+    async_race_small
 );
 criterion_main!(benches);
