@@ -94,6 +94,21 @@ fn text_joins_mixed_content_and_atom_attributes() {
 }
 
 #[test]
+fn text_path_shorthand() {
+    run(r#"
+        local doc = lur.xml.parse("<r><a>A</a><b/><c><d>D</d></c></r>")
+        assert(doc:text("r/a") == "A")
+        assert(doc:text("//d") == "D")
+        assert(doc:text("r/b") == "", "match without text")
+        assert(doc:text("r/zz") == nil, "no match")
+        assert(doc:select_one("r/c"):text("d") == "D", "also on elements")
+        assert(doc:select_one("r/c"):text(nil) == "D")
+        local ok, err = pcall(function() return doc:text("r/a", {}) end)
+        assert(not ok and tostring(err):find("at most 1 argument", 1, true), tostring(err))
+    "#);
+}
+
+#[test]
 fn entities() {
     run(r#"
         local doc = lur.xml.parse([[<a t="&quot;q&quot; &#65;&#x42; &nbsp;">&lt;&gt;&amp;&apos;&quot; &#x4F60;&#22909; &nbsp;</a>]])

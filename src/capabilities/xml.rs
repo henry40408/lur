@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use encoding_rs::{Encoding, UTF_8};
-use mlua::{Error, Lua, Table, UserData, UserDataMethods, Value};
+use mlua::{Error, Lua, Table, UserData, UserDataMethods, Value, Variadic};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
@@ -357,7 +357,25 @@ impl UserData for Node {
                 .into_iter()
                 .next())
         });
-        methods.add_method("text", |_, this, ()| Ok(this.text()));
+        // `text(path)`: shorthand for `select_one(path):text()`; `nil` when
+        // nothing matches, `""` when the match has no text.
+        methods.add_method("text", |lua, this, args: Variadic<Value>| {
+            match args.len() {
+                0 => Ok(Some(this.text())),
+                1 if args[0].is_nil() => Ok(Some(this.text())),
+                1 => {
+                    let path = string_arg(lua, args[0].clone(), "lur.xml.text")?;
+                    Ok(this
+                        .select(&path, "lur.xml.text", true)?
+                        .into_iter()
+                        .next()
+                        .map(|n| n.text()))
+                }
+                n => Err(Error::runtime(format!(
+                    "lur.xml.text: expected at most 1 argument, got {n}"
+                ))),
+            }
+        });
         methods.add_method("tag", |_, this, ()| {
             Ok((this.idx != 0).then(|| this.elem().name.clone()))
         });

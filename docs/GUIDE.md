@@ -118,6 +118,10 @@ assert(clean:find('href="https://e.com/a"', 1, true))
 assert(not clean:find("script") and not clean:find("onclick"))
 ```
 
+`node:text(css)` (`lur.html` and `lur.xml`) is shorthand for `node:select_one(css):text()`: it
+returns `nil` when nothing matches and `""` when the match has no text. It takes no options; use
+`select_one` for `{ trim = true }`.
+
 `lur.feed.rss` / `.atom` / `.json` take `(meta, items, opts?)`; item `date` is epoch milliseconds.
 
 `node:text({ trim = true })` strips leading and trailing whitespace from the text

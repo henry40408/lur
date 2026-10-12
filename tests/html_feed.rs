@@ -37,8 +37,26 @@ assert(p:text({}) == p:text())
 assert(doc:select_one("i"):text({ trim = true }) == "")
 local ok, err = pcall(function() return p:text({ trim = "yes" }) end)
 assert(not ok and tostring(err):find("opts.trim must be boolean", 1, true), tostring(err))
-ok, err = pcall(function() return p:text("trim") end)
-assert(not ok and tostring(err):find("must be table", 1, true), tostring(err))
+ok, err = pcall(function() return p:text(5) end)
+assert(not ok and tostring(err):find("must be string or table", 1, true), tostring(err))
+"#);
+}
+
+#[test]
+fn html_text_css_shorthand() {
+    run(r#"
+local doc = lur.html.parse("<h1> Title </h1><p>a<b>b</b></p><i></i><ul><li>x</li></ul>")
+assert(doc:text("h1") == " Title ", "untrimmed, first match")
+assert(doc:text("p") == "ab")
+assert(doc:text("i") == "", "match without text is empty string")
+assert(doc:text("table") == nil, "no match is nil")
+assert(doc:select_one("ul"):text("li") == "x", "also on elements")
+assert(doc:select_one("ul"):text("p") == nil, "no match under an element")
+assert(doc:text(nil) == doc:text(), "nil still means the full text")
+local ok2, err2 = pcall(function() return doc:text("p", { trim = true }) end)
+assert(not ok2 and tostring(err2):find("at most 1 argument", 1, true), tostring(err2))
+local ok, err = pcall(function() return doc:text("[") end)
+assert(not ok and tostring(err):find("invalid selector", 1, true), tostring(err))
 "#);
 }
 
