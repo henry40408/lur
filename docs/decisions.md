@@ -199,7 +199,8 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   whose inner function returns one value and signals failure by returning a private
   sentinel table that carries the error (`raise::raising_hot`): returning `(true, value)`
   instead measured ~700 extra instructions per `all` call (~+4% on `async_all_small`, vs
-  ~+2.5%). Rejected: an `xpcall` trampoline around every task
+  ~+2.5%; `async_race_small` ~+5%, about 0.8 µs per call, since the wrapper frame is a
+  larger share of a cheap call). Rejected: an `xpcall` trampoline around every task
   (+24–49% on `vm_cold_start`, `async_map` and `async.all`, budget 5%), and recording the
   table at raise time (wrong after a task catches one error and later re-raises it while
   another task raised in between). Accepted limits: only `error_meta` tables are recovered
