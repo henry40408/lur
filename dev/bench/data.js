@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791785238704,
+  "lastUpdate": 1791790718820,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4769,6 +4769,54 @@ window.BENCHMARK_DATA = {
             "name": "async_map_20k_limit_64",
             "value": 20746910,
             "range": "± 212846",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f9693c99697c8ce57df1f708fae676793a15a719",
+          "message": "docs(guide): restructure the guide, render tables in lur docs (#161)\n\n* docs(guide): restructure the guide and fill gaps\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* fix(docs): render tables and loose lists in lur docs\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* docs(guide): apply review fixes and test serve examples\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* test(docs): cover table and list rendering in lur docs\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T15:36:08+08:00",
+          "tree_id": "aedc827fd2865f112cb37c0b41faf5d4645e473f",
+          "url": "https://github.com/henry40408/lur/commit/f9693c99697c8ce57df1f708fae676793a15a719"
+        },
+        "date": 1791790717876,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 397537,
+            "range": "± 13900",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5847,
+            "range": "± 64",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 183307,
+            "range": "± 776",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 21191251,
+            "range": "± 198920",
             "unit": "ns/iter"
           }
         ]
