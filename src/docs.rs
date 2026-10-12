@@ -105,47 +105,20 @@ fn highlight_lua(code: &str, color: bool) -> String {
     out
 }
 
-/// Terminal columns taken by `c`: 2 for East Asian wide/fullwidth, 0 for
-/// combining marks and zero-width characters, 1 otherwise. A small hand-written
-/// table of the common ranges rather than a `unicode-width` dependency.
-fn char_width(c: char) -> usize {
-    let u = c as u32;
-    match u {
-        0x0300..=0x036F | 0x200B..=0x200F | 0xFE00..=0xFE0F | 0xFE20..=0xFE2F => 0,
-        0x1100..=0x115F
-        | 0x2E80..=0x303E
-        | 0x3041..=0x33FF
-        | 0x3400..=0x4DBF
-        | 0x4E00..=0x9FFF
-        | 0xA000..=0xA4CF
-        | 0xAC00..=0xD7A3
-        | 0xF900..=0xFAFF
-        | 0xFE30..=0xFE6F
-        | 0xFF00..=0xFF60
-        | 0xFFE0..=0xFFE6
-        | 0x1F300..=0x1F64F
-        | 0x1F900..=0x1F9FF
-        | 0x20000..=0x3FFFD => 2,
-        _ => 1,
-    }
-}
-
-/// Printed width of `s`, skipping `ESC [ … m` colour sequences.
+/// Printed width of `s`, skipping `ESC [ … m` colour sequences. Text between
+/// escapes is measured with `unicode-width`, so emoji and ZWJ sequences count
+/// as the terminal draws them.
 fn visible_len(s: &str) -> usize {
+    use unicode_width::UnicodeWidthStr;
     let mut n = 0;
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            for c in chars.by_ref() {
-                if c == 'm' {
-                    break;
-                }
-            }
-        } else {
-            n += char_width(c);
-        }
+    let mut rest = s;
+    while let Some(i) = rest.find('\x1b') {
+        n += UnicodeWidthStr::width(&rest[..i]);
+        let tail = &rest[i..];
+        let end = tail.find('m').map_or(tail.len(), |p| p + 1);
+        rest = &tail[end..];
     }
-    n
+    n + UnicodeWidthStr::width(rest)
 }
 
 /// Track the SGR state across `s`: a reset clears it, any other escape appends.
@@ -212,7 +185,7 @@ fn wrap_cell(cell: &str, width: usize) -> Vec<String> {
                 cur.push_str(&seq);
                 continue;
             }
-            let cw = char_width(c);
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
             if curw > 0 && curw + cw > width {
                 flush(&mut lines, &mut cur, &mut curw, &active);
             }
@@ -317,7 +290,8 @@ fn render_table(
 }
 
 /// Terminal width for `lur docs`: `None` (no wrapping) unless stdout is a TTY,
-/// then `COLUMNS` if set to a positive number, else 80.
+/// then `COLUMNS` if set to a positive number, else the `TIOCGWINSZ` width
+/// (unix), else 80.
 pub fn terminal_width() -> Option<usize> {
     use std::io::IsTerminal;
     if !std::io::stdout().is_terminal() {
@@ -327,6 +301,13 @@ pub fn terminal_width() -> Option<usize> {
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|&n| n > 0);
+    #[cfg(unix)]
+    let cols = cols.or_else(|| {
+        rustix::termios::tcgetwinsize(std::io::stdout())
+            .ok()
+            .map(|ws| usize::from(ws.ws_col))
+            .filter(|&n| n > 0)
+    });
     Some(cols.unwrap_or(80))
 }
 
@@ -637,20 +618,31 @@ mod table_tests {
 
     #[test]
     fn cjk_cells_use_display_width() {
-        let md = "| 名稱 | 說明 |\n| --- | --- |\n| `ab` | one |\n| 中文字 | two |\n";
+        let md = "| 名稱 | 說明 |\n| --- | --- |\n| `ab` | one |\n| 中文字 | two |\n| ✅ | yes |\n| 👨‍👩‍👧 | fam |\n";
         let out = render(md, false);
         assert_eq!(visible_len("中文字"), 6);
+        assert_eq!(visible_len("✅"), 2);
+        assert_eq!(visible_len("❌"), 2);
+        assert_eq!(visible_len("👨‍👩‍👧"), 2);
+        assert_eq!(visible_len("👍🏽"), 2);
+        assert_eq!(visible_len("\x1b[1m中\x1b[0m✅"), 4);
         // Second column starts at the same display column on every row.
         let cols: Vec<usize> = out
             .lines()
-            .filter(|l| l.ends_with("one") || l.ends_with("two") || l.ends_with("說明"))
+            .filter(|l| {
+                l.ends_with("one")
+                    || l.ends_with("two")
+                    || l.ends_with("yes")
+                    || l.ends_with("fam")
+                    || l.ends_with("說明")
+            })
             .map(|l| {
                 let (first, _) = l.split_once("  ").unwrap();
                 let gap = l[first.len()..].len() - l[first.len()..].trim_start().len();
                 visible_len(first) + gap
             })
             .collect();
-        assert_eq!(cols.len(), 3, "{out:?}");
+        assert_eq!(cols.len(), 5, "{out:?}");
         assert!(cols.iter().all(|&c| c == cols[0]), "{cols:?} {out:?}");
     }
 

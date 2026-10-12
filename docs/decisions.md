@@ -166,6 +166,11 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   basenamed). Exit codes deliberately not split per error kind.
 - **`lur docs`**: hand-rolled ANSI renderer over `pulldown-cmark` (no default features);
   `termimad` rejected for its dependency weight. 16-color SGR only.
+  Table width comes from `COLUMNS` (positive) → `TIOCGWINSZ` via `rustix::termios` (unix,
+  no `unsafe`) → 80; no wrapping when stdout is not a TTY, so pipes get full-width tables.
+  Cell width uses the `unicode-width` crate rather than a hand range table: the hand table
+  got emoji (✅) and ZWJ sequences (👨‍👩‍👧) wrong. Nested quotes / lists inside a quote
+  remain unwrapped (known limitation).
 
 - **`lur.validate` is a toolkit of functions, not a route DSL.** Small composable
   schemas called *inside* handler code (`parse`/`try`), in the Nitro/h3 style: no

@@ -1619,6 +1619,7 @@ dependencies = [
  "pulldown-cmark",
  "quick-xml",
  "reqwest",
+ "rustix",
  "scraper",
  "serde_json",
  "sha1",
@@ -1632,6 +1633,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "unicode-width",
  "url",
  "wiremock",
 ]

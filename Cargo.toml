@@ -48,7 +48,11 @@ tokio-util = { version = "0.7.18", default-features = false, features = ["rt"] }
 toml = "1.1.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "ansi", "json"] }
+unicode-width = "0.2.2"
 url = "2.5.8"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["termios"] }
 
 [dev-dependencies]
 assert_cmd = "2.2.2"
