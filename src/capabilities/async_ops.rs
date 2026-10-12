@@ -25,7 +25,7 @@ use futures_util::stream::FuturesUnordered;
 use mlua::{Function, Lua, Table, Value};
 use tokio::sync::Semaphore;
 
-use super::{argcheck, raise};
+use super::{argcheck, raise, state};
 use crate::runtime::RunError;
 
 /// A task's failure: the error table it raised (recovered), or any other error.
@@ -105,12 +105,20 @@ async fn map_task(
     item: Value,
     index: usize,
     global: Option<Arc<Semaphore>>,
+    group: Option<&state::TaskGroup>,
 ) -> mlua::Result<Value> {
     let _global = match global {
         Some(s) => Some(s.acquire_owned().await.expect("semaphore never closed")),
         None => None,
     };
-    f.call_async::<Value>((item, index)).await
+    // Dropped after `call` (reverse declaration order): see `state::Task`.
+    let task = state::Task::start(group);
+    let mut call = std::pin::pin!(f.call_async::<Value>((item, index)));
+    std::future::poll_fn(|cx| {
+        let _polling = state::Task::enter(task.as_ref());
+        call.as_mut().poll(cx)
+    })
+    .await
 }
 
 fn task_list(tasks: &Table) -> mlua::Result<Vec<Function>> {
@@ -118,12 +126,23 @@ fn task_list(tasks: &Table) -> mlua::Result<Vec<Function>> {
 }
 
 /// Run one task, holding a `max_concurrency` permit (if capped) until it settles.
-async fn run_task(f: Function, sem: Option<Arc<Semaphore>>) -> mlua::Result<Value> {
+async fn run_task(
+    f: Function,
+    sem: Option<Arc<Semaphore>>,
+    group: Option<&state::TaskGroup>,
+) -> mlua::Result<Value> {
     let _permit = match sem {
         Some(s) => Some(s.acquire_owned().await.expect("semaphore never closed")),
         None => None,
     };
-    f.call_async::<Value>(()).await
+    // Dropped after `call` (reverse declaration order): see `state::Task`.
+    let task = state::Task::start(group);
+    let mut call = std::pin::pin!(f.call_async::<Value>(()));
+    std::future::poll_fn(|cx| {
+        let _polling = state::Task::enter(task.as_ref());
+        call.as_mut().poll(cx)
+    })
+    .await
 }
 
 /// `max_concurrency` caps concurrently running combinator tasks per VM.
@@ -164,11 +183,12 @@ pub fn install(
             let sentinel = fail_all.clone();
             async move {
                 let funcs = task_list(&tasks)?;
+                let group = state::TaskGroup::new(&lua);
                 let mut slots = vec![Value::Nil; funcs.len()];
                 let failed = drive(
                     funcs,
                     cap,
-                    |_, f| run_task(f, sem.clone()),
+                    |_, f| run_task(f, sem.clone(), group.as_ref()),
                     |i, result| match result {
                         Ok(v) => {
                             slots[i] = v;
@@ -199,12 +219,13 @@ pub fn install(
             let sem = sem_settled.clone();
             async move {
                 let funcs = task_list(&tasks)?;
+                let group = state::TaskGroup::new(&lua);
                 let mut slots: Vec<Option<Result<Value, Failure>>> =
                     std::iter::repeat_with(|| None).take(funcs.len()).collect();
                 drive(
                     funcs,
                     cap,
-                    |_, f| run_task(f, sem.clone()),
+                    |_, f| run_task(f, sem.clone(), group.as_ref()),
                     |i, result| {
                         slots[i] = Some(result.map_err(|e| fail(&lua, e)));
                         ControlFlow::<()>::Continue(())
@@ -245,13 +266,14 @@ pub fn install(
             let sentinel = fail_race.clone();
             async move {
                 let funcs = task_list(&tasks)?;
+                let group = state::TaskGroup::new(&lua);
                 if funcs.is_empty() {
                     return Err(mlua::Error::RuntimeError("lur.async.race: no tasks".into()));
                 }
                 let first = drive(
                     funcs,
                     cap,
-                    |_, f| run_task(f, sem.clone()),
+                    |_, f| run_task(f, sem.clone(), group.as_ref()),
                     |_, result| ControlFlow::Break(result.map_err(|e| fail(&lua, e))),
                 )
                 .await;
@@ -272,6 +294,7 @@ pub fn install(
             let sem = sem_any.clone();
             async move {
                 let funcs = task_list(&tasks)?;
+                let group = state::TaskGroup::new(&lua);
                 if funcs.is_empty() {
                     return Err(mlua::Error::RuntimeError("lur.async.any: no tasks".into()));
                 }
@@ -279,7 +302,7 @@ pub fn install(
                 let won = drive(
                     funcs,
                     cap,
-                    |_, f| run_task(f, sem.clone()),
+                    |_, f| run_task(f, sem.clone(), group.as_ref()),
                     |_, result| match result {
                         Ok(value) => ControlFlow::Break(value),
                         Err(e) => {
@@ -362,10 +385,11 @@ pub fn install(
                     .map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX))
                     .min(cap);
                 let mut slots: Vec<Option<Value>> = vec![None; items.len()];
+                let group = state::TaskGroup::new(&lua);
                 let failed = drive(
                     items,
                     window,
-                    |i, item| map_task(func.clone(), item, i + 1, global.clone()),
+                    |i, item| map_task(func.clone(), item, i + 1, global.clone(), group.as_ref()),
                     |i, result| match result {
                         Ok(v) => {
                             slots[i] = Some(v);

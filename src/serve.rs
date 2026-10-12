@@ -218,10 +218,11 @@ impl Server {
             for _ in 0..pool_size {
                 let registry = Registry::default();
                 let (lua, deadline) = build_lua(&config, Some(&registry))?;
-                lua.load(source)
-                    .set_name(&chunk_name)
-                    .exec_async()
+                let top = lua.load(source).set_name(&chunk_name).exec_async();
+                // No timeout here, but the same end-of-run cleanup.
+                crate::runtime::with_timeout(&lua, &deadline, None, top)
                     .await
+                    .unwrap_or_else(|()| unreachable!("no timeout set"))
                     .map_err(RunError::Script)?;
 
                 let regs = registry.take();
@@ -558,10 +559,7 @@ async fn call_handler(
     *vm.deadline.lock().expect("deadline mutex poisoned") = at;
 
     let call = handler.call_async::<MultiValue>(args);
-    let outcome = match timeout {
-        Some(d) => tokio::time::timeout(d, call).await.map_err(|_elapsed| ()),
-        None => Ok(call.await),
-    };
+    let outcome = crate::runtime::with_timeout(&vm.lua, &vm.deadline, timeout, call).await;
 
     *vm.deadline.lock().expect("deadline mutex poisoned") = None;
     // Don't keep a rendered error table alive on an idle pooled VM.
@@ -573,7 +571,7 @@ async fn call_handler(
         abort.pending.take()
     };
 
-    match outcome {
+    let result = match outcome {
         Err(()) => Err(CallError::TimedOut),
         Ok(Ok(values)) => Ok(values),
         Ok(Err(e)) => {
@@ -587,7 +585,15 @@ async fn call_handler(
                 Err(CallError::Lua(e))
             }
         }
+    };
+    if match &result {
+        Err(CallError::TimedOut) => true,
+        Err(CallError::Lua(e)) => crate::runtime::is_memory_error(e),
+        _ => false,
+    } {
+        crate::runtime::reclaim(&vm.lua);
     }
+    result
 }
 
 /// Sleep to each next fire and run the job. Single-flight by default (a tick

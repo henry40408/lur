@@ -680,6 +680,19 @@ Process-wide state shared across the VM pool, primitives only.
   evictable. If `fn` raises and a value within `stale_ms` of expiry exists, that value
   comes back as `"stale"`. `nil` from `fn` is not cached, and a value that does not fit
   under the caps is still returned (`"miss"`) but silently left uncached.
+- `fetch` is single-flight across the whole VM pool: concurrent misses on one key run `fn`
+  once, and the other callers wait (each within its own timeout) and share its outcome — the
+  value (including `nil` and an uncacheable one) as `"hit"`, or its error, after the same
+  stale fallback. If the running caller times out or is cancelled, one waiter runs `fn`
+  instead. A `fetch` that would wait on itself runs its own `fn` directly instead of
+  deadlocking. That covers a `fetch` from inside `fn` (same key, or a cycle of keys), and
+  one on a key whose `fn` this run left suspended in a coroutine. One exception: a key
+  parked that way inside a `lur.async` task that is still running, then fetched from a
+  sibling task, still waits: until that task ends or the sibling's timeout fires. Waiters
+  do not store: the first `fn` to finish does (normally the running caller's), with its
+  caller's `ttl_ms`/`stale_ms`.
+  Waiters get a loader's error as plain text: a `lur.serve.abort` inside `fn` reaches them
+  as a 500, not the abort's status.
 - `--state-max-entries` / `--state-max-bytes` (default unlimited) drop only `evictable`
   entries, expired first, then least recently used; a write that cannot fit raises.
 - A stale value is invisible to everything but `fetch`.

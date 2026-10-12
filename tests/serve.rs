@@ -512,6 +512,48 @@ fn vm_recovers_after_a_timeout() {
 }
 
 #[test]
+fn a_timed_out_handler_releases_what_its_nested_tasks_hold() {
+    // The timeout lands while the transaction sits in a `lur.async` task.
+    // If the deadline interrupt killed mlua's poll loop instead, the task's
+    // future (and its write lock) would linger until GC and block writers.
+    let dir = tempfile::tempdir().unwrap();
+    let s = Server::load(
+        "lur.db.exec('CREATE TABLE IF NOT EXISTS t (n INTEGER)')\n\
+         lur.serve.http('GET', '/hold', function()\n\
+           lur.async.all({ function()\n\
+             lur.db.tx(function(tx)\n\
+               tx.exec('INSERT INTO t VALUES (1)')\n\
+               lur.async.sleep(100000)\n\
+             end)\n\
+           end })\n\
+           return { body = 'never' }\n\
+         end)\n\
+         lur.serve.http('GET', '/write', function()\n\
+           lur.db.exec('INSERT INTO t VALUES (2)')\n\
+           return { body = 'ok' }\n\
+         end)",
+        RuntimeConfig {
+            pool_size: 2,
+            db_path: Some(dir.path().join("hold.db")),
+            per_event_timeout: Some(Duration::from_millis(300)),
+            ..Default::default()
+        },
+    )
+    .expect("app loads");
+    assert_eq!(s.dispatch("GET", "/hold", b"").unwrap().status, 503);
+    for _ in 0..2 {
+        let started = std::time::Instant::now();
+        let resp = s.dispatch("GET", "/write", b"").unwrap();
+        assert_eq!(resp.status, 200, "{}", String::from_utf8_lossy(&resp.body));
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+}
+
+#[test]
 fn serve_http_is_a_registration_error_in_one_shot() {
     let rt = lur::runtime::Runtime::new().expect("runtime builds");
     assert!(

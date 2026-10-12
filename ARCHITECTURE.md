@@ -68,8 +68,24 @@ Both modes build VMs via [`runtime::build_lua`](src/runtime.rs). Order is load-b
 - The **deadline interrupt** aborts CPU-bound Lua.
 - **`tokio::time::timeout`** kills code parked on async I/O, where the interrupt never fires.
 
-Applied in `Runtime::guarded` (one-shot) and `call_handler` (server). Errors are classified as
-out-of-memory → `RunError::OutOfMemory`, past-deadline → `Timeout`, else `Script`.
+Applied in `Runtime::guarded` (one-shot) and `call_handler` (server), both through
+`runtime::with_timeout` (which the app.lua top level also goes through, without a timeout,
+for its end-of-run cleanup). Errors are classified as out-of-memory → `RunError::OutOfMemory`,
+past-deadline → `Timeout`, else `Script`.
+
+Cancelling a Lua call must run its host futures' drop guards *now* (a `fetch` leader hands off
+in its `Drop`; pooled VMs are reused, not dropped). mlua runs every async host call from a
+small Lua poll loop (`=__mlua_async_poll`); if that loop raises, the Lua thread dies with the
+pending futures still on its stack and only a GC frees them. Three rules keep that from
+happening:
+
+- The interrupt never raises inside the poll loop (`in_async_poll`); past the deadline it
+  raises in the user code the loop returns to, and parked code is left to the wall clock.
+- `with_timeout` clears the deadline before dropping the call (on expiry or when its own
+  future is dropped): mlua cancels a parked call by resuming it once with a terminate
+  signal, which the interrupt would otherwise abort.
+- After a run that timed out or ran out of memory, `runtime::reclaim` does a full GC as a
+  backstop (the memory cap can also fail inside the poll loop). Only those endings pay for it.
 
 ## Capability layer
 
@@ -267,6 +283,58 @@ evictable entries raises and changes nothing. An entry past `expires` but inside
 is *stale*: it reads as absent (version 0) everywhere except `fetch`, which falls back to it
 when its loader raises. `fetch` is the one async function here; like `update`, its function
 runs with no lock held, but unlike `update` it is never retried (it has side effects).
+
+`fetch` is single-flight per key across the pool. The hit path is unchanged (one `lookup`);
+on a miss, `StateStore::join` re-checks for a value and, under the same lock, either creates
+a `Flight` (`flights: key → { id, watch::Sender, wait edges }`) and returns a `LeadGuard`, or
+subscribes to the existing flight's `watch` channel. Lifecycle:
+
+1. The leader runs the loader with no lock held, inside a task-local `LEADING` link
+   (store, key, flight id, parent link).
+2. Outcome (value, raised error, or a non-primitive rejection): `LeadGuard::finish`, under
+   one lock, stores the value (CAS on version 0; one that does not fit stays uncached),
+   publishes `Arc<Shared>` and removes the flight. Waiters turn it into their result:
+   value → `"hit"`; error → the stale fallback, else raise.
+3. No outcome (the leader's own deadline fired in the loader, or its future was dropped):
+   the `LeadGuard` drop removes the flight, which drops the sender and closes the channel.
+   Each waiter sees the close and calls `join` again: the first one in becomes the new
+   leader, the rest subscribe to it.
+
+Invariants:
+
+- **A flight is removed on every exit** of its leader — finish, error, deadline, drop,
+  panic — by its `LeadGuard` (matching the flight id, so a stale guard cannot remove a
+  successor's flight). This relies on cancellation dropping host futures promptly; see
+  [Two-layer timeout](#two-layer-timeout).
+- **No flight outlives its run.** A leader can also be parked in a coroutine the script
+  suspended and kept (e.g. in an app.lua upvalue), where nothing polls or drops it. Each
+  flight records its VM (`VmLeads`, a per-VM count), and `with_timeout` calls
+  `state::end_run` after every run on every ending, removing whatever that VM still leads.
+  A VM runs one request or cron job at a time, so anything left is orphaned. With no flights
+  led (the usual case) this is one atomic load.
+- **No Lua value crosses VMs.** Outcomes are `Prim` or `mlua::Error` (its text, as an
+  error raised in another VM would be); each waiter builds its own Lua values.
+- **No lock is held while waiting or while the loader runs**; waiters await the channel
+  and stay under their own two-layer timeout.
+- **No deadlock on re-entry.** A waiter inside a loader records a wait edge (its leading
+  key → the key it waits on); before waiting, `join` follows the edges from the target and,
+  if they lead back to one of the caller's own leading keys (same key, or a cycle across
+  keys or VMs), returns `Inline`: the loader runs without single-flight, like the pre-
+  single-flight `fetch`. `WaitGuard` removes the edges on every exit.
+- **No run waits on a leader it parked itself** (with one documented exception, a still-
+  running sibling task). Each `lur.async` task gets per-VM numbers for its combinator call
+  and itself (`state::TaskGroup`, `Task::start`), pushed on the thread-local `POLLING`
+  stack around each poll (`Task::enter`); polls nest, so the stack is the running task
+  plus the tasks it runs under. Each flight records the stack its leader started under
+  (empty = the run's top level). `parked_by_us` finds the leader's innermost task on the
+  caller's stack and returns `Inline` unless, just below it, the leader runs under a
+  sibling task of the caller's own combinator call (the only case that waits). Dropping a
+  `Task` (its future done or dropped) removes flights led under it, handing off; a per-task
+  count skips that unless it led something. The rule errs towards a duplicate load, with
+  one known exception: a leader's coroutine moved between sibling tasks of one combinator
+  call (a raw `coroutine.resume` around async calls) can still be waited on by the task
+  that parked it. Siblings also wait on each other until the parking task ends or their
+  own timeout; neither run mode has a default timeout, so that can be forever.
 
 ## Validation & structured errors
 

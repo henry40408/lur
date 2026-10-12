@@ -63,6 +63,35 @@ fn async_race_small(c: &mut Criterion) {
     });
 }
 
+/// `lur.state.fetch` on a cached key: the hit path, which must not pay for
+/// single-flight.
+fn state_fetch_hit(c: &mut Criterion) {
+    let rt = Runtime::new().expect("runtime builds");
+    rt.run("lur.state.set('hot', 'value', { ttl_ms = 3600000 })")
+        .unwrap();
+    let src = "local o = { ttl_ms = 3600000 } local f = function() return 'x' end \
+               local n = 0 for _ = 1, 1000 do \
+                 local v = lur.state.fetch('hot', o, f) n = n + #v end return n";
+    c.bench_function("state_fetch_hit_x1000", |b| {
+        b.iter(|| rt.run(black_box(src)).unwrap());
+    });
+}
+
+/// 16 concurrent misses on one key whose loader awaits I/O: one loader run
+/// with single-flight (16 without).
+fn state_fetch_concurrent_miss(c: &mut Criterion) {
+    let rt = Runtime::new().expect("runtime builds");
+    let src = "lur.state.set('cold', nil) \
+               local o = { ttl_ms = 3600000 } \
+               local load = function() lur.async.sleep(1) return 'v' end \
+               local f = function() return lur.state.fetch('cold', o, load) end \
+               local t = {} for i = 1, 16 do t[i] = f end \
+               return #lur.async.all(t)";
+    c.bench_function("state_fetch_concurrent_miss_x16", |b| {
+        b.iter(|| rt.run(black_box(src)).unwrap());
+    });
+}
+
 criterion_group!(
     benches,
     vm_cold_start,
@@ -70,6 +99,8 @@ criterion_group!(
     compute_loop_hook_overhead,
     async_map_limit,
     async_all_small,
-    async_race_small
+    async_race_small,
+    state_fetch_hit,
+    state_fetch_concurrent_miss
 );
 criterion_main!(benches);

@@ -27,7 +27,9 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   tables: no capability wrote into one after install (state lives in Rust or closures).
   Behaviour change: scripts can no longer monkeypatch or extend `lur.*`; use a local table.
 - **The deadline interrupt must keep raising.** Its error is an ordinary catchable Lua
-  error; a fire-once abort would be swallowed by `while true do pcall(...) end`.
+  error; a fire-once abort would be swallowed by `while true do pcall(...) end`. One
+  exception: it never raises inside mlua's own async poll loop (see "The deadline interrupt
+  never raises inside mlua's async poll loop" below). It still raises in every user frame.
 - **Upvalues persist across requests on a pooled VM** and can't be prevented (inherent to
   closures). `fresh_env` only isolates globals. Rule: never stash request data in an
   upvalue; use `lur.state`/`lur.kv`.
@@ -375,11 +377,105 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   other operation sees it as absent. Rejected: a separate `lur.cache`, named cache
   instances (handle lifetime across the VM pool), a global LRU over every entry, negative
   caching of loader errors, and `kv.fetch` for now (needs `--db`, which a cache should not).
-  Not done: single-flight — concurrent misses each run the loader; `fetch` is the one place
-  to add it. The LRU is a separate small index in `state.rs` rather than a shared core with
+  Single-flight came later (next entry). The LRU is a separate small index in `state.rs` rather than a shared core with
   `HttpCache`: the two differ (non-evictable entries, stale windows, versions), and sharing
   would have changed a hot path for no behavioral gain. Counters (`hits`/`misses`/`stale`/
   `evictions`) are kept for a future `/metrics`.
+- **`fetch` is single-flight per key, pool-wide, with no new API.** Without it, N
+  concurrent misses ran the loader N times (a stampede on exactly the slow upstream the
+  cache protects). One caller leads and runs the loader unlocked; the others await a
+  `tokio::sync::watch` channel in the host-side flight table, each under its own timeout.
+  How a leader's run ends decides what waiters get:
+
+  | Leader ends with | Waiters get | Loader runs again? |
+  | --- | --- | --- |
+  | a value (incl. `nil`, or one too big to cache) | the value, status `"hit"` | no |
+  | an error the loader raised (incl. its own `lur.http` timing out, OOM) | the stale value as `"stale"`, else the same error | no, and the failure is not remembered |
+  | no outcome: its own deadline/timeout, or its future dropped (client gone, lost a `race`, shutdown, cron skip) | nothing yet: one waiter becomes the new leader | yes, once |
+
+  Choices: waiters report `"hit"` (meaning "your loader did not run"; a new `"shared"`
+  status would break scripts that branch on the three existing ones). `nil` is shared but,
+  as before, not cached, so the next miss loads again. A non-primitive return is raised to
+  every waiter (it is the loader's verdict, so no stale fallback). Error identity is not
+  kept across VMs: a waiter gets the same `mlua::Error`, i.e. its text, never a Lua value
+  from another VM, so an error table from `lur.validate` or `lur.serve.abort` in a loader
+  arrives as a plain error (a 500, not the abort's status) — a known limitation. OOM inside
+  the loader counts as the loader failing (shared), since it is not the waiter's own limit.
+  The handoff signal is structural: only a `LeadGuard` removes a flight; finishing sends an
+  outcome first, dropping it unfinished closes the channel. So a cancellation path nobody
+  thought of still hands off, and the flight id stops a late guard from removing its
+  successor. Re-entry: a `fetch` inside a loader that would wait on itself — the same key,
+  or a cycle of keys (`a` → `b` → `a`, also across VMs) found by walking wait edges — runs
+  its loader inline without single-flight, exactly as `fetch` behaved before; raising would
+  have broken loaders that worked. Edges and the walk only exist for callers inside a
+  loader, and the hit path is untouched (one lookup, as before). A leader can also be left
+  parked in a coroutine the script suspended and kept reachable (an app.lua upvalue); its
+  guard would never drop, blocking the key pool-wide. Flights therefore record their VM and
+  are removed when that VM's run ends (`state::end_run`, from `with_timeout`; one atomic
+  load when the VM leads nothing). A run can also fetch a key whose leader it parked itself,
+  earlier in the same run. Waiting there would wait on itself: forever without a timeout,
+  and in serve also for every later caller of the key, since `end_run` never comes. Each
+  `lur.async` task therefore gets per-VM numbers for itself and for its combinator call
+  (`state::TaskGroup`, `state::Task`), and the combinators push them on a thread-local
+  stack (`POLLING`) around every poll of the task's future. Polls nest synchronously, so
+  the stack is exactly the running task and the tasks it runs under, each busy here or
+  awaiting the one combinator call that holds the next. A flight records the stack its
+  leader started under. A caller on the leader's VM finds the leader's innermost task on
+  its own stack (the top level if none; the stacks need not share a prefix, as a coroutine
+  can be resumed from another task). The leader is parked, so the caller runs its loader
+  inline as before single-flight, when that task is the leader's own, or is the caller's
+  innermost (which runs this `fetch` and awaits no combinator), or when the leader's next
+  task belongs to another combinator call than the caller's next. Only a leader under a
+  sibling task of the caller's own combinator call is waited on: it may be live. When a
+  task ends (its future completes or is dropped), flights led under it are removed, handing off to waiters; a leader still in the task's own future has already
+  dropped its guard by then, so what is left is parked in a coroutine that outlived the
+  task. A per-task count keeps that check off the store lock unless the task led
+  something. The rule errs towards inline: if the run resumes the parked coroutine
+  later, both load, a duplicate rather than a deadlock. Known exception: a flight records
+  the stack of its first poll only, so a leader's coroutine resumed and re-parked by a
+  different sibling task of the same combinator call is still waited on by that task (it
+  needs async calls inside a raw `coroutine.resume`, itself unsupported). Still not covered: a leader parked
+  in a coroutine inside a sibling task that is still running. The host cannot tell it from
+  a live one, so the sibling waits until that task ends or its own timeout fires, forever
+  only if that task never ends and there is no timeout; if that task in turn waits on a
+  key the sibling leads, neither ends before the timeout (wait edges only exist inside a
+  loader). Cost: an app-data lookup and counter bump per combinator call, a counter bump
+  per task, a push/pop per poll: instructions +1.6%, wall time +3-6% on combinator-only
+  micro-benchmarks of tiny `map`/`all`/`race` tasks (a task-local parent chain cost +6%).
+  A simpler design, wrapping `coroutine.resume`/`wrap` to drop flights whose coroutine
+  returned the pending sentinel, would remove this machinery and cost; it needs the hidden
+  `Lua::poll_pending()` and a sandbox review, so it is a follow-up.
+  The first loader to finish stores (normally the leader; an inline caller can beat it),
+  so the leader's `ttl_ms`/`stale_ms` win over its waiters': a waiter's own options never
+  reach the store. The stale fallback on a shared failure uses the window stored with the
+  old value, as it always has. A leader's OOM is shared as plain text so waiters are not
+  themselves classified as OOM.
+  Rejected: a per-key `Mutex` held across the loader (holds a lock across an `await`, and a
+  waiter could not tell success from a leader that died); retrying on failure (the loader
+  has side effects, and N waiters would retry N times: the stampede again); remembering
+  failures (negative caching, rejected for `fetch` before); a chain of `oneshot`s per waiter
+  (`watch` gives late subscribers the outcome and a close signal for free); passing Lua
+  values between VMs (unsound: a VM's values belong to its own state).
+- **The deadline interrupt never raises inside mlua's async poll loop.** Found while adding
+  `fetch` single-flight: a run timed out on a reused VM left its leader's flight in place,
+  so later callers of that key waited until their own timeouts. mlua drives each async host
+  call from a small Lua loop (`=__mlua_async_poll`); the tokio timer and the deadline expire
+  together, the timer wakes the loop first, the interrupt raised in it, and the thread died
+  with the pending host futures on its stack: nothing dropped them until a GC, which an idle
+  pooled VM may not run for a long time. The interrupt now skips that frame (CPU-bound code
+  is still stopped in its own frames; parked code by the wall clock), `with_timeout` clears
+  the deadline before dropping the call so mlua's terminate resume is not aborted, and a
+  timed-out or OOM run ends with a full GC as a backstop. This also makes every other
+  drop guard on a timed-out run (e.g. a cancelled `db.tx`) run promptly. A unit test pins
+  the chunk name so an mlua bump that renames it fails loudly. A serve test pins the skip
+  itself: a timed-out handler's nested `lur.async` task holding a `db.tx` must release the
+  write lock at once. Without the skip that test fails, and so do none of the others. The
+  other two pieces are belt-and-braces and no test can catch their removal. With the skip,
+  mlua's terminate resume already starts in the poll frame. The memory cap failing inside
+  that frame needs an allocation at exactly that point, which cannot be forced. Both are
+  kept because they cost nothing on a normal run. Rejected: a GC after every
+  run (cost on the hot path); a GC loop alone (one collection only frees one level of
+  nested `lur.async` tasks).
 - **`db.tx` takes the write lock on SQLite even when read-only** (`BEGIN IMMEDIATE`) —
   deliberate.
 
