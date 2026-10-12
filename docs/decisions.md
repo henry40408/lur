@@ -153,6 +153,42 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 - **`lur docs`**: hand-rolled ANSI renderer over `pulldown-cmark` (no default features);
   `termimad` rejected for its dependency weight. 16-color SGR only.
 
+- **`lur.validate` is a toolkit of functions, not a route DSL.** Small composable
+  schemas called *inside* handler code (`parse`/`try`), in the Nitro/h3 style: no
+  declarative route schema, so it works the same in one-shot scripts, cron jobs and
+  handlers, and needs no server hooks. `req.valid_*` helpers and `lur.serve.abort` are
+  planned next and will reuse the same error value; this PR is only the core.
+  Coercion is deliberately narrow because inputs are mostly query-string text: `int` takes
+  a number with an integral value or a string that is strictly `-?%d+` (`1.5`, `1e3`,
+  `0x10`, `+1` and whitespace are rejected, not "helpfully" parsed); `number` takes
+  finite decimal floats; `bool` takes only `"true"`/`"false"`; `str` never coerces from a
+  number. `""` counts as *missing* for `int`/`number`/`bool` so `?limit=` takes the default
+  (a form field left blank is not an input), but stays a valid string for `str`. Luau
+  numbers are f64, so integers beyond 2^53 are rejected rather than silently rounded; keep
+  larger ids as strings. Unknown object keys are dropped by default (mass-assignment safe,
+  and the result is always a fresh table) with `strict = true` to make them an error.
+  There are no `date`/`uuid`/`email`/`url` builtins: each has many defensible definitions
+  and a plain function validator (`function(v) ... return v end`, raising to reject)
+  plus `lur.time`/`lur.url` covers them without freezing one in the API. `pattern` is a
+  Lua pattern evaluated by Luau's own `string.find`, not a regex: no new dependency, the
+  same matcher scripts already know, and its limits (no alternation, not anchored
+  implicitly) are documented. All issues are collected (`issues = { { path, message } }`,
+  paths `a.b[2].c`, root `""`, capped at 100) so a client can fix a form in one round
+  trip. The error is a table (`kind = "validation"`) raised via Lua's `error(tbl, 0)`
+  through a small Lua wrapper — see ARCHITECTURE.md "Validation & structured errors" — so
+  `pcall` hands scripts a real table; it has `__tostring`, which is also what the CLI
+  prints, and a locked metatable (`__metatable = false`, read-only) so a script cannot
+  rewrite it for later errors on a pooled VM. Accepted limitation: a table error raised
+  inside a `lur.async` task reaches the combinator's caller as a plain string (its
+  message), because mlua flattens error values crossing `call_async`; an `xpcall`
+  trampoline around every task fixed that but cost +24–49% on `vm_cold_start`,
+  `async_map` and `async.all` (budget 5%), so it was rejected — use `try` inside tasks.
+  `optional` only waives "required" (an inner `default` still fills); `default` values are
+  not checked against `min`/`max`/`pattern`; a function validator's returned table is not
+  copied, so it may alias its input. Rejected: raising a Rust error (scripts would get an
+  opaque userdata), a global `pcall`, and a regex crate. Not done: coercion defaults beyond
+  the above, async schemas cached by name, localized messages.
+
 ## Storage
 
 - **Enum dispatch, not `dyn` trait.** Exactly two backends, one per deployment, no plugin
