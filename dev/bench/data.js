@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791793444672,
+  "lastUpdate": 1791810452978,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4877,6 +4877,78 @@ window.BENCHMARK_DATA = {
             "name": "async_race_small_x1000",
             "value": 1959269,
             "range": "± 14173",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cb40092732fc42dc3c3b35dd0b15368b32f05046",
+          "message": "feat(state): single-flight lur.state.fetch and release timed-out host futures (#163)\n\n* feat(state): single-flight lur.state.fetch across the VM pool\n\nConcurrent misses on one key now run the loader once; the other callers\nwait (each under its own timeout) and share the outcome:\n\n- value (incl. nil and uncacheable values) -> \"hit\"; nil stays uncached\n- loader error -> stale fallback, else the same error; not retried or\n  remembered\n- leader timed out or cancelled -> exactly one waiter takes over\n\nA LeadGuard removes the flight on every exit (finish publishes first;\nan unfinished drop closes the watch channel = handoff). A fetch inside a\nloader that would wait on itself (same key or a cycle of keys, also\nacross VMs) runs inline as before. Flights record their VM and are\nremoved when that VM's run ends, so a leader parked in a suspended,\nreachable coroutine cannot block the key. The hit path is unchanged.\n\nAlso fix timed-out runs orphaning pending host futures until a GC: the\ndeadline interrupt no longer raises inside mlua's async poll loop,\nwith_timeout clears the deadline before dropping the call, and timed-out\nor OOM runs end with a GC backstop.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n* fix(state): don't wait on a fetch leader the run parked itself\n\nA run that parked a lur.state.fetch leader in a suspended coroutine and\nthen fetched the same key waited on itself: forever without a timeout,\nand in serve it blocked every later caller of the key.\n\nEvery lur.async task now gets per-VM numbers for itself and its\ncombinator call, pushed on a thread-local stack around each poll; polls\nnest, so the stack is the running task plus the tasks it runs under. A\nflight records the stack its leader started under. A caller on the same\nVM finds the leader's innermost task on its own stack and runs the\nloader inline unless, just below it, the leader runs under a sibling\ntask of the caller's own combinator call (the only case that waits; this\nalso covers a coroutine parking a whole combinator, and a coroutine\nresumed from another task). When a task ends, flights led under it are\nremoved, handing off to waiters; a per-task count keeps that off the\nstore lock. The rule errs only towards a duplicate load. A leader parked\nin a still-running sibling task stays a documented limitation (the\nsibling waits for that task or its timeout).\n\nThe interrupt's past-deadline path moves out of line (#[cold]), which\ntakes the hook's per-interrupt cost back to main's (+2.15% -> +0.36%\ninstructions on a pure compute loop).\n\nTests pin what the review found unpinned: the poll-frame interrupt skip\n(a timed-out handler's nested db.tx must release the write lock), a\ndropped leader handing off while its run carries on, and a leader's OOM\nreaching waiters as a script error. Docs note that the first loader to\nfinish stores (so the leader's ttl_ms/stale_ms win over its waiters')\nand that ClearDeadline and the reclaim GC are belt-and-braces.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n* docs(state): state the single-flight self-wait exception and measured cost\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T21:04:06+08:00",
+          "tree_id": "48b7af42ff0393ae02676d0c3d564dfd0dc047d7",
+          "url": "https://github.com/henry40408/lur/commit/cb40092732fc42dc3c3b35dd0b15368b32f05046"
+        },
+        "date": 1791810452302,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 352903,
+            "range": "± 6944",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5821,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 395330,
+            "range": "± 4181",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 22344151,
+            "range": "± 331329",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3580822,
+            "range": "± 44444",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 2025186,
+            "range": "± 14567",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 2161454,
+            "range": "± 11395",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2165610,
+            "range": "± 40915",
             "unit": "ns/iter"
           }
         ]
