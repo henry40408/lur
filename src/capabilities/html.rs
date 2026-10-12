@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ego_tree::NodeId;
-use mlua::{Error, Lua, Table, UserData, UserDataMethods, Value};
+use mlua::{Error, Lua, Table, UserData, UserDataMethods, Value, Variadic};
 use scraper::{ElementRef, Html, Selector};
 
 use crate::capabilities::argcheck;
@@ -110,7 +110,14 @@ impl UserData for Node {
             let css = css_arg(lua, css, "lur.html.select_one")?;
             Ok(this.select(&css, true)?.into_iter().next())
         });
-        methods.add_method("text", |lua, this, opts: Value| {
+        methods.add_method("text", |lua, this, args: Variadic<Value>| {
+            if args.len() > 1 {
+                return Err(Error::runtime(format!(
+                    "lur.html.text: expected at most 1 argument, got {}",
+                    args.len()
+                )));
+            }
+            let opts = args.into_iter().next().unwrap_or(Value::Nil);
             // `text(css)`: shorthand for `select_one(css)` then `:text()`;
             // `nil` when nothing matches, `""` when the match has no text.
             if matches!(opts, Value::String(_)) {
@@ -186,7 +193,9 @@ impl UserData for Node {
 
 /// `node:text({ trim = true })`; returns whether to trim.
 fn text_opts(lua: &Lua, opts: Value) -> mlua::Result<bool> {
-    let Some(opts) = argcheck::arg::<Option<Table>>(lua, opts, "lur.html.text", 1, "table")? else {
+    let Some(opts) =
+        argcheck::arg::<Option<Table>>(lua, opts, "lur.html.text", 1, "string or table")?
+    else {
         return Ok(false);
     };
     match opts.get::<Value>("trim")? {
