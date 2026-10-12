@@ -168,45 +168,216 @@ struct Flight {
     waits: HashMap<Vec<u8>, usize>,
     /// The leader's VM, so [`end_run`] can remove what a run left behind.
     owner: Arc<VmLeads>,
+    /// The `lur.async` tasks the leader ran under on that VM when it started
+    /// ([`POLLING`], outermost first; empty = the run's top level), so a
+    /// caller on the same VM can spot a leader it parked itself.
+    tasks: Box<[TaskId]>,
 }
 
-/// Flights led from one VM; counts them so [`end_run`] costs one atomic load
-/// when there are none (the usual case).
+/// Flights led from one VM. Counts them so [`end_run`] and [`Task`]'s drop cost
+/// one atomic load when there are none (the usual case).
 #[derive(Debug, Default)]
-pub(crate) struct VmLeads(AtomicUsize);
+pub(crate) struct VmLeads {
+    /// Every flight this VM leads.
+    all: AtomicUsize,
+    /// Those led from inside a `lur.async` task (non-empty `Flight::tasks`).
+    in_tasks: AtomicUsize,
+    /// Per task id, how many of those flights have it in `Flight::tasks`, so
+    /// a task that ends leading nothing skips the store lock. Only touched
+    /// under the store lock, or alone (by [`Task`]'s drop).
+    per_task: std::sync::Mutex<HashMap<u64, usize>>,
+    /// Numbers this VM's `lur.async` tasks (0 is the top level).
+    next_task: AtomicU64,
+}
 
-/// The VM's [`VmLeads`] and store, kept in `lua` app data for [`end_run`].
-struct VmFlights {
+impl VmLeads {
+    fn count_tasks(&self, tasks: &[TaskId], up: bool) {
+        let mut per_task = self
+            .per_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for &(_, t) in tasks {
+            if up {
+                *per_task.entry(t).or_default() += 1;
+            } else if let Some(n) = per_task.get_mut(&t) {
+                *n -= 1;
+                if *n == 0 {
+                    per_task.remove(&t);
+                }
+            }
+        }
+    }
+
+    fn leads_in(&self, task: u64) -> bool {
+        self.per_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(&task)
+    }
+}
+
+/// The VM's [`VmLeads`] and store, kept in `lua` app data for [`end_run`] and
+/// lent to each `lur.async` task ([`Task::start`]).
+pub(crate) struct VmFlights {
     store: Arc<StateStore>,
     leads: Arc<VmLeads>,
+}
+
+/// A `lur.async` task as `(combinator call, task)` numbers, unique per VM.
+type TaskId = (u64, u64);
+
+thread_local! {
+    /// The `lur.async` tasks being polled on this thread, outermost first.
+    /// Polls nest synchronously (a task is only polled from inside its
+    /// combinator's poll, inside its parent's), so this is exactly the
+    /// running task and the tasks it runs under, each busy here or awaiting
+    /// the one combinator call that holds the next.
+    static POLLING: std::cell::RefCell<Vec<TaskId>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The `lur.async` tasks running here, outermost first (empty = top level).
+fn polling() -> Box<[TaskId]> {
+    POLLING.with_borrow(|s| s.as_slice().into())
+}
+
+/// Whether a leader that started under `tasks` (on this VM) must be parked
+/// in a coroutine, so that waiting on it would wait on ourselves. Let `c` be
+/// the leader's innermost task that is on our stack (the top level if none;
+/// the two stacks need not share a prefix, since a coroutine can be resumed
+/// from another task than the one it started in). `c` is busy here or
+/// awaiting one combinator call. The leader is parked when:
+/// - `c` is the leader's own context (it led from the top level, or from the
+///   task running here or one this runs under);
+/// - `c` is our innermost context: it runs this `fetch`, so it awaits no
+///   combinator, and the one holding the leader's task sits in a coroutine;
+/// - or the leader's next task is in another combinator call than ours: `c`
+///   awaits ours, so the leader's sits in a coroutine.
+///
+/// Otherwise the leader runs under a sibling task in our combinator call:
+/// live, or parked in a coroutine of that sibling's (indistinguishable), so
+/// we wait. Wrong only towards running the loader twice (if this run resumes
+/// the coroutine later), never towards waiting on ourselves.
+fn parked_by_us(tasks: &[TaskId]) -> bool {
+    POLLING.with_borrow(|s| {
+        // Just below `c`, in our stack and in the leader's (task ids are
+        // unique per VM).
+        let (ours, theirs) = tasks
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(j, t)| s.iter().position(|x| x == t).map(|i| (i + 1, j + 1)))
+            .unwrap_or((0, 0));
+        match (s.get(ours), tasks.get(theirs)) {
+            (_, None) | (None, _) => true,
+            (Some(ours), Some(theirs)) => ours.0 != theirs.0,
+        }
+    })
+}
+
+/// One `lur.async` combinator call on a VM: numbers its tasks for
+/// [`Task::start`]. `None` before `lur.state` is installed.
+pub(crate) struct TaskGroup {
+    vm: Arc<VmFlights>,
+    id: u64,
+}
+
+impl TaskGroup {
+    pub(crate) fn new(lua: &Lua) -> Option<Self> {
+        let vm = Arc::clone(&*lua.app_data_ref::<Arc<VmFlights>>()?);
+        let id = vm.leads.next_task.fetch_add(1, Ordering::Relaxed) + 1;
+        Some(Self { vm, id })
+    }
+}
+
+/// One `lur.async` task, as `lur.state.fetch` sees it. The combinator wraps
+/// each poll of the task's future in [`Task::enter`] and drops the `Task`
+/// after the future, however the task ends (completed or dropped). Kept to
+/// a few instructions per task (no allocation, no extra future layer): `map`
+/// can run hundreds of thousands of tiny tasks.
+pub(crate) struct Task<'a> {
+    vm: &'a VmFlights,
+    id: TaskId,
+}
+
+impl<'a> Task<'a> {
+    pub(crate) fn start(group: Option<&'a TaskGroup>) -> Option<Self> {
+        let group = group?;
+        let vm = &*group.vm;
+        let id = vm.leads.next_task.fetch_add(1, Ordering::Relaxed) + 1;
+        Some(Self {
+            vm,
+            id: (group.id, id),
+        })
+    }
+
+    /// Mark the task as polling until the returned guard drops.
+    pub(crate) fn enter(task: Option<&Self>) -> Option<Polling> {
+        let id = task?.id;
+        POLLING.with_borrow_mut(|s| s.push(id));
+        Some(Polling)
+    }
+}
+
+/// When a task ends, remove any flight led under it (by it, or by a task it
+/// started). A leader still in the task's own future tree has already
+/// dropped its guard by then, so a flight left over is parked in a coroutine
+/// that outlived the task; ending it hands off to its waiters.
+impl Drop for Task<'_> {
+    fn drop(&mut self) {
+        let id = self.id.1;
+        if self.vm.leads.in_tasks.load(Ordering::Acquire) != 0 && self.vm.leads.leads_in(id) {
+            self.vm.end_flights(Some(id));
+        }
+    }
+}
+
+/// Pops [`POLLING`] even if the poll panics.
+pub(crate) struct Polling;
+
+impl Drop for Polling {
+    fn drop(&mut self) {
+        POLLING.with_borrow_mut(|s| {
+            s.pop();
+        });
+    }
+}
+
+impl VmFlights {
+    /// Remove the flights this VM leads (only those led under task `task`, if given),
+    /// handing off to their waiters; a stray `LeadGuard`, if ever dropped or
+    /// finished, then finds no flight with its id.
+    fn end_flights(&self, task: Option<u64>) {
+        let mut inner = self.store.lock_for_drop();
+        let parked: Vec<Vec<u8>> = inner
+            .flights
+            .iter()
+            .filter(|(_, f)| {
+                Arc::ptr_eq(&f.owner, &self.leads)
+                    && task.is_none_or(|t| f.tasks.iter().any(|&(_, x)| x == t))
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+        let removed: Vec<Flight> = parked
+            .iter()
+            .filter_map(|k| remove_flight(&mut inner, k))
+            .collect();
+        drop(inner);
+        drop(removed); // closes the channels outside the lock
+    }
 }
 
 /// Call when a run on `lua` ends, however it ended. A VM runs one request or
 /// cron job at a time, so any flight it still leads now is orphaned: its
 /// leader is parked in a Lua coroutine the script suspended and never
 /// resumed (which may stay reachable, e.g. in an app.lua upvalue, so no GC
-/// would drop it). Removing the flight hands off to its waiters; the stray
-/// `LeadGuard`, if ever dropped or finished, then finds no flight with its id.
+/// would drop it). Removing the flight hands off to its waiters.
 pub(crate) fn end_run(lua: &Lua) {
-    let Some(vm) = lua.app_data_ref::<VmFlights>() else {
+    let Some(vm) = lua.app_data_ref::<Arc<VmFlights>>() else {
         return;
     };
-    if vm.leads.0.load(Ordering::Acquire) == 0 {
-        return;
+    if vm.leads.all.load(Ordering::Acquire) != 0 {
+        vm.end_flights(None);
     }
-    let mut inner = vm.store.lock_for_drop();
-    let orphaned: Vec<Vec<u8>> = inner
-        .flights
-        .iter()
-        .filter(|(_, f)| Arc::ptr_eq(&f.owner, &vm.leads))
-        .map(|(k, _)| k.clone())
-        .collect();
-    let removed: Vec<Flight> = orphaned
-        .iter()
-        .filter_map(|k| remove_flight(&mut inner, k))
-        .collect();
-    drop(inner);
-    drop(removed); // closes the channels outside the lock
 }
 
 impl Inner {
@@ -633,6 +804,12 @@ impl StateStore {
             return Join::Hit(value);
         }
         if let Some(f) = inner.flights.get(key) {
+            // Led from this VM where nothing can be driving it now: that
+            // leader is parked in a coroutine this run suspended, so waiting
+            // would wait on ourselves (see `parked_by_us`).
+            if Arc::ptr_eq(&f.owner, owner) && parked_by_us(&f.tasks) {
+                return Join::Inline;
+            }
             let rx = f.tx.subscribe();
             let chain = leading(self);
             if chain.is_empty() {
@@ -654,7 +831,12 @@ impl StateStore {
         inner.next_flight += 1;
         let id = inner.next_flight;
         let (tx, _) = watch::channel(None);
-        owner.0.fetch_add(1, Ordering::AcqRel);
+        let tasks = polling();
+        owner.all.fetch_add(1, Ordering::AcqRel);
+        if !tasks.is_empty() {
+            owner.in_tasks.fetch_add(1, Ordering::AcqRel);
+            owner.count_tasks(&tasks, true);
+        }
         inner.flights.insert(
             key.to_vec(),
             Flight {
@@ -662,6 +844,7 @@ impl StateStore {
                 tx,
                 waits: HashMap::new(),
                 owner: owner.clone(),
+                tasks,
             },
         );
         Join::Lead(LeadGuard {
@@ -747,7 +930,11 @@ fn take_flight(inner: &mut Inner, key: &[u8], id: u64) -> Option<Flight> {
 /// The only place a flight leaves the table, so its owner's count stays exact.
 fn remove_flight(inner: &mut Inner, key: &[u8]) -> Option<Flight> {
     let f = inner.flights.remove(key)?;
-    f.owner.0.fetch_sub(1, Ordering::AcqRel);
+    f.owner.all.fetch_sub(1, Ordering::AcqRel);
+    if !f.tasks.is_empty() {
+        f.owner.count_tasks(&f.tasks, false);
+        f.owner.in_tasks.fetch_sub(1, Ordering::AcqRel);
+    }
     Some(f)
 }
 
@@ -1176,10 +1363,10 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
     // `fn` runs with no lock held and may await I/O; it is not retried.
     let s = store.clone();
     let leads = Arc::new(VmLeads::default());
-    lua.set_app_data(VmFlights {
+    lua.set_app_data(Arc::new(VmFlights {
         store: store.clone(),
         leads: leads.clone(),
-    });
+    }));
     let fetch = lua
         .create_async_function(move |lua, (key, opts, func): (Value, Value, Value)| {
             let s = s.clone();

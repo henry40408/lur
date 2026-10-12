@@ -27,7 +27,9 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   tables: no capability wrote into one after install (state lives in Rust or closures).
   Behaviour change: scripts can no longer monkeypatch or extend `lur.*`; use a local table.
 - **The deadline interrupt must keep raising.** Its error is an ordinary catchable Lua
-  error; a fire-once abort would be swallowed by `while true do pcall(...) end`.
+  error; a fire-once abort would be swallowed by `while true do pcall(...) end`. One
+  exception: it never raises inside mlua's own async poll loop (see "The deadline interrupt
+  never raises inside mlua's async poll loop" below). It still raises in every user frame.
 - **Upvalues persist across requests on a pooled VM** and can't be prevented (inherent to
   closures). `fresh_env` only isolates globals. Rule: never stash request data in an
   upvalue; use `lur.state`/`lur.kv`.
@@ -410,10 +412,38 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   parked in a coroutine the script suspended and kept reachable (an app.lua upvalue); its
   guard would never drop, blocking the key pool-wide. Flights therefore record their VM and
   are removed when that VM's run ends (`state::end_run`, from `with_timeout`; one atomic
-  load when the VM leads nothing). Not covered: a run that waits on a leader it parked
-  itself in the same run waits until its own timeout — telling that apart from sibling
-  `lur.async` tasks legitimately waiting on each other is not worth the bookkeeping. A
-  leader's OOM is shared as plain text so waiters are not themselves classified as OOM.
+  load when the VM leads nothing). A run can also fetch a key whose leader it parked itself,
+  earlier in the same run. Waiting there would wait on itself: forever without a timeout,
+  and in serve also for every later caller of the key, since `end_run` never comes. Each
+  `lur.async` task therefore gets per-VM numbers for itself and for its combinator call
+  (`state::TaskGroup`, `state::Task`), and the combinators push them on a thread-local
+  stack (`POLLING`) around every poll of the task's future. Polls nest synchronously, so
+  the stack is exactly the running task and the tasks it runs under, each busy here or
+  awaiting the one combinator call that holds the next. A flight records the stack its
+  leader started under. A caller on the leader's VM finds the leader's innermost task on
+  its own stack (the top level if none; the stacks need not share a prefix, as a coroutine
+  can be resumed from another task). The leader is parked, so the caller runs its loader
+  inline as before single-flight, when that task is the leader's own, or is the caller's
+  innermost (which runs this `fetch` and awaits no combinator), or when the leader's next
+  task belongs to another combinator call than the caller's next. Only a leader under a
+  sibling task of the caller's own combinator call is waited on: it may be live. When a task ends (its future completes or is dropped), flights led under it are
+  removed, handing off to waiters; a leader still in the task's own future has already
+  dropped its guard by then, so what is left is parked in a coroutine that outlived the
+  task. A per-task count keeps that check off the store lock unless the task led
+  something. The rule errs only towards inline: if the run resumes the parked coroutine
+  later, both load, a duplicate rather than a deadlock. Still not covered: a leader parked
+  in a coroutine inside a sibling task that is still running. The host cannot tell it from
+  a live one, so the sibling waits until that task ends or its own timeout fires, forever
+  only if that task never ends and there is no timeout; if that task in turn waits on a
+  key the sibling leads, neither ends before the timeout (wait edges only exist inside a
+  loader). Cost: an app-data lookup and counter bump per combinator call, a counter bump
+  per task, a push/pop per poll: about +1.6% instructions on a combinator-only
+  micro-benchmark of tiny `map`/`all`/`race` tasks (a task-local parent chain cost +6%).
+  The first loader to finish stores (normally the leader; an inline caller can beat it),
+  so the leader's `ttl_ms`/`stale_ms` win over its waiters': a waiter's own options never
+  reach the store. The stale fallback on a shared failure uses the window stored with the
+  old value, as it always has. A leader's OOM is shared as plain text so waiters are not
+  themselves classified as OOM.
   Rejected: a per-key `Mutex` held across the loader (holds a lock across an `await`, and a
   waiter could not tell success from a leader that died); retrying on failure (the loader
   has side effects, and N waiters would retry N times: the stampede again); remembering
@@ -431,7 +461,13 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   the deadline before dropping the call so mlua's terminate resume is not aborted, and a
   timed-out or OOM run ends with a full GC as a backstop. This also makes every other
   drop guard on a timed-out run (e.g. a cancelled `db.tx`) run promptly. A unit test pins
-  the chunk name so an mlua bump that renames it fails loudly. Rejected: a GC after every
+  the chunk name so an mlua bump that renames it fails loudly. A serve test pins the skip
+  itself: a timed-out handler's nested `lur.async` task holding a `db.tx` must release the
+  write lock at once. Without the skip that test fails, and so do none of the others. The
+  other two pieces are belt-and-braces and no test can catch their removal. With the skip,
+  mlua's terminate resume already starts in the poll frame. The memory cap failing inside
+  that frame needs an allocation at exactly that point, which cannot be forced. Both are
+  kept because they cost nothing on a normal run. Rejected: a GC after every
   run (cost on the hot path); a GC loop alone (one collection only frees one level of
   nested `lur.async` tasks).
 - **`db.tx` takes the write lock on SQLite even when read-only** (`BEGIN IMMEDIATE`) —

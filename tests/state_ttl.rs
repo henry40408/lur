@@ -527,7 +527,10 @@ mod single_flight {
     fn a_cancelled_leader_hands_off() {
         let state = Arc::new(StateStore::default());
         let load = counted("lur.async.sleep(5000)", "return 'v'");
-        // `race` settles with the sleeper and drops the leading fetch.
+        // `race` settles with the sleeper and drops the leading fetch. The
+        // run then carries on, so only the dropped fetch can hand off: the
+        // end of the run comes far too late for the waiters' deadline below.
+        let started = Instant::now();
         let leader = spawn(
             &state,
             format!(
@@ -535,7 +538,8 @@ mod single_flight {
                    function() return lur.state.fetch('k', {O}, {load}) end,\n\
                    function() lur.async.sleep(300) return 'cancelled' end,\n\
                  }})\n\
-                 assert(r == 'cancelled', tostring(r))"
+                 assert(r == 'cancelled', tostring(r))\n\
+                 lur.async.sleep(3000)"
             ),
             ms(0),
             secs(10),
@@ -550,10 +554,11 @@ mod single_flight {
                 )
             })
             .collect();
-        leader.join().unwrap().unwrap();
         for w in waiters {
             w.join().unwrap().unwrap();
         }
+        assert!(started.elapsed() < ms(1500), "{:?}", started.elapsed());
+        leader.join().unwrap().unwrap();
         check(&state, "assert(lur.state.get('runs') == 2)");
         assert_eq!(state.in_flight(), 0);
     }
@@ -676,6 +681,15 @@ mod single_flight {
          end)\n\
          coroutine.resume(co)";
 
+    /// The same, with the leader inside a `lur.async` task: the coroutine
+    /// parks a whole combinator call, task and all.
+    const PARK_TASK: &str = "local co = coroutine.create(function()\n\
+           return lur.async.all({ function()\n\
+             return lur.state.fetch('k', { ttl_ms = 60000 }, function() lur.async.sleep(50) return 1 end)\n\
+           end })\n\
+         end)\n\
+         coroutine.resume(co)";
+
     #[test]
     fn a_leader_left_in_a_suspended_coroutine_is_removed_when_the_run_ends() {
         let state = Arc::new(StateStore::default());
@@ -723,6 +737,199 @@ mod single_flight {
         let r = server.dispatch("GET", "/get", b"").unwrap();
         assert_eq!((r.status, r.body.as_slice()), (200, b"2".as_slice()));
         assert!(started.elapsed() < ms(1000), "{:?}", started.elapsed());
+    }
+
+    /// Run `script` with no timeout on its own thread; panic if it has not
+    /// finished within 5s (it would otherwise hang the test forever).
+    fn finishes_untimed(state: &Arc<StateStore>, script: String) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let state = state.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(vm(&state).run(&script));
+        });
+        rx.recv_timeout(secs(5))
+            .expect("the run waited on its own parked leader")
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    #[test]
+    fn a_run_fetching_a_key_it_parked_runs_the_loader_inline() {
+        // The leader sits in a coroutine this run suspended: nothing will
+        // resume it while the run waits, so the run must not wait on it.
+        let get = format!(
+            "local v, s = lur.state.fetch('k', {O}, function() return 2 end)\n\
+             assert(v == 2 and s == 'miss', tostring(v) .. ' ' .. tostring(s))"
+        );
+        for script in [
+            format!("{PARK}\n{get}"),
+            // from a lur.async task started after parking
+            format!("{PARK}\nlur.async.all({{ function()\n{get}\nend }})"),
+            // parked and fetched inside the same task
+            format!("lur.async.all({{ function()\n{PARK}\n{get}\nend }})"),
+            // parked in a task that has ended, fetched after it
+            format!("lur.async.all({{ function()\n{PARK}\nKEEP = co\nend }})\n{get}"),
+            format!(
+                "lur.async.all({{ function()\n{PARK}\nKEEP = co\nend }})\n\
+                 lur.async.all({{ function()\n{get}\nend }})"
+            ),
+            // the leader in a task inside the parked coroutine
+            format!("{PARK_TASK}\n{get}"),
+            format!("{PARK_TASK}\nlur.async.all({{ function()\n{get}\nend }})"),
+            format!("lur.async.all({{ function()\n{PARK_TASK}\n{get}\nend }})"),
+            format!(
+                "lur.async.all({{ function()\n{PARK_TASK}\n\
+                 return lur.async.all({{ function()\n{get}\nend }})\nend }})"
+            ),
+            // ... parked by a task that has ended, fetched after it
+            format!("lur.async.all({{ function()\n{PARK_TASK}\nKEEP = co\nend }})\n{get}"),
+            format!(
+                "lur.async.all({{ function()\n{PARK_TASK}\nKEEP = co\nend }})\n\
+                 lur.async.all({{ function()\n{get}\nend }})"
+            ),
+        ] {
+            let state = Arc::new(StateStore::default());
+            finishes_untimed(&state, script.clone());
+            assert_eq!(state.in_flight(), 0);
+            let state = Arc::new(StateStore::default());
+            let started = Instant::now();
+            vm(&state)
+                .run_with_timeout(&script, secs(5))
+                .unwrap_or_else(|e| panic!("{script}: {e}"));
+            assert!(started.elapsed() < ms(1000), "{:?}", started.elapsed());
+        }
+    }
+
+    #[test]
+    fn a_leader_parked_by_a_task_hands_off_when_that_task_ends() {
+        // A sibling cannot tell the parked leader from a live one, so it
+        // waits, but only until the task that parked it ends.
+        for park in [PARK, PARK_TASK] {
+            let state = Arc::new(StateStore::default());
+            let started = Instant::now();
+            finishes_untimed(
+                &state,
+                format!(
+                    "local out = lur.async.all({{\n\
+                       function() {park}\nKEEP = co\nlur.async.sleep(300) end,\n\
+                       function() lur.async.sleep(50)\n\
+                         return {{ lur.state.fetch('k', {O}, function() return 2 end) }}\n\
+                       end,\n\
+                     }})\n\
+                     assert(out[2][1] == 2 and out[2][2] == 'miss', tostring(out[2][1]))"
+                ),
+            );
+            assert!(started.elapsed() >= ms(300), "{:?}", started.elapsed());
+            assert_eq!(state.in_flight(), 0);
+        }
+    }
+
+    #[test]
+    fn a_parked_leader_is_spotted_when_its_coroutine_moved_between_tasks() {
+        // `co` starts under t2, then t1 resumes it: x's stack no longer shares
+        // a prefix with the leader's (t2, x, y), but x is on both. y's
+        // combinator sits in `inner`, which x parked, so x must not wait
+        // (here until t2 ends).
+        let state = Arc::new(StateStore::default());
+        finishes_untimed(
+            &state,
+            format!(
+                "local O = {O}\n\
+                 local co = coroutine.create(function()\n\
+                   return lur.async.all({{ function()\n\
+                     local inner = coroutine.create(function()\n\
+                       lur.async.all({{ function()\n\
+                         return lur.state.fetch('k', O, function() lur.async.sleep(50) return 1 end)\n\
+                       end }})\n\
+                     end)\n\
+                     coroutine.resume(inner) KEEP = inner\n\
+                     lur.async.sleep(100)\n\
+                     local v, s = lur.state.fetch('k', O, function() return 2 end)\n\
+                     assert(not DONE, 'waited for the task that parked the leader')\n\
+                     assert(v == 2 and s == 'miss', tostring(v) .. ' ' .. tostring(s))\n\
+                     FETCHED = true\n\
+                   end }})\n\
+                 end)\n\
+                 lur.async.all({{\n\
+                   function() assert(coroutine.resume(co)) lur.async.sleep(1500) DONE = true end,\n\
+                   function() lur.async.sleep(20)\n\
+                     while coroutine.status(co) ~= 'dead' do\n\
+                       local ok, err = coroutine.resume(co) assert(ok, err) lur.async.sleep(10)\n\
+                     end\n\
+                   end,\n\
+                 }})\n\
+                 assert(FETCHED, 'x never fetched')"
+            ),
+        );
+        assert_eq!(state.in_flight(), 0);
+    }
+
+    #[test]
+    fn sibling_tasks_share_a_live_leader() {
+        // The leader runs under a sibling task (directly, or in a combinator
+        // nested in it): it is live, so the others wait instead of loading.
+        for (lead, name) in [
+            ("lur.state.fetch('k', O, load)", "direct"),
+            (
+                "lur.async.all({ function() return lur.state.fetch('k', O, load) end })",
+                "nested",
+            ),
+        ] {
+            let state = Arc::new(StateStore::default());
+            check(
+                &state,
+                &format!(
+                    "O = {O}\n\
+                     local calls = 0\n\
+                     function load() calls = calls + 1 lur.async.sleep(100) return 1 end\n\
+                     lur.async.all({{\n\
+                       function() {lead} end,\n\
+                       function() lur.async.sleep(20) return lur.state.fetch('k', O, load) end,\n\
+                       function() lur.async.sleep(20) return lur.async.all({{ function()\n\
+                         return lur.state.fetch('k', O, load) end }}) end,\n\
+                     }})\n\
+                     assert(calls == 1, '{name}: ' .. calls)"
+                ),
+            );
+            assert_eq!(state.in_flight(), 0);
+        }
+    }
+
+    #[test]
+    fn a_leaders_memory_error_reaches_waiters_as_a_script_error() {
+        let state = Arc::new(StateStore::default());
+        let load = "function() lur.async.sleep(300)\n\
+             local t = {} for i = 1, 1e8 do t[i] = string.rep('x', 64) .. i end end";
+        let leader = {
+            let state = state.clone();
+            let script = format!("lur.state.fetch('k', {O}, {load})");
+            std::thread::spawn(move || {
+                let rt = Runtime::with_config(RuntimeConfig {
+                    state,
+                    memory_limit: 8 * 1024 * 1024,
+                    ..Default::default()
+                })
+                .expect("runtime builds");
+                rt.run_with_timeout(&script, secs(10))
+            })
+        };
+        // Waiters run without a memory limit: their own VM never ran out, so
+        // the leader's memory error reaches them as a plain script error.
+        // Their own loader must never run; if timing slips and one does, it
+        // fails cleanly instead of allocating without a limit.
+        let waiter =
+            format!("lur.state.fetch('k', {O}, function() error('a waiter ran the loader') end)");
+        let waiters: Vec<_> = (0..3)
+            .map(|_| spawn(&state, waiter.clone(), ms(100), secs(10)))
+            .collect();
+        let led = leader.join().unwrap();
+        assert!(matches!(led, Err(RunError::OutOfMemory)), "{led:?}");
+        for w in waiters {
+            match w.join().unwrap() {
+                Err(RunError::Script(e)) => assert!(e.to_string().contains("memory"), "{e}"),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(state.in_flight(), 0);
     }
 
     #[test]

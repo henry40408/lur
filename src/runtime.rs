@@ -114,6 +114,23 @@ fn in_async_poll(lua: &Lua) -> bool {
     .unwrap_or(false)
 }
 
+/// The interrupt past the deadline. Raise on every such interrupt, so a
+/// pcall can swallow one but never escape, except in mlua's own poll loop:
+/// raising there would kill the thread with its pending host futures still
+/// on the stack, skipping their drop guards. That loop only polls and yields,
+/// so the user code it returns to (CPU-bound) or the wall-clock layer
+/// (parked) still ends the run. Kept out of line so the per-interrupt check
+/// stays as small as it was before this path existed.
+#[cold]
+#[inline(never)]
+fn past_deadline(lua: &Lua) -> mlua::Result<VmState> {
+    if in_async_poll(lua) {
+        Ok(VmState::Continue)
+    } else {
+        Err(mlua::Error::RuntimeError("lur: deadline exceeded".into()))
+    }
+}
+
 /// Build a sandboxed VM for one-shot and the server pool. The step order is
 /// load-bearing: strip globals → install capabilities → freeze → interrupt →
 /// memory cap.
@@ -142,16 +159,7 @@ pub(crate) fn build_lua(
     let hook_deadline = Arc::clone(&deadline);
     lua.set_interrupt(
         move |lua| match *hook_deadline.lock().expect("deadline mutex poisoned") {
-            // mlua's own poll loop must not raise: that would kill the
-            // thread with its pending host futures still on the stack,
-            // skipping their drop guards. It only polls and yields, so the
-            // user code it returns to (CPU-bound) or the wall-clock layer
-            // (parked) still ends the run.
-            Some(at) if Instant::now() >= at && !in_async_poll(lua) => {
-                // Raise on every interrupt past the deadline, so a pcall
-                // can swallow one but never escape.
-                Err(mlua::Error::RuntimeError("lur: deadline exceeded".into()))
-            }
+            Some(at) if Instant::now() >= at => past_deadline(lua),
             _ => Ok(VmState::Continue),
         },
     );

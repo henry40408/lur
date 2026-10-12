@@ -321,6 +321,17 @@ Invariants:
   if they lead back to one of the caller's own leading keys (same key, or a cycle across
   keys or VMs), returns `Inline`: the loader runs without single-flight, like the pre-
   single-flight `fetch`. `WaitGuard` removes the edges on every exit.
+- **No run waits on a leader it parked itself** (with one documented exception, a still-
+  running sibling task). Each `lur.async` task gets per-VM numbers for its combinator call
+  and itself (`state::TaskGroup`, `Task::start`), pushed on the thread-local `POLLING`
+  stack around each poll (`Task::enter`); polls nest, so the stack is the running task
+  plus the tasks it runs under. Each flight records the stack its leader started under
+  (empty = the run's top level). `parked_by_us` finds the leader's innermost task on the
+  caller's stack and returns `Inline` unless, just below it, the leader runs under a
+  sibling task of the caller's own combinator call (the only case that waits). Dropping a `Task` (its future done or dropped) removes
+  flights led under it, handing off; a per-task count skips that unless it led something.
+  The rule errs only towards a duplicate load. Siblings still wait on each other, until
+  the parking task ends or their own timeout.
 
 ## Validation & structured errors
 

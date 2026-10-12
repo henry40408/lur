@@ -940,6 +940,9 @@ Expiry and memory:
     shutdown): there is no outcome, so exactly one waiter runs `fn` in its place.
   - A `fetch` inside `fn` that would wait on itself (the same key, or a cycle such as
     `a` → `b` → `a`) runs its own `fn` directly rather than deadlock.
+  - Waiters do not store, so their own `ttl_ms` and `stale_ms` do not change the shared
+    value: the first `fn` to finish stores it (normally the running caller's), with its
+    caller's options.
 
 ```lua
 local calls = 0
