@@ -156,7 +156,7 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   each task, since it is shared across calls). Nested combinators (a `map` inside
   `map`/`all`/`any`) under a tight `--max-concurrency` can still starve, since a parent
   task holds a global permit while its children wait for one. `limit` must be an integer
-  >= 1 (`math.huge`, floats and strings raise naming `opts.limit`); values above the item
+  \>= 1 (`math.huge`, floats and strings raise naming `opts.limit`); values above the item
   count are harmless. The first error returns immediately and the rest are cancelled. `drop_errors` compacts the
   result in input order (failed items vanish, later indexes shift) and discards error
   messages; use `settled` when they matter. A `nil` return still leaves a hole, as in

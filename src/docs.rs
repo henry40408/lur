@@ -428,11 +428,16 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
             Event::Start(Tag::Table(_)) => {
                 rows.clear();
                 if quotes > 0 {
-                    start_quote_block(&mut out, &stack, margin, color, first, open);
-                    // render_table writes the prefix on every line itself.
-                    let p = compose_prefix(&stack, 0, margin, color, false);
-                    if out.ends_with(&p) {
-                        out.truncate(out.len() - p.len());
+                    if open.is_some_and(|(len, _)| len == out.len()) {
+                        // Marker line stays dangling, like the unquoted path.
+                        out.push('\n');
+                    } else {
+                        start_quote_block(&mut out, &stack, margin, color, first, open);
+                        // render_table writes the prefix on every line itself.
+                        let p = compose_prefix(&stack, 0, margin, color, false);
+                        if out.ends_with(&p) {
+                            out.truncate(out.len() - p.len());
+                        }
                     }
                     first = false;
                 } else {
@@ -466,7 +471,9 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
             Event::Start(Tag::Heading { level, .. }) => {
                 let lvl = level as usize;
                 heading_level = lvl;
-                margin = (lvl.saturating_sub(1)) * 2;
+                if quotes == 0 {
+                    margin = (lvl.saturating_sub(1)) * 2;
+                }
                 if quotes > 0 {
                     start_quote_block(&mut out, &stack, margin, color, first, open);
                     first = false;
@@ -547,6 +554,14 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
                 first = true;
             }
             Event::Start(Tag::BlockQuote(_)) => {
+                if quotes > 0 && !open.is_some_and(|(len, _)| len == out.len()) {
+                    if !out.is_empty() && !out.ends_with('\n') {
+                        out.push('\n');
+                    }
+                    if !first {
+                        out.push_str(&quote_separator(&stack, margin, color));
+                    }
+                }
                 stack.push(Ctx::Quote);
                 quotes += 1;
                 first = true;
@@ -744,6 +759,39 @@ mod tests {
         // Must not panic; remainder is colored as the string.
         let out = highlight_lua("local s = \"oops", true);
         assert!(out.contains("\x1b[32m\"oops\x1b[0m"), "{out:?}");
+    }
+}
+
+#[cfg(test)]
+mod quote_fix_tests {
+    use super::render;
+
+    #[test]
+    fn quoted_table_on_marker_line_has_no_stray_bar() {
+        let out = render("> - | a | b |\n>   |---|---|\n>   | 1 | 2 |\n", false);
+        assert!(!out.contains("\u{2502} -   "), "{out:?}");
+        assert!(
+            out.lines().next().unwrap().trim_end().ends_with('-'),
+            "{out:?}"
+        );
+        assert!(
+            out.contains("\u{2502}") && out.contains('1') && out.contains('2'),
+            "{out:?}"
+        );
+    }
+
+    #[test]
+    fn nested_quote_gets_bar_only_separator() {
+        let out = render("> a\n>\n> > b\n", false);
+        assert_eq!(out, "\u{2502} a\n\u{2502}\n\u{2502} \u{2502} b\n");
+    }
+
+    #[test]
+    fn heading_in_quote_does_not_shift_margin() {
+        let out = render("> # T\n>\n> a\n>\n> b\n", false);
+        assert!(out.contains("\u{2502} a\n"), "{out:?}");
+        assert!(out.contains("\u{2502} b\n"), "{out:?}");
+        assert!(!out.contains("\u{2502}   "), "{out:?}");
     }
 }
 
