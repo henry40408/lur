@@ -554,7 +554,7 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
                 first = true;
             }
             Event::Start(Tag::BlockQuote(_)) => {
-                if quotes > 0 && !open.is_some_and(|(len, _)| len == out.len()) {
+                if quotes > 0 && open.is_none_or(|(len, _)| len != out.len()) {
                     if !out.is_empty() && !out.ends_with('\n') {
                         out.push('\n');
                     }
