@@ -80,7 +80,8 @@ pub fn install(
 /// itself, so without this a script could overwrite `lur.json.encode` and the
 /// write would persist on a pooled VM. Tables nested one level deeper
 /// (`lur.crypto.hex`, `lur.args.flags`, ...) are frozen by their own capability
-/// before being attached; `every_lur_table_is_deeply_frozen` walks the whole
+/// before being attached; `every_lur_table_is_deeply_frozen` (one-shot) and
+/// `lur_tree_is_deeply_frozen_inside_a_serve_handler` walk the whole
 /// tree so a new unfrozen one fails CI. (A generic recursive walk was tried and
 /// cost ~10% of VM cold start: every function value becomes a registry ref.)
 fn freeze_children(lur: &Table) {
