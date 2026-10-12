@@ -183,7 +183,13 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   message), because mlua flattens error values crossing `call_async`; an `xpcall`
   trampoline around every task fixed that but cost +24–49% on `vm_cold_start`,
   `async_map` and `async.all` (budget 5%), so it was rejected — use `try` inside tasks.
-  `optional` only waives "required" (an inner `default` still fills); `default` values are
+  `optional` only waives "required" (an inner `default` still fills). `lur.null` is treated
+  as absent for object fields and the root (normalized in `check_object` / the entry
+  point, so `optional`/`default` see `nil` and a required field says "is required" rather
+  than a type error); it is deliberately *not* normalized for list items, where silently
+  dropping a `null` would change the list, and function validators keep seeing the raw
+  value. This is what makes `req.valid_body` accept the usual JSON clients that send
+  `{"x": null}`. `default` values are
   not checked against `min`/`max`/`pattern`; a function validator's returned table is not
   copied, so it may alias its input. Rejected: raising a Rust error (scripts would get an
   opaque userdata), a global `pcall`, and a regex crate. Not done: coercion defaults beyond
@@ -216,8 +222,20 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   uncaught in a handler stays a **500** on purpose: it signals a bug (or an unchecked
   assumption) in the script, while client input goes through `req.valid_*`. Data that
   is not JSON-encodable fails at the `abort` call (ordinary, catchable error), not later
-  while writing the response. Not done: `req.valid_body` and form parsing (next PR),
-  custom error renderers.
+  while writing the response. Not done: custom error renderers.
+- **Form bodies and `req.valid_body`.** `req.form()` / `req.form_all()` raise on a
+  non-urlencoded Content-Type instead of returning `{}`: the caller is deciding how to read
+  the body, and silently yielding nothing for a JSON post hides the bug. `valid_body` is the
+  place that dispatches (JSON / urlencoded / 415), because that is where a 4xx rather than a
+  500 is the right answer. It reuses the query decoder and list feeding so `valid_query` and
+  `valid_body` cannot drift (`+` is a space, bad `%` stays literal, invalid UTF-8 in the
+  body is replaced). Malformed JSON is always 400 `invalid JSON body`, independent of
+  `fail_status` (that knob is for schema issues, e.g. 422). An empty JSON body is invalid
+  unless the schema accepts `nil` (decided by running `try` on `nil`, not by sniffing the
+  schema), so `v.optional(...)` bodies work and everything else gets a 400 instead of a
+  confusing "expected object, got nil" issue list. Multipart stays unsupported (415 from
+  `valid_body`). Content-Type is read from `req.headers` at call time, so a script that
+  rewrites that table changes the dispatch (harmless: it can only affect its own request).
 
 ## Storage
 
@@ -343,8 +361,10 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   unless `--timeout` is set.
 - Cron: UTC only (no timezone setting), in-memory schedule, no missed-run replay, no
   `@every` interval syntax.
-- Not implemented: streaming response bodies / `lur.http` downloads, multipart bodies, retries,
-  cookie jar, proxies, a TLS-verification opt-out, managed migrations, in-memory DB, named SQL params, socket/queue trigger sources, `lur.serve.on_start`,
+- Not implemented: streaming response bodies / `lur.http` downloads, multipart bodies
+  (`req.valid_body` answers 415; no `req.multipart`), retries, cookie jar, proxies, a
+  TLS-verification opt-out, managed migrations, in-memory DB, named SQL params,
+  socket/queue trigger sources, `lur.serve.on_start`,
   configurable SQLite `busy_timeout`, machine-readable (`--error-format=json`) diagnostics,
   symmetric/asymmetric crypto and KDFs, signed cookies, `lur docs <section>`.
 - `chrono` → `jiff` migration is blocked on replacing the `cron` crate.

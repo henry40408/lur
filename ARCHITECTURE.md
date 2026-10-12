@@ -153,7 +153,8 @@ Chunks are named from the CLI path (`script` if unnamed), so errors read `app.lu
 Handler and cron errors go through the same `diagnostics::render` as one-shot.
 
 The body is a one-shot cursor (`BodyStream`): once `req.read(n)` streams it, `req.body` and
-`req.json()` raise instead of returning a partial body.
+`req.json()` / `req.form()` / `req.form_all()` / `req.valid_body` raise instead of
+returning a partial body.
 
 ### Per-call isolation
 
@@ -309,6 +310,17 @@ async Rust function over `lur.validate.try` plus the same `raising` wrapper; on 
 it calls the same `abort_table` with `fail_status` and `data = err.issues`. For an object
 schema, `validate::list_field_names` tells it which fields to feed from `query_all`.
 Errors from `try` itself (bad schema, timeout, OOM) propagate untouched.
+
+`req.form` / `req.form_all` / `req.valid_body` are lazy `__index` products the same way.
+They share the query path's pieces: `parse_query` (one decoder for query strings and
+urlencoded bodies; the body is first `from_utf8_lossy`'d), `last_table` / `all_table` (the
+`query` / `query_all` builders) and `feed_lists` (list fields from the all-values table,
+built only when the schema has list fields). The media type is read from the lowered
+`req.headers` table at call time. `valid_body` does all synchronous work (stream check,
+content-type dispatch, JSON decode or form parse) before awaiting `try`, so the body mutex
+is never held across an await. Decode errors map to `abort(400, "invalid JSON body")`
+(memory errors propagate); an empty JSON body is handed to `try` as `nil` and, if that
+fails, answered with the same 400 rather than the validation message.
 
 Known limitation: raised inside a `lur.async` task, the table is a string to the combinator's
 caller (as for validation errors), so a `pcall` around the combinator cannot read `.status`.

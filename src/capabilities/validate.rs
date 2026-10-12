@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use mlua::{Error, Function, Lua, Table, UserData, Value};
 
+use super::null;
 use super::raise;
 use crate::runtime::RunError;
 
@@ -404,6 +405,22 @@ fn check<'a>(
     })
 }
 
+/// `lur.null` (a JSON `null`) given for an object field or the root counts as
+/// absent, so `optional` and `default` apply and a required value reports
+/// "is required". Function validators still see the raw value, and list items
+/// are not normalized (a `null` item fails normally).
+fn absent_if_null(node: &Node, value: Value) -> Value {
+    let mut n = node;
+    while let Node::Optional(inner) = n {
+        n = inner;
+    }
+    if null::is_null(&value) && !matches!(n, Node::Func(_)) {
+        Value::Nil
+    } else {
+        value
+    }
+}
+
 fn required(cx: &mut Ctx<'_>, path: &str) -> Option<Value> {
     cx.fail(path, "is required");
     None
@@ -654,7 +671,7 @@ async fn check_object(
         if cx.full() {
             break;
         }
-        let raw: Value = t.raw_get(name.as_str())?;
+        let raw: Value = absent_if_null(node, t.raw_get(name.as_str())?);
         let at = child_key(&path, name);
         if let Some(v) = check(cx, node, raw, at, depth + 1).await?
             && !v.is_nil()
@@ -1133,6 +1150,7 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
                     issues: Vec::new(),
                     truncated: false,
                 };
+                let value = absent_if_null(&node, value);
                 let out = check(&mut cx, &node, value, String::new(), 0).await?;
                 match out {
                     Some(v) if cx.issues.is_empty() => Ok((true, v)),
