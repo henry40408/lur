@@ -84,6 +84,17 @@ impl Node {
         }
     }
 
+    fn has_default(&self) -> bool {
+        match self {
+            Node::Str { default, .. } => default.is_some(),
+            Node::Int { default, .. } => default.is_some(),
+            Node::Number { default, .. } => default.is_some(),
+            Node::Bool { default } => default.is_some(),
+            Node::Optional(inner) => inner.has_default(),
+            _ => false,
+        }
+    }
+
     /// Does `value` count as "not provided" for this node? `nil` always does;
     /// `""` does for the scalar types that are usually parsed from text.
     fn is_missing(&self, value: &Value) -> bool {
@@ -223,7 +234,6 @@ fn validator_message(e: &Error) -> Result<String, ()> {
         match e {
             Error::RuntimeError(s) => Some(s.clone()),
             Error::CallbackError { cause, .. } => text(cause),
-            Error::ExternalError(_) => e.downcast_ref::<raise::Raised>().map(|r| r.message.clone()),
             _ => None,
         }
     }
@@ -237,6 +247,10 @@ fn validator_message(e: &Error) -> Result<String, ()> {
         .trim();
     if head == "lur: deadline exceeded" || head.starts_with("not enough memory") {
         return Err(());
+    }
+    // A table error without `__tostring` stringifies to its address.
+    if head.starts_with("table: 0x") {
+        return Ok("validation function failed".to_owned());
     }
     // `script:12: message` → `message`
     let msg = match head.split_once(": ") {
@@ -287,8 +301,10 @@ fn check<'a>(
                 },
             },
             Node::Optional(inner) => {
-                if inner.is_missing(&value) || (value.is_nil() && matches!(**inner, Node::Func(_)))
-                {
+                // `optional` only waives "required"; a `default` still fills.
+                let skip = (inner.is_missing(&value) && !inner.has_default())
+                    || (value.is_nil() && matches!(**inner, Node::Func(_)));
+                if skip {
                     Ok(Some(Value::Nil))
                 } else {
                     check(cx, inner, value, path, depth).await
@@ -1103,7 +1119,8 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     validate
         .set("try", run("lur.validate.try").map_err(RunError::Init)?)
         .map_err(RunError::Init)?;
-    let parse = raise::raising(lua, run("lur.validate.parse").map_err(RunError::Init)?)
+    let factory = raise::factory(lua).map_err(RunError::Init)?;
+    let parse = raise::raising(&factory, run("lur.validate.parse").map_err(RunError::Init)?)
         .map_err(RunError::Init)?;
     validate.set("parse", parse).map_err(RunError::Init)?;
 

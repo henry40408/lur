@@ -273,8 +273,13 @@ Lua error (catch with `pcall`).
   On failure `err` is a table `{ kind = "validation", message, issues = { { path, message }, … } }`
   (all issues are collected; paths read `a.b[2].c`, the root is `""`; at most 100 issues, then
   `truncated = true`). `tostring(err)` is `message`, an uncaught one prints that message, and it
-  is catchable with `pcall` (also through `lur.async.*`). Bad arguments (unknown option,
-  `min > max`) raise `lur.validate.<fn>: …`. Schemas nest at most 64 levels.
+  is catchable with `pcall`. Raised inside a `lur.async` task it reaches the combinator's caller
+  as a plain string (its message), not a table; use `try` there. Bad arguments (unknown
+  option, `min > max`) raise `lur.validate.<fn>: …`. Schemas nest at most 64 levels.
+  `optional(x)` only waives "required": an inner `default` still fills. `default` values are
+  returned as given, not checked against `min`/`max`/`pattern`. A function validator's result
+  is used as is, so returning (or mutating) its input table aliases it — the input is not
+  deep-copied there.
 
 ```lua
 local v = lur.validate

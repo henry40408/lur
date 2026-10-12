@@ -1,59 +1,62 @@
 //! Raising a *table* as a Lua error value.
 //!
-//! A Rust callback cannot raise a table: `Err(..)` becomes a userdata (or a
-//! string once it crosses `call_async`), so scripts could not read fields off
-//! the caught value. The one clean way is Lua's own `error(tbl, 0)`, so a
-//! capability that fails with a structured value is split in two:
+//! A Rust callback cannot raise a table: `Err(..)` becomes a userdata, so
+//! scripts could not read fields off the caught value. The one clean way is
+//! Lua's own `error(tbl, 0)`, so a capability that fails with a structured
+//! value is split in two:
 //!
 //! 1. a Rust function returning `(true, value)` or `(false, error_table)`;
-//! 2. [`raising`], which wraps it in a tiny Lua function that returns
-//!    `value` or calls `error(error_table, 0)`.
+//! 2. a wrapper from [`factory`] + [`raising`], a tiny Lua function that
+//!    returns `value` or calls `error(error_table, 0)`.
 //!
 //! `pcall` then hands scripts the original table. Uncaught, mlua renders it
 //! through `__tostring` ([`error_meta`] makes that return `message`).
 //!
-//! Crossing Rust (`lur.async` calls tasks via `call_async`) would flatten the
-//! table to a string, so [`rescue`] — a Lua trampoline run around each task —
-//! turns a table error back into `(false, table)`, which Rust carries as
-//! [`Raised`] and hands to a [`raising`] wrapper at the end.
+//! Limitation: a table error that crosses Rust (e.g. raised inside a
+//! `lur.async` task, which mlua calls via `call_async`) reaches the other side
+//! as a plain string (its `__tostring`), not a table.
 
-use std::fmt;
+use std::sync::OnceLock;
 
-use mlua::{Error, Function, Lua, Table, Value};
+use mlua::{Function, Lua, Table};
 
-const RAISING: &str = "local inner = ...
-local error = error
-return function(...)
-  local ok, r = inner(...)
-  if ok then return r end
-  error(r, 0)
+/// Each wrapper is one closure call of the compiled factory.
+const FACTORY: &str = "local error = error
+return function(inner)
+  return function(...)
+    local ok, r = inner(...)
+    if ok then return r end
+    error(r, 0)
+  end
 end";
 
-const RESCUE: &str = "local xpcall, error, type, traceback = xpcall, error, type, debug.traceback
-local function handler(e)
-  if type(e) == 'string' then return traceback(e, 2) end
-  return e
-end
-return function(f, ...)
-  local ok, r = xpcall(f, handler, ...)
-  if ok then return true, r end
-  if type(r) == 'table' then return false, r end
-  error(r, 0)
-end";
+/// The wrapper factory; compile it once and pass it to [`raising`].
+///
+/// The source is compiled to bytecode once per process: parsing it per VM
+/// measured +14% on `vm_cold_start`, loading bytecode is free.
+pub(crate) fn factory(lua: &Lua) -> mlua::Result<Function> {
+    static BYTECODE: OnceLock<Vec<u8>> = OnceLock::new();
+    let code = if let Some(code) = BYTECODE.get() {
+        code
+    } else {
+        let compiled = mlua::chunk::Compiler::new().compile(FACTORY)?;
+        BYTECODE.get_or_init(|| compiled)
+    };
+    lua.load(code.as_slice())
+        .set_name("=lur.raise")
+        .set_mode(mlua::chunk::ChunkMode::Binary)
+        .eval()
+}
 
 /// Wrap `inner` (returning `(ok, value_or_error_table)`) so a `false` raises
 /// the table with `error(tbl, 0)`.
-pub(crate) fn raising(lua: &Lua, inner: Function) -> mlua::Result<Function> {
-    lua.load(RAISING).set_name("=lur.raise").call(inner)
+pub(crate) fn raising(factory: &Function, inner: Function) -> mlua::Result<Function> {
+    factory.call(inner)
 }
 
-/// A Lua function `(f, ...) -> (true, result) | (false, error_table)` that
-/// re-raises every non-table error unchanged.
-pub(crate) fn rescue(lua: &Lua) -> mlua::Result<Function> {
-    lua.load(RESCUE).set_name("=lur.rescue").eval()
-}
-
-/// Metatable for error tables: `tostring(err)` is `err.message`.
+/// Metatable for error tables: `tostring(err)` is `err.message`. Locked:
+/// read-only, and `getmetatable`/`setmetatable` on an error table are refused,
+/// so a script cannot rewrite it for every later error on a pooled VM.
 pub(crate) fn error_meta(lua: &Lua) -> mlua::Result<Table> {
     let meta = lua.create_table()?;
     meta.set(
@@ -63,48 +66,7 @@ pub(crate) fn error_meta(lua: &Lua) -> mlua::Result<Table> {
                 .unwrap_or_else(|| "error".to_owned()))
         })?,
     )?;
+    meta.set("__metatable", false)?;
+    meta.set_readonly(true);
     Ok(meta)
-}
-
-/// A table error carried across Rust (see [`rescue`]).
-#[derive(Debug)]
-pub(crate) struct Raised {
-    pub table: Table,
-    pub message: String,
-}
-
-impl Raised {
-    pub(crate) fn new(table: Table) -> Self {
-        let message = table
-            .raw_get::<Option<String>>("message")
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "error".to_owned());
-        Self { table, message }
-    }
-}
-
-impl fmt::Display for Raised {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for Raised {}
-
-/// The table behind an error produced from a [`rescue`]d task, if any.
-pub(crate) fn raised_table(e: &Error) -> Option<Table> {
-    e.downcast_ref::<Raised>().map(|r| r.table.clone())
-}
-
-/// `Ok(v)` → `(true, v)`; a [`Raised`] error → `(false, table)` for a
-/// [`raising`] wrapper to re-raise; any other error stays an error.
-pub(crate) fn split(r: mlua::Result<Value>) -> mlua::Result<(bool, Value)> {
-    match r {
-        Ok(v) => Ok((true, v)),
-        Err(e) => match raised_table(&e) {
-            Some(t) => Ok((false, Value::Table(t))),
-            None => Err(e),
-        },
-    }
 }

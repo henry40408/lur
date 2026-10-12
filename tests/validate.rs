@@ -355,42 +355,88 @@ assert(#big.issues == 100 and big.truncated == true)
 }
 
 #[test]
-fn error_survives_pcall_and_async_combinators() {
+fn error_is_a_table_under_pcall_but_a_string_across_async_tasks() {
     run_with_prelude(
         r#"
 local schema = v.int()
 local function bad() return v.parse(schema, "x") end
-local ok, err = pcall(function()
-  return pcall(bad)
-end)
+-- nested pcall keeps the table
+local ok, err = pcall(function() return pcall(bad) end)
 assert(ok)
--- nested pcall returns the same table shape
 local ok2, e2 = pcall(bad)
-assert(not ok2 and e2.kind == "validation")
+assert(not ok2 and type(e2) == "table" and e2.kind == "validation")
+-- a pcall inside the task keeps it too
+local inside = lur.async.all({ function()
+  local ok, e = pcall(bad)
+  return type(e) == "table" and e.kind
+end })
+assert(inside[1] == "validation")
 
+-- documented limitation: raised inside a lur.async task, the error reaches
+-- the combinator's caller as its message string, not a table
 local ok3, e3 = pcall(lur.async.all, { bad, function() return 1 end })
-assert(not ok3 and type(e3) == "table" and e3.kind == "validation", tostring(e3))
-assert(e3.issues[1].message == "must be an integer (got \"x\")", e3.issues[1].message)
-
-local ok4, e4 = pcall(lur.async.race, { bad })
-assert(not ok4 and type(e4) == "table" and e4.kind == "validation")
-
+assert(not ok3 and type(e3) ~= "table", type(e3))
+assert(tostring(e3):find('validation failed: must be an integer (got "x")', 1, true), tostring(e3))
 local ok5, e5 = pcall(lur.async.map, { "1", "x" }, function(s) return v.parse(schema, s) end)
-assert(not ok5 and type(e5) == "table" and e5.issues[1].path == "")
-
-local settled = lur.async.settled({ bad, function() return 2 end })
-assert(settled[1].ok == false and type(settled[1].err) == "table" and settled[1].err.kind == "validation")
-assert(settled[2].ok and settled[2].value == 2)
-
--- other errors still arrive as strings
-local ok6, e6 = pcall(lur.async.all, { function() error("plain") end })
-assert(not ok6 and tostring(e6):find("plain"), tostring(e6))
+assert(not ok5 and type(e5) ~= "table" and tostring(e5):find("validation failed", 1, true))
+-- try() has no such problem: it returns the table
+local results = lur.async.all({ function() return select(2, v.try(schema, "x")) end })
+assert(type(results[1]) == "table" and results[1].kind == "validation")
 
 -- success path unchanged
 local r = lur.async.all({ function() return 1 end, function() return 2 end })
 assert(r[1] == 1 and r[2] == 2)
 local m = lur.async.map({ "1", "2" }, function(s) return v.parse(schema, s) end)
 assert(m[1] == 1 and m[2] == 2)
+"#,
+    );
+}
+
+#[test]
+fn error_metatable_is_locked() {
+    run_with_prelude(
+        r#"
+local _, err = v.try(v.int(), "x")
+assert(getmetatable(err) == false, "metatable is hidden")
+assert(not pcall(setmetatable, err, {}))
+local function steal() return getmetatable(err).__tostring end
+assert(not pcall(function() getmetatable(err).__tostring = function() return "pwned" end end))
+-- every later error still renders normally
+local _, err2 = v.try(v.int(), "y")
+assert(tostring(err2):find("^validation failed"), tostring(err2))
+-- the error table itself is an ordinary table
+err.extra = 1
+assert(err.extra == 1)
+"#,
+    );
+}
+
+#[test]
+fn optional_with_default_still_fills() {
+    run_with_prelude(
+        r#"
+local o = v.object({
+  limit = v.optional(v.int({ default = 20 })),
+  name = v.optional(v.str({ default = "anon" })),
+  flag = v.optional(v.bool({ default = true })),
+  plain = v.optional(v.int()),
+})
+local out = good(o, {})
+assert(out.limit == 20 and out.name == "anon" and out.flag == true and out.plain == nil)
+local out2 = good(o, { limit = "", flag = "" })
+assert(out2.limit == 20 and out2.flag == true)
+assert(good(o, { limit = "7" }).limit == 7)
+"#,
+    );
+}
+
+#[test]
+fn function_validator_table_without_tostring_gets_fixed_message() {
+    run_with_prelude(
+        r#"
+local m = fails(function() error({ code = 1 }) end, 1)[1].message
+assert(m == "validation function failed", m)
+assert(not m:find("table: 0x", 1, true))
 "#,
     );
 }

@@ -177,9 +177,17 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   trip. The error is a table (`kind = "validation"`) raised via Lua's `error(tbl, 0)`
   through a small Lua wrapper — see ARCHITECTURE.md "Validation & structured errors" — so
   `pcall` hands scripts a real table; it has `__tostring`, which is also what the CLI
-  prints. Rejected: raising a Rust error (scripts would get an opaque userdata), a
-  global `pcall`, and a regex crate. Not done: coercion defaults beyond the above, async
-  schemas cached by name, localized messages.
+  prints, and a locked metatable (`__metatable = false`, read-only) so a script cannot
+  rewrite it for later errors on a pooled VM. Accepted limitation: a table error raised
+  inside a `lur.async` task reaches the combinator's caller as a plain string (its
+  message), because mlua flattens error values crossing `call_async`; an `xpcall`
+  trampoline around every task fixed that but cost +24–49% on `vm_cold_start`,
+  `async_map` and `async.all` (budget 5%), so it was rejected — use `try` inside tasks.
+  `optional` only waives "required" (an inner `default` still fills); `default` values are
+  not checked against `min`/`max`/`pattern`; a function validator's returned table is not
+  copied, so it may alias its input. Rejected: raising a Rust error (scripts would get an
+  opaque userdata), a global `pcall`, and a regex crate. Not done: coercion defaults beyond
+  the above, async schemas cached by name, localized messages.
 
 ## Storage
 
