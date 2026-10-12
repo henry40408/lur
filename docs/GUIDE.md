@@ -814,7 +814,8 @@ assert(ok or err ~= nil)
 - Errors from tasks: a `lur.validate` or `lur.serve.abort` table reaches `pcall` around
   `all`/`race`/`map` as the original table, and `settled`'s `err` as that table. `any`
   still reports failures as text (joined). Any other error, including a script's own
-  `error({ ... })` table, arrives as text, as before.
+  `error({ ... })` table, is flattened to its text, as before (a string in `settled`'s
+  `err`; under `pcall` an error object whose `tostring` is that text, not the table).
 
 ```lua
 lur.async.sleep(1)

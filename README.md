@@ -614,7 +614,7 @@ native to the backend.
 | `delete(key)` | | |
 | `add(key, value)` | bool | atomic set-if-absent |
 | `cas(key, expected, new)` | bool | atomic; `nil` expected = must be absent, `nil` new = delete |
-| `incr` / `decr(key, n?)` | | atomic integer counters, step 1 |
+| `incr` / `decr(key, n?)` | new integer | atomic integer counters, start from 0, step 1 |
 | `update(key, fn)` | | atomic read-modify-write; return `nil` to delete |
 | `expire(key, ms)` | bool | |
 | `ttl(key)` | `ms, exists` | |
@@ -649,7 +649,8 @@ Expiry: pass `{ ttl_ms = n }` (positive milliseconds) as the last argument of
 - Errors from tasks: a `lur.validate` or `lur.serve.abort` table reaches `pcall` around
   `all`/`race`/`map` as the original table, and `settled`'s `err` as that table. `any`
   still reports failures as text (joined). Any other error, including a script's own
-  `error({ ... })` table, arrives as text, as before.
+  `error({ ... })` table, is flattened to its text, as before (a string in `settled`'s
+  `err`; under `pcall` an error object whose `tostring` is that text, not the table).
 
 ```lua
 local r = lur.async.map({ 1, 2, 3 }, function(n) lur.async.sleep(10); return n * 2 end,
