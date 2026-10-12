@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791814793258,
+  "lastUpdate": 1791815241522,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -5033,6 +5033,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1375376,
             "range": "± 18928",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a425eec3c7d072d5670f4fea0ade51a183329e06",
+          "message": "docs: fill kv incr/decr Returns and clarify task error-table wording (#165)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T22:23:35+08:00",
+          "tree_id": "2c740d64c52141b04ec37faeb587f9d32200a988",
+          "url": "https://github.com/henry40408/lur/commit/a425eec3c7d072d5670f4fea0ade51a183329e06"
+        },
+        "date": 1791815240576,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 397609,
+            "range": "± 19308",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 6019,
+            "range": "± 135",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 192943,
+            "range": "± 5361",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 20247432,
+            "range": "± 231249",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3916508,
+            "range": "± 29399",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 2130528,
+            "range": "± 22727",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 2046944,
+            "range": "± 46574",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2208865,
+            "range": "± 47669",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1286615,
+            "range": "± 13842",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1394564,
+            "range": "± 30122",
             "unit": "ns/iter"
           }
         ]
