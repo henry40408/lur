@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791775712113,
+  "lastUpdate": 1791778532535,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4481,6 +4481,54 @@ window.BENCHMARK_DATA = {
             "name": "async_map_20k_limit_64",
             "value": 21565915,
             "range": "± 127663",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "19bc7baed5432520820498c73deed9e4edd59e71",
+          "message": "feat(serve): add lur.serve.abort and req.valid_query / req.valid_params (#155)\n\n* feat(serve): add lur.serve.abort and req.valid_query/valid_params\n\nabort ends a handler with a JSON error response; the server recognises an\nuncaught abort through a per-VM slot cleared before every run. req.valid_*\nvalidate query/params with lur.validate and abort with fail_status.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* fix(serve): bound JSON encode depth, pin validate.try, tidy abort follow-ups\n\n- lua_to_json caps nesting at 128 levels so cyclic/deep tables raise an\n  ordinary error instead of overflowing the native stack\n- abort encodes data before re-taking the slot lock\n- req.valid_* use the lur.validate.try captured at install time\n- truncate the logged abort message to 200 chars\n- fix README valid_query example, document message-match caveat\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T12:13:33+08:00",
+          "tree_id": "513e97ec45f98202efd1ad728fd4727ebb6060c2",
+          "url": "https://github.com/henry40408/lur/commit/19bc7baed5432520820498c73deed9e4edd59e71"
+        },
+        "date": 1791778531905,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 161399,
+            "range": "± 8545",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3095,
+            "range": "± 113",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 256919,
+            "range": "± 8260",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 13328922,
+            "range": "± 854650",
             "unit": "ns/iter"
           }
         ]
