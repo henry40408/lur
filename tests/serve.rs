@@ -654,8 +654,8 @@ fn lur_subtables_cannot_be_tampered_across_requests() {
 
 #[test]
 fn lur_tree_is_deeply_frozen_inside_a_serve_handler() {
-    // In serve mode `lur.serve` has a real registry and may expose extra nested
-    // tables; every table reachable from `lur` (and its metatables) must be frozen.
+    // Guards serve-only tables added later: every table reachable from `lur` (and
+    // its metatables) must be frozen when seen from a pooled serve VM too.
     let s = serve(
         "lur.serve.http('GET', '/t', function()\n\
          \tlocal seen, writable, n = {}, {}, 0\n\
