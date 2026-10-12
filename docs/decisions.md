@@ -440,9 +440,10 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   recorded the stack it started under; it cost +3-6% on combinator micro-benchmarks, and
   with no timeout still waited forever on a leader parked inside a still-running sibling
   task or whose coroutine moved between sibling tasks). Cost of the replacement,
-  interleaved medians of 6 rounds vs the builtins (main): `coroutine_resume_10k` +1.5%,
-  `coroutine_wrap_generator_10k` +4.4%, `vm_cold_start` -0.6%, `async_*` -1.9 to -2.8%,
-  `state_fetch_*` -0.2/+2.6% (noise: the hit path did not change). Gap: a memory error
+  interleaved medians of 6 rounds vs the builtins (main), two independent runs:
+  `coroutine_resume_10k` +1.5 to +4.8%, `coroutine_wrap_generator_10k` +4.4 to +6.1%,
+  `vm_cold_start` -0.6 to +2.7%, `async_*` -2.8 to +0.8%, `state_fetch_*` -0.2/+2.6%
+  (noise: the hit path did not change). Gap: a memory error
   raised inside mlua's poll loop kills a leader's thread with its guard still on the stack:
   garbage, but only dropped at a GC, which a VM that only waits may never start. A caller
   waiting on a leader of its own VM therefore runs a full GC every second (at most once a

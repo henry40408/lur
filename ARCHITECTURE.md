@@ -333,11 +333,13 @@ Invariants:
   Resumes nest on the host stack (a coroutine awaiting a host call yields mlua's pending
   sentinel to whoever resumed it), so when the resume at depth `d` returns, however, every
   flight the VM started at depth `>= d` is in a coroutine nobody runs: it is removed,
-  handing off. A leader is therefore only ever waited on while it can still run; a leader
+  handing off. A leader is therefore waited on only while it can still run (a sibling task resuming
+  another task's own thread is an mlua hazard that hangs with or without `lur.state`); a leader
   at depth 0 is the run's top level or a `lur.async` task, which the run is polling. The
   cost is one atomic load per resume while the VM leads nothing inside a coroutine. The
-  one leader left is on a thread a memory error killed inside mlua's poll loop (garbage,
-  its guard dropped at the next GC); a caller waiting on a leader of its own VM collects
+  one leader left is on a thread an error killed inside mlua's poll loop (a memory error or
+  the deadline) or an `AsyncThread` dropped during GC (garbage, its guard dropped at the
+  next GC, or `end_run`); a caller waiting on a leader of its own VM collects
   garbage every second (`wait_same_vm`, at most once a second per VM) until it hands off.
 
 ## Validation & structured errors
