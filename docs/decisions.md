@@ -156,8 +156,8 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 - **`lur.validate` is a toolkit of functions, not a route DSL.** Small composable
   schemas called *inside* handler code (`parse`/`try`), in the Nitro/h3 style: no
   declarative route schema, so it works the same in one-shot scripts, cron jobs and
-  handlers, and needs no server hooks. `req.valid_*` helpers and `lur.serve.abort` are
-  planned next and will reuse the same error value; this PR is only the core.
+  handlers, and needs no server hooks. `req.valid_*` helpers and `lur.serve.abort` build
+  on it (next entry).
   Coercion is deliberately narrow because inputs are mostly query-string text: `int` takes
   a number with an integral value or a string that is strictly `-?%d+` (`1.5`, `1e3`,
   `0x10`, `+1` and whitespace are rejected, not "helpfully" parsed); `number` takes
@@ -188,6 +188,34 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   copied, so it may alias its input. Rejected: raising a Rust error (scripts would get an
   opaque userdata), a global `pcall`, and a regex crate. Not done: coercion defaults beyond
   the above, async schemas cached by name, localized messages.
+- **`lur.serve.abort` and `req.valid_*`** wire `lur.validate` into handlers, still as
+  plain calls inside the handler (h3 `createError` style), not route metadata.
+  *Naming*: `abort`, not `error`, so a call site reads as "stop here" and a status can
+  never be mistaken for a success; only `400..=599` is accepted (`abort(200, …)` is an
+  argument error) so it cannot produce a success or redirect. The body is
+  `{"error": message, "data": data}` JSON with `data` omitted when `nil`: one fixed,
+  machine-readable shape instead of a per-handler convention; handlers that want another
+  shape return a normal response. Side effects before the abort are not rolled back: there
+  is no transaction around a handler, and pretending otherwise would be worse than saying
+  so. `fail_status` (not `status`/`error_status`) names the status used when validation
+  fails, default 400, `404` for path params. *Recognising an uncaught abort*: mlua flattens
+  a table error to a string across `call_async`, so the server cannot read `status` from
+  the error. `abort` stashes the encoded response in a per-VM slot that `call_handler`
+  clears before every run and consults only on `Err`, matching it to the failing error by
+  message; so a `pcall`-caught abort cannot leak into a later request on the pooled VM, a
+  caught-then-returned handler is a normal response, and the happy path pays two
+  uncontended locks per run. Rejected: an `xpcall` trampoline per handler/task (+24%
+  async cost, see above) and encoding the status into the error string (spoofable by any
+  `error("...")`, visible in logs). The message match means a script that catches an abort
+  and re-raises a string with the identical message is still treated as that abort; that
+  is harmless (same status the script chose earlier). Because it matches by message, an
+  abort raised inside a `lur.async` task, whose table the combinator's caller only sees as
+  a string, is still honored when uncaught. A bare `lur.validate.parse` that fails
+  uncaught in a handler stays a **500** on purpose: it signals a bug (or an unchecked
+  assumption) in the script, while client input goes through `req.valid_*`. Data that
+  is not JSON-encodable fails at the `abort` call (ordinary, catchable error), not later
+  while writing the response. Not done: `req.valid_body` and form parsing (next PR),
+  custom error renderers.
 
 ## Storage
 

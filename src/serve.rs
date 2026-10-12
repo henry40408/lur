@@ -14,7 +14,7 @@ use chrono::Utc;
 use cron::Schedule;
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::body::{Bytes, Incoming};
-use hyper::header::{CONTENT_LENGTH, HeaderName, HeaderValue, TRANSFER_ENCODING};
+use hyper::header::{CONTENT_LENGTH, CONTENT_TYPE, HeaderName, HeaderValue, TRANSFER_ENCODING};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response as HyperResponse};
@@ -26,7 +26,7 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 use tokio_util::task::TaskTracker;
 use tracing::{error, info, warn};
 
-use crate::capabilities::serve::Registry;
+use crate::capabilities::serve::{AbortSlot, PendingAbort, Registry};
 use crate::runtime::{Deadline, RunError, RuntimeConfig, build_lua};
 
 /// A loaded app: VM pool, route table, cron jobs, and the tokio runtime.
@@ -53,6 +53,8 @@ struct Vm {
     deadline: Deadline,
     handlers: Vec<Function>,
     cron_handlers: Vec<Function>,
+    /// Shared with `lur.serve.abort`; reset by `call_handler` on every run.
+    abort: AbortSlot,
 }
 
 /// Fixed-size VM pool; the semaphore caps in-flight handlers at the pool size.
@@ -252,6 +254,7 @@ impl Server {
                     deadline,
                     handlers,
                     cron_handlers,
+                    abort: registry.abort_slot(),
                 });
             }
             Ok((vms, routes.unwrap_or_default(), crons.unwrap_or_default()))
@@ -449,9 +452,10 @@ impl Server {
         let handler = &vm.handlers[id];
         let req_table = build_req(&vm.lua, req, &params).map_err(RunError::Script)?;
 
-        match call_handler(vm, handler, req_table, self.per_event_timeout).await {
+        match call_handler(vm, handler, req_table, self.per_event_timeout, true).await {
             Ok(values) => response_from(values),
             Err(CallError::TimedOut) => Ok(timeout_response()),
+            Err(CallError::Aborted(a)) => Ok(abort_response(a)),
             Err(CallError::Lua(e)) => Err(RunError::Script(e)),
         }
     }
@@ -462,10 +466,14 @@ impl Server {
         let vm = checked.vm();
         let handler = &vm.cron_handlers[job.id];
         let timeout = job.timeout.or(self.per_event_timeout);
-        match call_handler(vm, handler, (), timeout).await {
+        match call_handler(vm, handler, (), timeout, false).await {
             Ok(_) => {}
             Err(CallError::TimedOut) => {
                 warn!("cron[{}]: timed out", job.name);
+            }
+            // `abort` refuses to run outside a request, so this cannot happen.
+            Err(CallError::Aborted(a)) => {
+                warn!("cron[{}]: aborted: {}", job.name, a.message);
             }
             Err(CallError::Lua(e)) => {
                 error!(
@@ -496,7 +504,37 @@ fn to_hyper(response: Response) -> HyperResponse<Full<Bytes>> {
 enum CallError {
     /// Hit either timeout layer.
     TimedOut,
+    /// The handler ended in an uncaught `lur.serve.abort`.
+    Aborted(PendingAbort),
     Lua(mlua::Error),
+}
+
+/// The JSON response for an uncaught abort. A 4xx is the client's doing, so
+/// it is logged at `info`; a 5xx chosen by the script at `warn`.
+fn abort_response(a: PendingAbort) -> Response {
+    if a.status >= 500 {
+        warn!("handler aborted with {}: {}", a.status, a.message);
+    } else {
+        info!("handler aborted with {}: {}", a.status, a.message);
+    }
+    Response {
+        status: a.status,
+        headers: vec![(CONTENT_TYPE, HeaderValue::from_static("application/json"))],
+        body: a.body,
+    }
+}
+
+/// Whether `e` is the error an `abort` with `message` raised. The table error
+/// reaches here flattened to its `__tostring` (the message), possibly followed
+/// by a traceback.
+fn is_abort_error(e: &mlua::Error, message: &str) -> bool {
+    match e {
+        mlua::Error::RuntimeError(s) => s == message || s.starts_with(&format!("{message}\n")),
+        mlua::Error::CallbackError { cause, .. } | mlua::Error::WithContext { cause, .. } => {
+            is_abort_error(cause, message)
+        }
+        _ => false,
+    }
 }
 
 /// Run `handler` in a fresh environment under the two-layer timeout:
@@ -507,7 +545,14 @@ async fn call_handler(
     handler: &Function,
     args: impl IntoLuaMulti,
     timeout: Option<Duration>,
+    in_request: bool,
 ) -> Result<MultiValue, CallError> {
+    {
+        // Drop any abort left by a previous run (e.g. one `pcall` caught).
+        let mut abort = vm.abort.lock().expect("abort slot poisoned");
+        abort.in_request = in_request;
+        abort.pending = None;
+    }
     handler
         .set_environment(fresh_env(&vm.lua).map_err(CallError::Lua)?)
         .map_err(CallError::Lua)?;
@@ -523,12 +568,22 @@ async fn call_handler(
 
     *vm.deadline.lock().expect("deadline mutex poisoned") = None;
 
+    let pending = {
+        let mut abort = vm.abort.lock().expect("abort slot poisoned");
+        abort.in_request = false;
+        abort.pending.take()
+    };
+
     match outcome {
         Err(()) => Err(CallError::TimedOut),
         Ok(Ok(values)) => Ok(values),
         Ok(Err(e)) => {
             if matches!(at, Some(at) if Instant::now() >= at) {
                 Err(CallError::TimedOut)
+            } else if let Some(p) = pending
+                && is_abort_error(&e, &p.message)
+            {
+                Err(CallError::Aborted(p))
             } else {
                 Err(CallError::Lua(e))
             }
@@ -920,7 +975,16 @@ fn build_req(
 
     // Served via `__index` so the streamed guard can fire.
     let index_state = Arc::clone(&state);
-    let index = lua.create_function(move |lua, (_t, key): (mlua::Table, Value)| {
+    let index = lua.create_function(move |lua, (t, key): (mlua::Table, Value)| {
+        // `req.valid_query` / `req.valid_params` are built on first access, so
+        // requests that never validate pay nothing for them.
+        if let Value::String(s) = &key {
+            match &*s.as_bytes() {
+                b"valid_query" => return valid_fn(lua, &t, true),
+                b"valid_params" => return valid_fn(lua, &t, false),
+                _ => {}
+            }
+        }
         if matches!(&key, Value::String(s) if s.as_bytes() == b"body") {
             let st = index_state.lock().expect("body stream mutex poisoned");
             if st.streamed {
@@ -937,6 +1001,97 @@ fn build_req(
     table.set_metatable(Some(meta))?;
 
     Ok(table)
+}
+
+/// `req.valid_query(schema, opts?)` / `req.valid_params(schema, opts?)`:
+/// `lur.validate.try` over `req.query` / `req.params`; on issues, abort with
+/// `opts.fail_status` (default 400) and `data = issues`. Anything else `try`
+/// raises (bad schema, a validator's real error) propagates unchanged.
+fn valid_fn(lua: &Lua, req: &mlua::Table, query: bool) -> mlua::Result<Value> {
+    use crate::capabilities::serve::{ServeCtx, abort_table, status_arg};
+
+    let fname = if query {
+        "req.valid_query"
+    } else {
+        "req.valid_params"
+    };
+    let ctx = lua
+        .app_data_ref::<ServeCtx>()
+        .map(|c| c.clone())
+        .ok_or_else(|| {
+            mlua::Error::runtime(format!("{fname} is only available under `lur serve`"))
+        })?;
+    let factory = ctx.factory.clone();
+    let try_fn: Function = lua
+        .globals()
+        .get::<mlua::Table>("lur")?
+        .get::<mlua::Table>("validate")?
+        .get("try")?;
+    let source: mlua::Table = req.raw_get(if query { "query" } else { "params" })?;
+    let query_all: Option<mlua::Table> = if query {
+        req.raw_get("query_all")?
+    } else {
+        None
+    };
+
+    let inner = lua.create_async_function(move |lua, (schema, opts): (Value, Value)| {
+        let ctx = ctx.clone();
+        let try_fn = try_fn.clone();
+        let source = source.clone();
+        let query_all = query_all.clone();
+        async move {
+            let fail_status = match opts {
+                Value::Nil => 400,
+                Value::Table(o) => match o.get::<Value>("fail_status")? {
+                    Value::Nil => 400,
+                    v => status_arg(&v, fname, "opts.fail_status")?,
+                },
+                other => {
+                    return Err(mlua::Error::runtime(format!(
+                        "{fname}: argument #2 must be table, got {}",
+                        other.type_name()
+                    )));
+                }
+            };
+
+            // Lists read every value (`query_all`); other fields the last one.
+            let input = match (
+                &query_all,
+                crate::capabilities::validate::list_field_names(&schema),
+            ) {
+                (Some(all), Some(lists)) if !lists.is_empty() => {
+                    let copy = lua.create_table()?;
+                    for pair in source.pairs::<Value, Value>() {
+                        let (k, v) = pair?;
+                        copy.raw_set(k, v)?;
+                    }
+                    for name in &lists {
+                        let v: Value = all.raw_get(name.as_str())?;
+                        if !v.is_nil() {
+                            copy.raw_set(name.as_str(), v)?;
+                        }
+                    }
+                    copy
+                }
+                _ => source,
+            };
+
+            let (ok, value): (bool, Value) = try_fn.call_async((schema, input)).await?;
+            if ok {
+                return Ok((true, value));
+            }
+            let issues = match &value {
+                Value::Table(e) => e.get::<Value>("issues")?,
+                _ => Value::Nil,
+            };
+            let err = abort_table(&lua, &ctx, fail_status, "validation failed", issues)?;
+            Ok((false, Value::Table(err)))
+        }
+    })?;
+    // Fresh `error(tbl, 0)` wrapper so `pcall` sees the table.
+    Ok(Value::Function(crate::capabilities::raise::raising(
+        &factory, inner,
+    )?))
 }
 
 /// `streamed` is set once `read(n)` runs.

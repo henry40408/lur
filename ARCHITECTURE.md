@@ -145,8 +145,9 @@ Params are percent-decoded to raw bytes as `req.params`.
    timeout.
 4. Returned table → `response_from` (`status` default 200, must be 100–599; `headers`
    expanded to validated pairs, CR/LF and framing headers rejected; `body` default
-   empty); timeout → **503**; Lua error or bad return → logged, **500**. Handler errors never
-   bring the server down.
+   empty); timeout → **503**; uncaught `lur.serve.abort` → its status with a JSON body;
+   other Lua error or bad return → logged, **500**. Handler errors never bring the server
+   down.
 
 Chunks are named from the CLI path (`script` if unnamed), so errors read `app.lua:2:`.
 Handler and cron errors go through the same `diagnostics::render` as one-shot.
@@ -276,7 +277,42 @@ Raising a table: a Rust callback's `Err` reaches Lua as userdata, so
 does `error(tbl, 0)`. `pcall` therefore sees the real table, whose metatable
 (`error_meta`) is read-only with `__metatable = false`, so scripts cannot rewrite it for a
 pooled VM. Uncaught, the error's `__tostring` (its `message`) is what the CLI prints.
-`lur.serve.abort` is meant to reuse `raising`/`error_meta`.
+`lur.serve.abort` reuses `raising`/`error_meta` (below).
+
+### `lur.serve.abort` and `req.valid_*`
+
+mlua flattens a table error to a string once it crosses `call_async`, so `call_handler`
+cannot read `status` off the failing error. Instead `abort` records its response in an
+`AbortSlot` (`Arc<Mutex<AbortState>>`, created with the `Registry`, shared by the VM's
+`abort` closure and the pooled `Vm`):
+
+- `abort` checks `status` (400–599) and `message`, JSON-encodes `{error, data?}` right away
+  (so non-encodable `data` is an ordinary error at the call site), stores
+  `PendingAbort { status, message, body }`, and returns the error table to the `error(tbl, 0)`
+  wrapper. It refuses unless `in_request` is set.
+- `call_handler(.., in_request)` resets the slot (`in_request`, `pending = None`) before every
+  run and takes `pending` after it. A `pcall`-caught abort therefore cannot leak into a later
+  request or cron run on the same VM, and a handler that swallows one and returns normally
+  gets its normal response (`pending` is only consulted on `Err`).
+- On `Err`, if `pending.message` equals the error text (`RuntimeError` message, optionally
+  followed by a traceback; looked through `CallbackError`/`WithContext`), the result is
+  `CallError::Aborted` and `dispatch_async` answers `status` with a
+  `Content-Type: application/json` body (logged at `info`, `warn` for 5xx). Anything else —
+  including a timeout, which is checked first — is the usual 500/503. The happy path pays two
+  uncontended mutex locks per run and nothing else.
+- Cron runs and one-shot scripts have `in_request = false` (one-shot installs a stub like
+  `lur.serve.http`), so `abort` is an ordinary runtime error there.
+
+`req.valid_query` / `req.valid_params` are produced lazily by the request metatable's
+`__index` (like `req.body`), so a request that never validates pays nothing. Each builds an
+async Rust function over `lur.validate.try` plus the same `raising` wrapper; on `(false, err)`
+it calls the same `abort_table` with `fail_status` and `data = err.issues`. For an object
+schema, `validate::list_field_names` tells it which fields to feed from `query_all`.
+Errors from `try` itself (bad schema, timeout, OOM) propagate untouched.
+
+Known limitation: raised inside a `lur.async` task, the table is a string to the combinator's
+caller (as for validation errors), so a `pcall` around the combinator cannot read `.status`.
+Uncaught, the slot still matches by message, so the response is still the abort.
 
 Known limitation: a table error that crosses Rust loses its table-ness. `lur.async` runs
 tasks via `call_async`, where mlua stringifies the error value, so a validation error raised
