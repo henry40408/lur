@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791735762229,
+  "lastUpdate": 1791770625880,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4337,6 +4337,54 @@ window.BENCHMARK_DATA = {
             "name": "async_map_20k_limit_64",
             "value": 15502896,
             "range": "± 108709",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d5336b446399d5f46fe0ae51f3612f969600a15a",
+          "message": "feat(state): add ttl_ms, evictable caps, state.ttl and state.fetch (#149)\n\n* feat(state): add ttl_ms, evictable caps, state.ttl and state.fetch\n\nlur.state writes take { ttl_ms, evictable } with lur.kv's expiry rules.\n--state-max-entries/--state-max-bytes drop only evictable entries\n(expired first, then LRU); a write that cannot fit raises and changes\nnothing. fetch(key, {ttl_ms, stale_ms?}, fn) loads on miss and falls back\nto a stale value when the loader raises.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* fix(state): review fixes for ttl/evictable/fetch\n\n- skip the full-map scan on writes at the cap unless something can have expired\n- evict expired (stale) entries before live ones, as documented\n- keep the stale window across cas/update/incr\n- fetch stores with a version-0 compare-and-set so it cannot overwrite a write\n  made while the loader ran\n- widen timing margins in tests\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T10:01:19+08:00",
+          "tree_id": "d72e2f3bd681094cc7eae5cae29628d9d8fd7f45",
+          "url": "https://github.com/henry40408/lur/commit/d5336b446399d5f46fe0ae51f3612f969600a15a"
+        },
+        "date": 1791770625492,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 356972,
+            "range": "± 10190",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5865,
+            "range": "± 42",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 180972,
+            "range": "± 1001",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 19801021,
+            "range": "± 170481",
             "unit": "ns/iter"
           }
         ]
