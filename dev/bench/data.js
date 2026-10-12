@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791780322036,
+  "lastUpdate": 1791783751949,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4577,6 +4577,54 @@ window.BENCHMARK_DATA = {
             "name": "async_map_20k_limit_64",
             "value": 21593061,
             "range": "± 162149",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "241c45d98534a9cfb8373df056cb98d35aed91a6",
+          "message": "fix(sandbox): freeze every lur.* sub-table (#157)\n\n* fix(sandbox): freeze nested lur.* tables so pooled VMs cannot be tampered\n\nluaL_sandbox only freezes one level; lur.json.encode = f succeeded and\npersisted across requests on a pooled VM. Freeze every capability table\n(and the nested lur.crypto.hex / lur.args.*) at install time.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* docs: tighten lur.* freeze notes and assert poison test\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T13:40:01+08:00",
+          "tree_id": "3d3508e6d735e4ca1aca9425dcc809569e2a18cf",
+          "url": "https://github.com/henry40408/lur/commit/241c45d98534a9cfb8373df056cb98d35aed91a6"
+        },
+        "date": 1791783751357,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 377062,
+            "range": "± 31704",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5448,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 187625,
+            "range": "± 777",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 19892873,
+            "range": "± 133577",
             "unit": "ns/iter"
           }
         ]
