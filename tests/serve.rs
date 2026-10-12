@@ -625,3 +625,29 @@ fn invalid_response_headers_are_rejected() {
         assert!(err.contains("headers"), "{case}: {err}");
     }
 }
+
+#[test]
+fn lur_subtables_cannot_be_tampered_across_requests() {
+    let s = serve_with_timeout(
+        "lur.serve.http('GET', '/tamper', function(req)\n\
+         \tlocal fails = 0\n\
+         \tlocal function try(f, ...) if not pcall(f, ...) then fails = fails + 1 end end\n\
+         \ttry(function() lur.json.encode = function() return 'PWNED' end end)\n\
+         \ttry(function() lur.async.all = 1 end)\n\
+         \ttry(function() lur.validate.try = function() return true end end)\n\
+         \ttry(rawset, lur.json, 'decode', 1)\n\
+         \ttry(table.insert, lur.json, 1)\n\
+         \ttry(table.clear, lur.validate)\n\
+         \treturn { status = 200, body = tostring(fails) }\n\
+         end)\n\
+         lur.serve.http('GET', '/check', function(req)\n\
+         \tlocal ok = lur.validate.try(lur.validate.str(), 5)\n\
+         \treturn { status = 200, body = lur.json.encode({a=1}) .. tostring(ok) }\n\
+         end)",
+        5000,
+    );
+    let r = s.dispatch("GET", "/tamper", b"").unwrap();
+    assert_eq!(String::from_utf8(r.body).unwrap(), "6");
+    let r = s.dispatch("GET", "/check", b"").unwrap();
+    assert_eq!(String::from_utf8(r.body).unwrap(), r#"{"a":1}false"#);
+}

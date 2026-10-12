@@ -353,3 +353,33 @@ fn io_fs_env_log_state_arg_errors_are_lur_voiced() {
            :find('lur.state.update: argument #2 must be function, got string', 1, true), 'update')",
     );
 }
+
+#[test]
+fn every_lur_table_is_deeply_frozen() {
+    run("local seen, n = {}, 0\n\
+         local function walk(t, path)\n\
+         \tif seen[t] then return end\n\
+         \tseen[t] = true\n\
+         \tn = n + 1\n\
+         \tassert(table.isfrozen(t), path .. ' is not frozen')\n\
+         \tlocal mt = getmetatable(t)\n\
+         \tif type(mt) == 'table' then walk(mt, path .. '<mt>') end\n\
+         \tfor k, v in pairs(t) do\n\
+         \t\tif type(v) == 'table' then walk(v, path .. '.' .. tostring(k)) end\n\
+         \tend\n\
+         end\n\
+         walk(lur, 'lur')\n\
+         assert(n > 10, 'walked too few tables')\n\
+         local function raises(f, ...)\n\
+         \tlocal ok, err = pcall(f, ...)\n\
+         \tassert(not ok, 'expected an error')\n\
+         \tassert(tostring(err):lower():find('readonly'), tostring(err))\n\
+         end\n\
+         raises(function() lur.json.encode = 1 end)\n\
+         raises(function() lur.json.extra = 1 end)\n\
+         raises(rawset, lur.json, 'encode', 1)\n\
+         raises(table.insert, lur.json, 1)\n\
+         raises(table.clear, lur.async)\n\
+         raises(table.move, {1}, 1, 1, 1, lur.async)\n\
+         raises(function() lur.async.all = 1 end)");
+}

@@ -1,5 +1,5 @@
 //! The flat `lur.*` capability table. [`install`] must run before
-//! `sandbox(true)` freezes the globals.
+//! `sandbox(true)` freezes the globals; it also freezes every nested table.
 
 pub(crate) mod argcheck;
 pub mod args;
@@ -28,7 +28,7 @@ pub mod url;
 pub mod validate;
 pub mod xml;
 
-use mlua::Lua;
+use mlua::{Lua, Table, Value};
 
 use crate::runtime::{RunError, RuntimeConfig};
 
@@ -70,6 +70,22 @@ pub fn install(
     serve::install(lua, &lur, serve_registry)?;
     state::install(lua, &lur, config.state.clone())?;
 
+    freeze_children(&lur);
     lua.globals().set("lur", lur).map_err(RunError::Init)?;
     Ok(())
+}
+
+/// Mark the capability tables read-only. `luaL_sandbox` freezes only `lur`
+/// itself, so without this a script could overwrite `lur.json.encode` and the
+/// write would persist on a pooled VM. Tables nested one level deeper
+/// (`lur.crypto.hex`, `lur.args.flags`, ...) are frozen by their own capability
+/// before being attached; `every_lur_table_is_deeply_frozen` walks the whole
+/// tree so a new unfrozen one fails CI. (A generic recursive walk was tried and
+/// cost ~10% of VM cold start: every function value becomes a registry ref.)
+fn freeze_children(lur: &Table) {
+    for (_, v) in lur.pairs::<Value, Value>().flatten() {
+        if let Value::Table(t) = v {
+            t.set_readonly(true);
+        }
+    }
 }

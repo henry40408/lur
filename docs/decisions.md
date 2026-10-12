@@ -14,6 +14,16 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   off disk). `loadstring`/`getfenv`/`setfenv` can't reach `io`/`os`; they're stripped for
   least surface and to stop global bleed on pooled VMs. A policy-gated `require` via
   mlua's `create_require_function` is the natural future replacement for dropping it.
+- **Every table under `lur` is frozen, not just `lur`.** `luaL_sandbox` only makes the first
+  level read-only, so `lur.json.encode = f` used to succeed and persist on a pooled VM,
+  letting one request tamper with later ones (e.g. forge `lur.validate.try`).
+  `capabilities::install` now freezes each capability table, and the two nested ones
+  (`lur.crypto.hex`, `lur.args.flags`/`positional`) freeze themselves. A generic recursive
+  walk was tried first (Rust walk: +9% `vm_cold_start`; Luau walk: +24%, chunk compile)
+  because every function value becomes a registry ref; the explicit freeze is ~+2%, and a
+  test walks the whole tree to catch omissions. Nothing had to move out of lur-visible
+  tables: no capability wrote into one after install (state lives in Rust or closures).
+  Behaviour change: scripts can no longer monkeypatch or extend `lur.*`; use a local table.
 - **The deadline interrupt must keep raising.** Its error is an ordinary catchable Lua
   error; a fire-once abort would be swallowed by `while true do pcall(...) end`.
 - **Upvalues persist across requests on a pooled VM** and can't be prevented (inherent to
