@@ -335,7 +335,14 @@ fn main() -> ExitCode {
     }
     if argv.get(1).map(String::as_str) == Some("docs") {
         const GUIDE: &str = include_str!("../docs/GUIDE.md");
-        print!("{}", lur::docs::render(GUIDE, lur::color::stdout_color()));
+        print!(
+            "{}",
+            lur::docs::render_width(
+                GUIDE,
+                lur::color::stdout_color(),
+                lur::docs::terminal_width()
+            )
+        );
         return ExitCode::SUCCESS;
     }
     run_one_shot(Cli::parse())

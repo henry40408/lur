@@ -33,7 +33,7 @@ One binary, two modes, one shared core:
 | `src/serve.rs` | Server mode: VM `Pool`, `Router`, dispatch, cron, graceful shutdown. |
 | `src/color.rs` | `NO_COLOR`/TTY gate (`color_from_env`, `stderr_color`, `stdout_color`). |
 | `src/diagnostics.rs` | `render`: rustc-style error snippet + filtered traceback, `lur: <msg>` fallback. |
-| `src/docs.rs` | `render` for `lur docs` (embedded `docs/GUIDE.md`): pulldown-cmark → ANSI or plain text. |
+| `src/docs.rs` | `render` for `lur docs` (embedded `docs/GUIDE.md`): pulldown-cmark → ANSI or plain text; `render_width` wraps table cells to a width from `terminal_width` (`COLUMNS` → `TIOCGWINSZ` → 80, no wrap when stdout is not a TTY), cell width via `unicode-width`. |
 | `src/policy.rs` | `Policy`: allow/deny model (`strict()` / `loose()`) and its checks. |
 | `src/config.rs` | TOML config parsing; profile/allowlist model. |
 | `src/units.rs` | `parse_size` (binary, ×1024) and `parse_duration` for clap. |
