@@ -199,3 +199,29 @@ unsafe fn resume(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// Version of `name` in `Cargo.lock`.
+    fn locked(name: &str) -> String {
+        let lock = include_str!("../../../Cargo.lock");
+        let header = format!("name = \"{name}\"\nversion = \"");
+        let rest = lock
+            .split_once(&header)
+            .unwrap_or_else(|| panic!("{name} not in Cargo.lock"))
+            .1;
+        rest.split('"').next().unwrap().to_string()
+    }
+
+    /// `resume.rs` re-implements `lcorolib.cpp` and copies `LUAI_MAXCSTACK`, so a Luau or
+    /// `mlua-sys` upgrade must be checked by hand. When this fails: diff `lcorolib.cpp`
+    /// (`auxresume`, `coresumey`, `auxwrapy`, `cowrap`) between the two versions, re-check
+    /// `MAX_CSTACK` against `mlua-sys`'s vendored build (`set_max_cstack_size`) and the
+    /// header of this file, then update the versions below. `tests/coroutine.rs` still
+    /// has to pass: it diffs this module against the builtins.
+    #[test]
+    fn luau_and_mlua_sys_versions_are_the_ones_resume_was_checked_against() {
+        assert_eq!(locked("luau0-src"), "0.22.0+luau740");
+        assert_eq!(locked("mlua-sys"), "0.13.0");
+    }
+}
