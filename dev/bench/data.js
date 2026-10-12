@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791815782334,
+  "lastUpdate": 1791817291201,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -5201,6 +5201,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1531945,
             "range": "± 54964",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d7816cf7ef2d401d6e5b2f1518d607211aa646fa",
+          "message": "fix(docs): track blockquote and list nesting when rendering lur docs (#167)\n\n* fix(docs): track blockquote nesting with a container stack\n\nReplace the in_blockquote bool with a stack of open quotes and lists so every\nblock inside a quote carries one bar per level composed with list indents:\nnested quote tables, lists in quotes, paragraphs/code after tables and\ncontinuation lines keep their bars.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* fix(docs): tidy quoted tables on list markers, nested quote separators, heading margin\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* fix(docs): satisfy clippy nonminimal_bool in nested quote separator\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T22:57:38+08:00",
+          "tree_id": "f21e2979eac519d10e4ec08f6036a0719334a91c",
+          "url": "https://github.com/henry40408/lur/commit/d7816cf7ef2d401d6e5b2f1518d607211aa646fa"
+        },
+        "date": 1791817290313,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 387832,
+            "range": "± 2104",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5935,
+            "range": "± 86",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 212895,
+            "range": "± 12481",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 20323466,
+            "range": "± 584653",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3641713,
+            "range": "± 18564",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1929860,
+            "range": "± 135399",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1973793,
+            "range": "± 13315",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2242435,
+            "range": "± 48425",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1246892,
+            "range": "± 15124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1393101,
+            "range": "± 18174",
             "unit": "ns/iter"
           }
         ]
