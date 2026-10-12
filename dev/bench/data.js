@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791778532535,
+  "lastUpdate": 1791780322036,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4529,6 +4529,54 @@ window.BENCHMARK_DATA = {
             "name": "async_map_20k_limit_64",
             "value": 13328922,
             "range": "± 854650",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "34d8f4c43ade8c3d6bd7cfd658443110f89133eb",
+          "message": "feat(serve): add req.form / req.form_all and req.valid_body (#156)\n\n* feat(serve): add req.form / req.form_all and req.valid_body\n\nreq.form() / req.form_all() parse urlencoded bodies with the existing\nquery decoder; req.valid_body dispatches on Content-Type (JSON, urlencoded,\nelse 415) and aborts like req.valid_query.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* fix(validate): treat lur.null as absent for optional/default; tighten valid_body docs\n\nJSON null for an object field or the root now counts as absent, so\noptional/default apply and required fields report \"is required\".\nList items are not normalized. 415 omits data when Content-Type is\nmissing.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T12:42:51+08:00",
+          "tree_id": "cb71a6c1a534c3ddf7d07f7bf766e342c9590861",
+          "url": "https://github.com/henry40408/lur/commit/34d8f4c43ade8c3d6bd7cfd658443110f89133eb"
+        },
+        "date": 1791780321122,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 393351,
+            "range": "± 3929",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 6041,
+            "range": "± 341",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 181840,
+            "range": "± 2975",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 21593061,
+            "range": "± 162149",
             "unit": "ns/iter"
           }
         ]
