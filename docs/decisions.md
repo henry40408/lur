@@ -247,6 +247,24 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   parent plus the one allowed name; `--loose` is a handle on `/` (one code path); a dangling
   symlink that points inside the root can be written through, one pointing out is refused
   at open time. Cost: +17 KB binary.
+- **`lur.state` grows TTL, an opt-in eviction cap, and `fetch`; there is no `lur.cache`.**
+  A second in-memory store next to `state` and `kv` makes users pick between three; the
+  honest axis is persistence (`kv` needs `--db`, `state` does not), so `state` is "`kv` in
+  memory" with the same `ttl_ms` rules. Eviction is the hazard: a counter or an `add`-as-lock
+  silently dropped is a correctness bug. So only entries written with `evictable = true` (and
+  everything `fetch` stores) are ever dropped; a write that cannot fit raises
+  (`state is full`) and changes nothing. Caps default to unlimited so existing scripts are
+  unaffected. `fetch` (Rails' name, not `get_or_set`: the rest of the API is short Redis-style
+  verbs) is separate from `update` because its function has side effects and so cannot be
+  retried. `stale_ms` keeps an expired value only for `fetch`'s loader-failed fallback; every
+  other operation sees it as absent. Rejected: a separate `lur.cache`, named cache
+  instances (handle lifetime across the VM pool), a global LRU over every entry, negative
+  caching of loader errors, and `kv.fetch` for now (needs `--db`, which a cache should not).
+  Not done: single-flight — concurrent misses each run the loader; `fetch` is the one place
+  to add it. The LRU is a separate small index in `state.rs` rather than a shared core with
+  `HttpCache`: the two differ (non-evictable entries, stale windows, versions), and sharing
+  would have changed a hot path for no behavioral gain. Counters (`hits`/`misses`/`stale`/
+  `evictions`) are kept for a future `/metrics`.
 - **`db.tx` takes the write lock on SQLite even when read-only** (`BEGIN IMMEDIATE`) —
   deliberate.
 

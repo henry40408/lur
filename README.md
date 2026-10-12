@@ -132,6 +132,8 @@ lur docs                               # print the embedded usage guide
 | `--max-http-body` | SIZE | `16m` | Cap on a buffered `lur.http` response body. |
 | `--http-cache-max-entries` | N | `1024` | Cap on cached `lur.http` responses; least recently used are evicted; `0` = unlimited. |
 | `--http-cache-max-bytes` | SIZE | `64m` | Cap on the total size of cached `lur.http` responses; `0` = unlimited. |
+| `--state-max-entries` | N | `0` | Cap on `lur.state` entries; only `evictable` ones are dropped for room, otherwise the write raises; `0` = unlimited. |
+| `--state-max-bytes` | SIZE | `0` | Cap on the total size of `lur.state`; same rule; `0` = unlimited. |
 | `--max-concurrency` | N | unbounded | Cap on in-flight `lur.async.*` tasks per VM. |
 | `--db` | PATH or URL | | SQLite file or `postgres://`/`postgresql://` URL backing `lur.db` / `lur.kv`. |
 | `--config` | FILE | | Load a specific config file. Conflicts with `--no-config`. |
@@ -340,7 +342,16 @@ Postgres integration tests need a local Postgres: `docker compose up -d`.
   `get(key)`, `set(key, value)` (`nil` deletes), `incr`/`decr(key, n?)` (atomic; integer
   step, default 1), `add(key, value) → bool` (set-if-absent), `cas(key, expected, new) →
   bool` (`nil` = absent), and `update(key, fn)` (optimistic CAS retry; `fn` runs
-  unlocked).
+  unlocked). Writes (`set`/`add`/`cas`/`update`/`incr`/`decr`) take `{ ttl_ms = n,
+  evictable = bool }` last, with `lur.kv`'s expiry rules (`set`/`add` clear it,
+  `cas`/`update`/`incr`/`decr` keep it, `incr`/`decr` set it only when absent unless
+  `renew_ttl = true`); `ttl(key) → ms, exists`. `fetch(key, { ttl_ms, stale_ms? }, fn) →
+  value, "hit"|"miss"|"stale"` runs `fn` on a miss (async, unlocked, not retried) and stores
+  the value as evictable; if `fn` raises and a value within `stale_ms` of expiry exists, that
+  value comes back as `"stale"`. `nil` from `fn` is not cached. `--state-max-entries` /
+  `--state-max-bytes` (default unlimited) drop only `evictable` entries, expired first, then
+  least recently used; a write that cannot fit raises. A stale value is invisible to
+  everything but `fetch`.
 
 ### Server mode (`lur serve`)
 
