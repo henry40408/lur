@@ -27,3 +27,18 @@ fn docs_honors_no_color() {
         "no ANSI escape with NO_COLOR: {out:?}"
     );
 }
+
+#[test]
+fn docs_renders_tables_without_raw_pipe_rows() {
+    let out = Command::cargo_bin("lur")
+        .unwrap()
+        .arg("docs")
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(!text.contains("| --- |"), "raw table separator leaked");
+}

@@ -326,6 +326,38 @@ mod tests {
     }
 
     #[test]
+    fn tables_render_aligned_without_pipes_or_separator() {
+        let md = "| Call | Returns |\n| --- | --- |\n| `a` | one |\n| `longer` | two |\n\nafter\n";
+        let out = render(md, false);
+        assert!(!out.contains("| ---") && !out.contains('|'), "{out:?}");
+        assert!(!out.contains('\x1b'), "{out:?}");
+        let rows: Vec<&str> = out
+            .lines()
+            .filter(|l| l.contains("one") || l.contains("two"))
+            .collect();
+        assert_eq!(rows.len(), 2, "{out:?}");
+        // Second column starts at the same offset on both rows.
+        assert_eq!(rows[0].find("one"), rows[1].find("two"), "{out:?}");
+        assert!(out.contains("Call") && out.contains("after"), "{out:?}");
+    }
+
+    #[test]
+    fn table_inside_list_item_keeps_items_clean() {
+        let md =
+            "- first\n\n  | k | v |\n  | --- | --- |\n  | a | b |\n\n- second\n\n  more text\n";
+        let out = render(md, false);
+        assert!(!out.contains("| ---"), "{out:?}");
+        assert!(
+            !out.contains("-       "),
+            "no margin glued after the bullet: {out:?}"
+        );
+        assert!(
+            out.contains("- first") && out.contains("- second"),
+            "{out:?}"
+        );
+    }
+
+    #[test]
     fn color_on_styles_headings_and_highlights_code() {
         let out = render(MD, true);
         assert!(out.contains("\x1b[1;7m"), "h1 reverse bar: {out:?}");
