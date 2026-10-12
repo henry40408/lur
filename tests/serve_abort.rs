@@ -415,7 +415,7 @@ fn overwriting_validate_try_cannot_forge_later_requests() {
          \treturn { body = tostring(q.n) }\n\
          end)",
     );
-    get(&s, "/poison", "");
+    assert_eq!(body(&get(&s, "/poison", "")), "false");
     assert_eq!(body(&get(&s, "/s", "n=5")), "5");
     assert_eq!(get(&s, "/s", "n=x").status, 400);
 }

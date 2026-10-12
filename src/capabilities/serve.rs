@@ -39,8 +39,8 @@ pub(crate) struct ServeCtx {
     pub slot: AbortSlot,
     pub factory: Function,
     pub meta: Table,
-    /// `lur.validate.try` as installed, so a script that overwrites the
-    /// (per-request writable) `lur` table cannot forge validation results.
+    /// `lur.validate.try` as installed. `lur.*` is read-only, so this is defense
+    /// in depth: validation results stay unforgeable even if that regresses.
     pub try_fn: Function,
 }
 

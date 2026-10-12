@@ -102,7 +102,8 @@ Every capability is denied until a policy grants it. Two profiles set the baseli
 `os.execute`, `io`, `loadfile`/`dofile`, and `package` are absent; `require`, `getfenv`,
 `setfenv`, and `loadstring` are removed (they would reach the writable global
 environment). `string`, `table`, `math`, `bit32`, `utf8`, and `coroutine` remain. Globals
-are frozen, and in server mode each request/job runs in a fresh environment whose writes
+and the whole `lur.*` tree (nested tables included) are frozen, so scripts cannot monkeypatch
+`lur.*`; in server mode each request/job runs in a fresh environment whose writes
 are discarded, so no state leaks across calls.
 
 ## CLI reference
@@ -299,7 +300,8 @@ local ok, err = v.try(v.int({ max = 10 }), "11")  -- false, err.issues[1].messag
   `lines()` iterates newline-stripped lines.
 - **`lur.stdout`** — `write(bytes)`, `flush()`. Raw bytes, no implicit newline.
 - **`lur.args`** — `positional` (1-indexed array) and `flags` (`--name value`/
-  `--name=value` → `"value"`, bare `--flag` → `true`).
+  `--name=value` → `"value"`, bare `--flag` → `true`)). Read-only, like every
+  `lur.*` table; copy into a local table to modify.
 
 ### Capabilities (policy-gated)
 

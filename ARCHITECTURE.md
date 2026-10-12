@@ -51,7 +51,12 @@ Both modes build VMs via [`runtime::build_lua`](src/runtime.rs). Order is load-b
 1. **Strip `require`, `getfenv`, `setfenv`, `loadstring`.** They survive `sandbox(true)`:
    `require` reads `.luau` files off disk (bypassing `lur.fs`); the other three reach the
    writable global env, letting values bleed across requests on a pooled VM.
-2. **`capabilities::install`** builds the `lur` table — must precede the freeze.
+2. **`capabilities::install`** builds the `lur` table — must precede the freeze — and, as its
+   last step, marks every capability table read-only (nested ones, e.g. `lur.crypto.hex`, are
+   frozen by their own capability). `luaL_sandbox` only freezes one level, so without this
+   `lur.json.encode = ...` would succeed and persist on a pooled VM. Capabilities must not
+   keep mutable state in a lur-visible table; per-request results are created later and stay
+   mutable. `every_lur_table_is_deeply_frozen` walks the tree so a new unfrozen table fails CI.
 3. **`sandbox(true)`** freezes globals (`rawset` can't reopen them). Luau already lacks
    `os.execute`, `io`, `loadfile`/`dofile`, `package`.
 4. **Deadline interrupt.** Reads a shared `Deadline = Arc<Mutex<Option<Instant>>>`; past the

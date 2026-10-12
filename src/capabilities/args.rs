@@ -33,6 +33,8 @@ pub fn install(lua: &Lua, lur: &Table, argv: &[String]) -> Result<(), RunError> 
         i += 1;
     }
 
+    flags.set_readonly(true);
+    positional.set_readonly(true);
     let args = lua.create_table().map_err(RunError::Init)?;
     args.set("flags", flags).map_err(RunError::Init)?;
     args.set("positional", positional).map_err(RunError::Init)?;

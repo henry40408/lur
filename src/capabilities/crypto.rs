@@ -180,6 +180,7 @@ fn install_hex(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
         .map_err(RunError::Init)?;
     hex.set("decode", decode).map_err(RunError::Init)?;
 
+    hex.set_readonly(true);
     crypto.set("hex", hex).map_err(RunError::Init)?;
     Ok(())
 }
