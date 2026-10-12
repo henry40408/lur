@@ -43,6 +43,7 @@ One binary, two modes, one shared core:
 | `src/capabilities/validate.rs` | `lur.validate`: schema nodes (opaque userdata), `parse`/`try`, issue collection; pure compute. |
 | `src/capabilities/raise.rs` | The one way to raise a *table* as a Lua error (`raising`, or `raising_hot` + `Sentinel` on hot paths), give it a locked `__tostring` metatable (`error_meta`), and recover it after a `lur.async` task flattened it (`recover`). |
 | `src/capabilities/kv.rs` | `lur.kv` over the backend's kv methods; owns the `IN_KV_UPDATE` reentrancy guard. |
+| `src/capabilities/state/resume.rs` | `coroutine.resume`/`wrap` re-done as Luau C functions that count resume depth for `fetch` single-flight; the crate's only `unsafe`. |
 
 ## Shared core: `build_lua`
 
@@ -57,6 +58,8 @@ Both modes build VMs via [`runtime::build_lua`](src/runtime.rs). Order is load-b
    `lur.json.encode = ...` would succeed and persist on a pooled VM. Capabilities must not
    keep mutable state in a lur-visible table; per-request results are created later and stay
    mutable. `every_lur_table_is_deeply_frozen` walks the tree so a new unfrozen table fails CI.
+   `lur.state`'s install also replaces `coroutine.resume` and `coroutine.wrap` (see
+   [`lur.state`](#lurstate)), which only works before the freeze.
 3. **`sandbox(true)`** freezes globals (`rawset` can't reopen them). Luau already lacks
    `os.execute`, `io`, `loadfile`/`dofile`, `package`.
 4. **Deadline interrupt.** Reads a shared `Deadline = Arc<Mutex<Option<Instant>>>`; past the
@@ -311,7 +314,8 @@ Invariants:
   flight records its VM (`VmLeads`, a per-VM count), and `with_timeout` calls
   `state::end_run` after every run on every ending, removing whatever that VM still leads.
   A VM runs one request or cron job at a time, so anything left is orphaned. With no flights
-  led (the usual case) this is one atomic load.
+  led (the usual case) this is one atomic load. `end_run` is the backstop: the next rule
+  removes almost every parked leader long before.
 - **No Lua value crosses VMs.** Outcomes are `Prim` or `mlua::Error` (its text, as an
   error raised in another VM would be); each waiter builds its own Lua values.
 - **No lock is held while waiting or while the loader runs**; waiters await the channel
@@ -321,20 +325,20 @@ Invariants:
   if they lead back to one of the caller's own leading keys (same key, or a cycle across
   keys or VMs), returns `Inline`: the loader runs without single-flight, like the pre-
   single-flight `fetch`. `WaitGuard` removes the edges on every exit.
-- **No run waits on a leader it parked itself** (with one documented exception, a still-
-  running sibling task). Each `lur.async` task gets per-VM numbers for its combinator call
-  and itself (`state::TaskGroup`, `Task::start`), pushed on the thread-local `POLLING`
-  stack around each poll (`Task::enter`); polls nest, so the stack is the running task
-  plus the tasks it runs under. Each flight records the stack its leader started under
-  (empty = the run's top level). `parked_by_us` finds the leader's innermost task on the
-  caller's stack and returns `Inline` unless, just below it, the leader runs under a
-  sibling task of the caller's own combinator call (the only case that waits). Dropping a
-  `Task` (its future done or dropped) removes flights led under it, handing off; a per-task
-  count skips that unless it led something. The rule errs towards a duplicate load, with
-  one known exception: a leader's coroutine moved between sibling tasks of one combinator
-  call (a raw `coroutine.resume` around async calls) can still be waited on by the task
-  that parked it. Siblings also wait on each other until the parking task ends or their
-  own timeout; neither run mode has a default timeout, so that can be forever.
+- **No run waits on a leader it parked itself.** `state::install` replaces
+  `coroutine.resume` and `coroutine.wrap` (before `sandbox(true)` freezes `coroutine`) with
+  C functions (`state/resume.rs`) identical to Luau's (bar debugger breakpoints) except
+  that they count the Lua-level resumes running on the VM (`VmLeads::depth`). A flight
+  records that depth when it starts.
+  Resumes nest on the host stack (a coroutine awaiting a host call yields mlua's pending
+  sentinel to whoever resumed it), so when the resume at depth `d` returns, however, every
+  flight the VM started at depth `>= d` is in a coroutine nobody runs: it is removed,
+  handing off. A leader is therefore only ever waited on while it can still run; a leader
+  at depth 0 is the run's top level or a `lur.async` task, which the run is polling. The
+  cost is one atomic load per resume while the VM leads nothing inside a coroutine. The
+  one leader left is on a thread a memory error killed inside mlua's poll loop (garbage,
+  its guard dropped at the next GC); a caller waiting on a leader of its own VM collects
+  garbage every second (`wait_same_vm`, at most once a second per VM) until it hands off.
 
 ## Validation & structured errors
 

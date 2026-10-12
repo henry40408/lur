@@ -800,35 +800,198 @@ mod single_flight {
     }
 
     #[test]
-    fn a_leader_parked_by_a_task_hands_off_when_that_task_ends() {
-        // A sibling cannot tell the parked leader from a live one, so it
-        // waits, but only until the task that parked it ends.
+    fn a_leader_parked_by_a_sibling_task_hands_off_at_once() {
+        // The resume that parked it returned, so the flight is already gone:
+        // the sibling loads instead of waiting for the parking task to end.
         for park in [PARK, PARK_TASK] {
             let state = Arc::new(StateStore::default());
-            let started = Instant::now();
             finishes_untimed(
                 &state,
                 format!(
                     "local out = lur.async.all({{\n\
-                       function() {park}\nKEEP = co\nlur.async.sleep(300) end,\n\
+                       function() {park}\nKEEP = co\nlur.async.sleep(1000)\n\
+                         assert(FETCHED, 'the sibling waited for this task') end,\n\
                        function() lur.async.sleep(50)\n\
-                         return {{ lur.state.fetch('k', {O}, function() return 2 end) }}\n\
+                         local r = {{ lur.state.fetch('k', {O}, function() return 2 end) }}\n\
+                         FETCHED = true return r\n\
                        end,\n\
                      }})\n\
                      assert(out[2][1] == 2 and out[2][2] == 'miss', tostring(out[2][1]))"
                 ),
             );
-            assert!(started.elapsed() >= ms(300), "{:?}", started.elapsed());
             assert_eq!(state.in_flight(), 0);
         }
     }
 
     #[test]
+    fn a_leader_moved_between_sibling_tasks_never_waits_on_itself() {
+        // Review repro: t1 parks the leader, t2 resumes and re-parks it, then
+        // fetches the key while t1 waits for t2. Both orders of parking.
+        for park in [
+            format!("{PARK}\nKEEP = co"),
+            "co = coroutine.create(function()\n\
+               return lur.state.fetch('k', { ttl_ms = 60000 }, function() lur.async.sleep(50) return 1 end)\n\
+             end)"
+                .to_owned(),
+        ] {
+            let state = Arc::new(StateStore::default());
+            finishes_untimed(
+                &state,
+                format!(
+                    "{park}\n\
+                     lur.async.all({{\n\
+                       function() if coroutine.status(co) == 'suspended' then coroutine.resume(co) end\n\
+                         while not lur.state.get('t2done') do lur.async.sleep(10) end end,\n\
+                       function() lur.async.sleep(20) coroutine.resume(co)\n\
+                         local v = lur.state.fetch('k', {O}, function() return 2 end)\n\
+                         assert(v == 2, tostring(v)) lur.state.set('t2done', true) end,\n\
+                     }})"
+                ),
+            );
+            assert_eq!(state.in_flight(), 0);
+        }
+    }
+
+    #[test]
+    fn a_sibling_that_parked_a_leader_then_waits_on_the_caller_does_not_deadlock() {
+        // Review repro: t1 parks a leader of `k` and then waits for t2; t2
+        // fetches `k`. Waiting on the parked leader would wait on t1, which
+        // waits on t2.
+        for park in [PARK, PARK_TASK] {
+            let state = Arc::new(StateStore::default());
+            finishes_untimed(
+                &state,
+                format!(
+                    "lur.async.all({{\n\
+                       function() {park}\nKEEP = co\n\
+                         while not lur.state.get('t2done') do lur.async.sleep(10) end end,\n\
+                       function() lur.async.sleep(20)\n\
+                         local v = lur.state.fetch('k', {O}, function() return 2 end)\n\
+                         assert(v == 2, tostring(v)) lur.state.set('t2done', true) end,\n\
+                     }})"
+                ),
+            );
+            assert_eq!(state.in_flight(), 0);
+        }
+    }
+
+    #[test]
+    fn every_way_to_park_a_leader_hands_off_when_its_resume_returns() {
+        let get = format!(
+            "local v, s = lur.state.fetch('k', {O}, function() return 2 end)\n\
+             assert(v == 2 and s == 'miss', tostring(v) .. ' ' .. tostring(s))"
+        );
+        let lead =
+            "lur.state.fetch('k', { ttl_ms = 60000 }, function() lur.async.sleep(50) return 1 end)";
+        for (name, park) in [
+            (
+                "wrap",
+                format!("local g = coroutine.wrap(function() return {lead} end) g() KEEP = g"),
+            ),
+            (
+                "pcall(resume)",
+                format!(
+                    "local co = coroutine.create(function() return {lead} end) pcall(coroutine.resume, co) KEEP = co"
+                ),
+            ),
+            (
+                "closed",
+                format!(
+                    "local co = coroutine.create(function() return {lead} end) coroutine.resume(co) coroutine.close(co)"
+                ),
+            ),
+            (
+                "nested",
+                format!(
+                    "local co = coroutine.create(function()\n\
+                       local c2 = coroutine.create(function() return {lead} end)\n\
+                       coroutine.resume(c2) KEEP = c2 coroutine.yield() end)\n\
+                     coroutine.resume(co) KEEP2 = co"
+                ),
+            ),
+            (
+                // The inner resume returning must restore the outer depth.
+                "after an inner resume",
+                format!(
+                    "local co = coroutine.create(function()\n\
+                       coroutine.resume(coroutine.create(function() end))\n\
+                       return {lead} end)\n\
+                     coroutine.resume(co) KEEP = co"
+                ),
+            ),
+            (
+                "in a loader",
+                format!(
+                    "lur.state.fetch('o', {O}, function()\n\
+                       local co = coroutine.create(function() return {lead} end)\n\
+                       coroutine.resume(co) KEEP = co return 1 end)"
+                ),
+            ),
+            (
+                "yield across pcall",
+                format!(
+                    "local co = coroutine.create(function() return pcall(function() return {lead} end) end) coroutine.resume(co) KEEP = co"
+                ),
+            ),
+            (
+                "loop",
+                format!(
+                    "for i = 1, 3 do local co = coroutine.create(function() return {lead} end) coroutine.resume(co) end"
+                ),
+            ),
+        ] {
+            let state = Arc::new(StateStore::default());
+            let started = Instant::now();
+            finishes_untimed(&state, format!("{park}\n{get}"));
+            assert!(
+                started.elapsed() < ms(1000),
+                "{name}: {:?}",
+                started.elapsed()
+            );
+            assert_eq!(state.in_flight(), 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_scheduler_forwarding_the_pending_yield_completes_without_single_flight() {
+        // A script-level scheduler that passes mlua's pending yield up to the
+        // host. Each forward returns the resume, which hands the leader off;
+        // the script still completes, but another VM's concurrent miss loads
+        // too (a duplicate load, never a deadlock).
+        let state = Arc::new(StateStore::default());
+        let load = counted("", "lur.async.sleep(300) return 'v'");
+        let forward = format!(
+            "local co = coroutine.create(function() return lur.state.fetch('k', {O}, {load}) end)\n\
+             local r\n\
+             while true do\n\
+               local ok, v = coroutine.resume(co) assert(ok, v)\n\
+               if coroutine.status(co) == 'dead' then r = v break end\n\
+               coroutine.yield(v)\n\
+             end\n\
+             assert(r == 'v', tostring(r))"
+        );
+        let a = spawn(&state, forward, ms(0), secs(10));
+        let b = spawn(
+            &state,
+            format!("assert(lur.state.fetch('k', {O}, {load}) == 'v')"),
+            ms(50),
+            secs(10),
+        );
+        a.join().unwrap().expect("the forwarding script completes");
+        b.join().unwrap().expect("the other VM completes");
+        check(
+            &state,
+            "assert(lur.state.get('runs') == 2, lur.state.get('runs'))",
+        );
+        assert_eq!(state.in_flight(), 0);
+    }
+
+    #[test]
     fn a_parked_leader_is_spotted_when_its_coroutine_moved_between_tasks() {
-        // `co` starts under t2, then t1 resumes it: x's stack no longer shares
-        // a prefix with the leader's (t2, x, y), but x is on both. y's
-        // combinator sits in `inner`, which x parked, so x must not wait
-        // (here until t2 ends).
+        // `co` (a combinator call) is first resumed by t1, then driven by t2.
+        // Inside it, x parks `inner`, whose task leads 'k' at resume depth
+        // 2; resuming `inner` returned, so the flight is gone and x loads
+        // itself rather than wait (here until t1 ends).
         let state = Arc::new(StateStore::default());
         finishes_untimed(
             &state,
@@ -858,6 +1021,34 @@ mod single_flight {
                    end,\n\
                  }})\n\
                  assert(FETCHED, 'x never fetched')"
+            ),
+        );
+        assert_eq!(state.in_flight(), 0);
+    }
+
+    #[test]
+    fn a_parked_leader_handing_off_leaves_a_live_leader_alone() {
+        // 'k' is led live at depth 0; a sibling parks a leader of 'p' at
+        // depth 1, so its resume returning sweeps the VM's nested flights:
+        // 'k' must survive it, and the last task shares it.
+        let state = Arc::new(StateStore::default());
+        check(
+            &state,
+            &format!(
+                "O = {O}\n\
+                 local calls = 0\n\
+                 local function load() calls = calls + 1 lur.async.sleep(200) return 1 end\n\
+                 lur.async.all({{\n\
+                   function() return lur.state.fetch('k', O, load) end,\n\
+                   function() lur.async.sleep(20)\n\
+                     local co = coroutine.create(function()\n\
+                       return lur.state.fetch('p', O, function() lur.async.sleep(50) return 2 end)\n\
+                     end)\n\
+                     coroutine.resume(co) KEEP = co\n\
+                   end,\n\
+                   function() lur.async.sleep(60) return lur.state.fetch('k', O, load) end,\n\
+                 }})\n\
+                 assert(calls == 1, 'live leader dropped: ' .. calls)"
             ),
         );
         assert_eq!(state.in_flight(), 0);

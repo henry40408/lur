@@ -92,6 +92,29 @@ fn state_fetch_concurrent_miss(c: &mut Criterion) {
     });
 }
 
+/// A generator-heavy script: 10k `coroutine.wrap` iterations, pricing any
+/// wrapper around `coroutine.resume`/`wrap`.
+fn coroutine_wrap_generator(c: &mut Criterion) {
+    let rt = Runtime::new().expect("runtime builds");
+    let src = "local s = 0 \
+               for v in coroutine.wrap(function() for i = 1, 10000 do coroutine.yield(i) end end) do \
+                 s = s + v end return s";
+    c.bench_function("coroutine_wrap_generator_10k", |b| {
+        b.iter(|| rt.run(black_box(src)).unwrap());
+    });
+}
+
+/// 10k explicit `coroutine.resume` round trips on one coroutine.
+fn coroutine_resume_loop(c: &mut Criterion) {
+    let rt = Runtime::new().expect("runtime builds");
+    let src = "local co = coroutine.create(function() for i = 1, 10000 do coroutine.yield(i) end end) \
+               local s, resume = 0, coroutine.resume \
+               while true do local ok, v = resume(co) if v == nil then break end s = s + v end return s";
+    c.bench_function("coroutine_resume_10k", |b| {
+        b.iter(|| rt.run(black_box(src)).unwrap());
+    });
+}
+
 criterion_group!(
     benches,
     vm_cold_start,
@@ -101,6 +124,8 @@ criterion_group!(
     async_all_small,
     async_race_small,
     state_fetch_hit,
-    state_fetch_concurrent_miss
+    state_fetch_concurrent_miss,
+    coroutine_wrap_generator,
+    coroutine_resume_loop
 );
 criterion_main!(benches);

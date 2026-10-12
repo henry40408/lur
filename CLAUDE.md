@@ -25,7 +25,8 @@ CI blocks on fmt, clippy, nextest, and `cargo deny`; coverage and benchmarks are
 Violating these compiles but breaks the sandbox or the pool.
 
 - **`build_lua` order** (`src/runtime.rs`): strip `require`/`getfenv`/`setfenv`/`loadstring`
-  → `capabilities::install` → `sandbox(true)` → deadline interrupt → memory cap.
+  → `capabilities::install` (also replaces `coroutine.resume`/`wrap`) → `sandbox(true)` →
+  deadline interrupt → memory cap.
 - **One flat `lur` table**, filled in fixed order by `capabilities::install`
   (`src/capabilities/mod.rs`); each `src/capabilities/<name>.rs` owns its slice. `fs`/`http`/
   `env` take `Arc<Policy>`; `serve`'s `Registry` is `None` in one-shot.

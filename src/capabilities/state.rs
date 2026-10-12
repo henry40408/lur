@@ -9,7 +9,7 @@
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,6 +18,8 @@ use tokio::sync::watch;
 
 use crate::capabilities::argcheck;
 use crate::runtime::RunError;
+
+mod resume;
 
 /// A stored primitive; nil is absence.
 #[derive(Debug, Clone, PartialEq)]
@@ -168,193 +170,45 @@ struct Flight {
     waits: HashMap<Vec<u8>, usize>,
     /// The leader's VM, so [`end_run`] can remove what a run left behind.
     owner: Arc<VmLeads>,
-    /// The `lur.async` tasks the leader ran under on that VM when it started
-    /// ([`POLLING`], outermost first; empty = the run's top level), so a
-    /// caller on the same VM can spot a leader it parked itself.
-    tasks: Box<[TaskId]>,
+    /// How many Lua-level `coroutine.resume`s (or `wrap` calls) were running
+    /// on the leader's VM when it started (0 = none). See [`resume`].
+    depth: u32,
 }
 
-/// Flights led from one VM. Counts them so [`end_run`] and [`Task`]'s drop cost
-/// one atomic load when there are none (the usual case).
+/// Flights led from one VM, and the VM's resume depth. The counts let
+/// [`end_run`] and [`resume`] cost one atomic load when the VM leads nothing
+/// (the usual case).
 #[derive(Debug, Default)]
 pub(crate) struct VmLeads {
     /// Every flight this VM leads.
     all: AtomicUsize,
-    /// Those led from inside a `lur.async` task (non-empty `Flight::tasks`).
-    in_tasks: AtomicUsize,
-    /// Per task id, how many of those flights have it in `Flight::tasks`, so
-    /// a task that ends leading nothing skips the store lock. Only touched
-    /// under the store lock, or alone (by [`Task`]'s drop).
-    per_task: std::sync::Mutex<HashMap<u64, usize>>,
-    /// Numbers this VM's `lur.async` tasks (0 is the top level).
-    next_task: AtomicU64,
+    /// Those started inside a Lua-level resume (`Flight::depth > 0`).
+    nested: AtomicUsize,
+    /// Lua-level resumes running on this VM now. Only the VM's own thread
+    /// touches it, one run at a time: atomic only so `VmLeads` is `Sync`.
+    depth: AtomicU32,
+    /// Last time a waiter on this VM's own leader collected garbage (see
+    /// [`wait_same_vm`]).
+    last_gc: Mutex<Option<Instant>>,
 }
 
-impl VmLeads {
-    fn count_tasks(&self, tasks: &[TaskId], up: bool) {
-        let mut per_task = self
-            .per_task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for &(_, t) in tasks {
-            if up {
-                *per_task.entry(t).or_default() += 1;
-            } else if let Some(n) = per_task.get_mut(&t) {
-                *n -= 1;
-                if *n == 0 {
-                    per_task.remove(&t);
-                }
-            }
-        }
-    }
-
-    fn leads_in(&self, task: u64) -> bool {
-        self.per_task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains_key(&task)
-    }
-}
-
-/// The VM's [`VmLeads`] and store, kept in `lua` app data for [`end_run`] and
-/// lent to each `lur.async` task ([`Task::start`]).
+/// The VM's [`VmLeads`] and store: in `lua` app data for [`end_run`], and
+/// owned by the `coroutine.resume`/`wrap` replacements ([`resume`]).
 pub(crate) struct VmFlights {
     store: Arc<StateStore>,
     leads: Arc<VmLeads>,
 }
 
-/// A `lur.async` task as `(combinator call, task)` numbers, unique per VM.
-type TaskId = (u64, u64);
-
-thread_local! {
-    /// The `lur.async` tasks being polled on this thread, outermost first.
-    /// Polls nest synchronously (a task is only polled from inside its
-    /// combinator's poll, inside its parent's), so this is exactly the
-    /// running task and the tasks it runs under, each busy here or awaiting
-    /// the one combinator call that holds the next.
-    static POLLING: std::cell::RefCell<Vec<TaskId>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// The `lur.async` tasks running here, outermost first (empty = top level).
-fn polling() -> Box<[TaskId]> {
-    POLLING.with_borrow(|s| s.as_slice().into())
-}
-
-/// Whether a leader that started under `tasks` (on this VM) must be parked
-/// in a coroutine, so that waiting on it would wait on ourselves. Let `c` be
-/// the leader's innermost task that is on our stack (the top level if none;
-/// the two stacks need not share a prefix, since a coroutine can be resumed
-/// from another task than the one it started in). `c` is busy here or
-/// awaiting one combinator call. The leader is parked when:
-/// - `c` is the leader's own context (it led from the top level, or from the
-///   task running here or one this runs under);
-/// - `c` is our innermost context: it runs this `fetch`, so it awaits no
-///   combinator, and the one holding the leader's task sits in a coroutine;
-/// - or the leader's next task is in another combinator call than ours: `c`
-///   awaits ours, so the leader's sits in a coroutine.
-///
-/// Otherwise the leader runs under a sibling task in our combinator call:
-/// live, or parked in a coroutine of that sibling's (indistinguishable), so
-/// we wait. Wrong only towards running the loader twice (if this run resumes
-/// the coroutine later), never towards waiting on ourselves.
-fn parked_by_us(tasks: &[TaskId]) -> bool {
-    POLLING.with_borrow(|s| {
-        // Just below `c`, in our stack and in the leader's (task ids are
-        // unique per VM).
-        let (ours, theirs) = tasks
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(j, t)| s.iter().position(|x| x == t).map(|i| (i + 1, j + 1)))
-            .unwrap_or((0, 0));
-        match (s.get(ours), tasks.get(theirs)) {
-            (_, None) | (None, _) => true,
-            (Some(ours), Some(theirs)) => ours.0 != theirs.0,
-        }
-    })
-}
-
-/// One `lur.async` combinator call on a VM: numbers its tasks for
-/// [`Task::start`]. `None` before `lur.state` is installed.
-pub(crate) struct TaskGroup {
-    vm: Arc<VmFlights>,
-    id: u64,
-}
-
-impl TaskGroup {
-    pub(crate) fn new(lua: &Lua) -> Option<Self> {
-        let vm = Arc::clone(&*lua.app_data_ref::<Arc<VmFlights>>()?);
-        let id = vm.leads.next_task.fetch_add(1, Ordering::Relaxed) + 1;
-        Some(Self { vm, id })
-    }
-}
-
-/// One `lur.async` task, as `lur.state.fetch` sees it. The combinator wraps
-/// each poll of the task's future in [`Task::enter`] and drops the `Task`
-/// after the future, however the task ends (completed or dropped). Kept to
-/// a few instructions per task (no allocation, no extra future layer): `map`
-/// can run hundreds of thousands of tiny tasks.
-pub(crate) struct Task<'a> {
-    vm: &'a VmFlights,
-    id: TaskId,
-}
-
-impl<'a> Task<'a> {
-    pub(crate) fn start(group: Option<&'a TaskGroup>) -> Option<Self> {
-        let group = group?;
-        let vm = &*group.vm;
-        let id = vm.leads.next_task.fetch_add(1, Ordering::Relaxed) + 1;
-        Some(Self {
-            vm,
-            id: (group.id, id),
-        })
-    }
-
-    /// Mark the task as polling until the returned guard drops.
-    pub(crate) fn enter(task: Option<&Self>) -> Option<Polling> {
-        let id = task?.id;
-        POLLING.with_borrow_mut(|s| s.push(id));
-        Some(Polling)
-    }
-}
-
-/// When a task ends, remove any flight led under it (by it, or by a task it
-/// started). A leader still in the task's own future tree has already
-/// dropped its guard by then, so a flight left over is parked in a coroutine
-/// that outlived the task; ending it hands off to its waiters.
-impl Drop for Task<'_> {
-    fn drop(&mut self) {
-        let id = self.id.1;
-        if self.vm.leads.in_tasks.load(Ordering::Acquire) != 0 && self.vm.leads.leads_in(id) {
-            self.vm.end_flights(Some(id));
-        }
-    }
-}
-
-/// Pops [`POLLING`] even if the poll panics.
-pub(crate) struct Polling;
-
-impl Drop for Polling {
-    fn drop(&mut self) {
-        POLLING.with_borrow_mut(|s| {
-            s.pop();
-        });
-    }
-}
-
 impl VmFlights {
-    /// Remove the flights this VM leads (only those led under task `task`, if given),
+    /// Remove the flights this VM leads at resume depth `>= min_depth`,
     /// handing off to their waiters; a stray `LeadGuard`, if ever dropped or
     /// finished, then finds no flight with its id.
-    fn end_flights(&self, task: Option<u64>) {
+    fn end_flights(&self, min_depth: u32) {
         let mut inner = self.store.lock_for_drop();
         let parked: Vec<Vec<u8>> = inner
             .flights
             .iter()
-            .filter(|(_, f)| {
-                Arc::ptr_eq(&f.owner, &self.leads)
-                    && task.is_none_or(|t| f.tasks.iter().any(|&(_, x)| x == t))
-            })
+            .filter(|(_, f)| Arc::ptr_eq(&f.owner, &self.leads) && f.depth >= min_depth)
             .map(|(k, _)| k.clone())
             .collect();
         let removed: Vec<Flight> = parked
@@ -364,19 +218,70 @@ impl VmFlights {
         drop(inner);
         drop(removed); // closes the channels outside the lock
     }
+
+    /// A Lua-level resume at depth `depth` (1 = outermost) just returned,
+    /// however: its coroutine yielded (mlua's pending sentinel included),
+    /// returned or died. Every flight this VM started at depth `>= depth`
+    /// started inside that resume, so its leader now sits in a coroutine
+    /// nobody is running: hand it off. Called by [`resume`] only.
+    fn resumed(&self, depth: u32) {
+        if self.leads.nested.load(Ordering::Acquire) != 0 {
+            self.end_flights(depth);
+        }
+    }
 }
 
 /// Call when a run on `lua` ends, however it ended. A VM runs one request or
 /// cron job at a time, so any flight it still leads now is orphaned: its
 /// leader is parked in a Lua coroutine the script suspended and never
 /// resumed (which may stay reachable, e.g. in an app.lua upvalue, so no GC
-/// would drop it). Removing the flight hands off to its waiters.
+/// would drop it), or on a thread a memory error killed. Removing the flight
+/// hands off to its waiters. Also resets the resume depth, which only a
+/// memory error inside [`resume`] itself could have left off.
 pub(crate) fn end_run(lua: &Lua) {
     let Some(vm) = lua.app_data_ref::<Arc<VmFlights>>() else {
         return;
     };
     if vm.leads.all.load(Ordering::Acquire) != 0 {
-        vm.end_flights(None);
+        vm.end_flights(0);
+    }
+    vm.leads.depth.store(0, Ordering::Relaxed);
+}
+
+/// How often a caller waiting on a leader of its own VM collects garbage.
+const SAME_VM_GC_EVERY: Duration = Duration::from_secs(1);
+
+/// Wait for `rx`'s outcome when the leader runs on our own VM. A leader on a
+/// thread that a memory error killed inside mlua's poll loop is neither
+/// running nor dropped: its guard sits in garbage until a collection, and
+/// this VM, busy waiting, may not allocate enough to start one. So every
+/// [`SAME_VM_GC_EVERY`] (at most that often per VM) collect, which drops such
+/// a guard and hands off. A live leader is unaffected.
+async fn wait_same_vm(
+    lua: &Lua,
+    leads: &VmLeads,
+    rx: &mut watch::Receiver<Outcome>,
+) -> Option<Arc<Shared>> {
+    loop {
+        match tokio::time::timeout(SAME_VM_GC_EVERY, rx.wait_for(Option::is_some)).await {
+            Ok(r) => return r.ok().and_then(|o| o.clone()),
+            Err(_elapsed) => {
+                let due = {
+                    let mut last = leads
+                        .last_gc
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let due = last.is_none_or(|t| t.elapsed() >= SAME_VM_GC_EVERY);
+                    if due {
+                        *last = Some(Instant::now());
+                    }
+                    due
+                };
+                if due {
+                    let _ = lua.gc_collect();
+                }
+            }
+        }
     }
 }
 
@@ -797,6 +702,8 @@ impl StateStore {
     /// (a leader may just have stored it), then join the flight for `key` or
     /// start one. `Inline` means waiting would deadlock on ourselves.
     fn join(self: &Arc<Self>, key: &[u8], owner: &Arc<VmLeads>) -> Join {
+        // Only this VM's thread changes it, and not while this call runs.
+        let depth = owner.depth.load(Ordering::Relaxed);
         let mut inner = self.lock();
         if let Some(e) = inner.live(key, Instant::now()) {
             let value = e.value.clone();
@@ -804,16 +711,11 @@ impl StateStore {
             return Join::Hit(value);
         }
         if let Some(f) = inner.flights.get(key) {
-            // Led from this VM where nothing can be driving it now: that
-            // leader is parked in a coroutine this run suspended, so waiting
-            // would wait on ourselves (see `parked_by_us`).
-            if Arc::ptr_eq(&f.owner, owner) && parked_by_us(&f.tasks) {
-                return Join::Inline;
-            }
             let rx = f.tx.subscribe();
+            let same_vm = Arc::ptr_eq(&f.owner, owner);
             let chain = leading(self);
             if chain.is_empty() {
-                return Join::Wait(rx, None);
+                return Join::Wait(rx, same_vm, None);
             }
             if inner.waits_for(key, &chain) {
                 return Join::Inline;
@@ -821,6 +723,7 @@ impl StateStore {
             inner.edge(&chain, key, true);
             return Join::Wait(
                 rx,
+                same_vm,
                 Some(WaitGuard {
                     store: self.clone(),
                     key: key.to_vec(),
@@ -831,11 +734,9 @@ impl StateStore {
         inner.next_flight += 1;
         let id = inner.next_flight;
         let (tx, _) = watch::channel(None);
-        let tasks = polling();
         owner.all.fetch_add(1, Ordering::AcqRel);
-        if !tasks.is_empty() {
-            owner.in_tasks.fetch_add(1, Ordering::AcqRel);
-            owner.count_tasks(&tasks, true);
+        if depth > 0 {
+            owner.nested.fetch_add(1, Ordering::AcqRel);
         }
         inner.flights.insert(
             key.to_vec(),
@@ -844,7 +745,7 @@ impl StateStore {
                 tx,
                 waits: HashMap::new(),
                 owner: owner.clone(),
-                tasks,
+                depth,
             },
         );
         Join::Lead(LeadGuard {
@@ -869,9 +770,10 @@ enum Join {
     Hit(Prim),
     /// Run the loader for everyone; the guard ends the flight.
     Lead(LeadGuard),
-    /// Wait for the leader's outcome. The guard (only for a caller inside
-    /// another loader) holds the wait edges used for deadlock detection.
-    Wait(watch::Receiver<Outcome>, Option<WaitGuard>),
+    /// Wait for the leader's outcome (`true`: the leader is on our own VM).
+    /// The guard (only for a caller inside another loader) holds the wait
+    /// edges used for deadlock detection.
+    Wait(watch::Receiver<Outcome>, bool, Option<WaitGuard>),
     /// Waiting would deadlock (this key's leader is waiting on us): run the
     /// loader without single-flight, as `fetch` did before it had any.
     Inline,
@@ -931,9 +833,8 @@ fn take_flight(inner: &mut Inner, key: &[u8], id: u64) -> Option<Flight> {
 fn remove_flight(inner: &mut Inner, key: &[u8]) -> Option<Flight> {
     let f = inner.flights.remove(key)?;
     f.owner.all.fetch_sub(1, Ordering::AcqRel);
-    if !f.tasks.is_empty() {
-        f.owner.count_tasks(&f.tasks, false);
-        f.owner.in_tasks.fetch_sub(1, Ordering::AcqRel);
+    if f.depth > 0 {
+        f.owner.nested.fetch_sub(1, Ordering::AcqRel);
     }
     Some(f)
 }
@@ -1363,10 +1264,12 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
     // `fn` runs with no lock held and may await I/O; it is not retried.
     let s = store.clone();
     let leads = Arc::new(VmLeads::default());
-    lua.set_app_data(Arc::new(VmFlights {
+    let vm = Arc::new(VmFlights {
         store: store.clone(),
         leads: leads.clone(),
-    }));
+    });
+    resume::install(lua, &vm).map_err(RunError::Init)?;
+    lua.set_app_data(vm);
     let fetch = lua
         .create_async_function(move |lua, (key, opts, func): (Value, Value, Value)| {
             let s = s.clone();
@@ -1410,13 +1313,16 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
                             return load(&lua, &s, &key, &func, w, Some(guard)).await;
                         }
                         Join::Inline => return load(&lua, &s, &key, &func, w, None).await,
-                        Join::Wait(mut rx, _edges) => {
+                        Join::Wait(mut rx, same_vm, _edges) => {
                             // Bound only by this caller's own timeout.
-                            let outcome = rx
-                                .wait_for(Option::is_some)
-                                .await
-                                .ok()
-                                .and_then(|o| o.clone());
+                            let outcome = if same_vm {
+                                wait_same_vm(&lua, &leads, &mut rx).await
+                            } else {
+                                rx.wait_for(Option::is_some)
+                                    .await
+                                    .ok()
+                                    .and_then(|o| o.clone())
+                            };
                             if let Some(shared) = outcome {
                                 return share(&lua, &s, &key, &shared);
                             }
@@ -1441,6 +1347,89 @@ mod tests {
         evictable: None,
         stale_ms: None,
     };
+
+    /// A memory error inside mlua's poll loop kills the leader's thread with
+    /// its future, guard and all, on the stack: garbage, but nothing drops it
+    /// until a collection. Raising that error on demand is not possible, so
+    /// this leaks the guard into garbage directly. A caller on the same VM
+    /// must not wait on it forever.
+    #[test]
+    fn a_waiter_on_a_dead_leader_of_its_own_vm_collects_it() {
+        let store = Arc::new(StateStore::default());
+        let config = crate::runtime::RuntimeConfig {
+            state: store.clone(),
+            ..Default::default()
+        };
+        let (lua, _) = crate::runtime::build_lua(&config, None).expect("vm builds");
+        let leads = lua
+            .app_data_ref::<Arc<VmFlights>>()
+            .expect("lur.state installed")
+            .leads
+            .clone();
+        let Join::Lead(guard) = store.join(b"k", &leads) else {
+            panic!("no flight yet, so this leads");
+        };
+        drop(lua.create_any_userdata(guard).expect("userdata"));
+        assert_eq!(store.in_flight(), 1);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let started = Instant::now();
+        let got = rt
+            .block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    lua.load(
+                        "return lur.state.fetch('k', { ttl_ms = 60000 }, function() return 2 end)",
+                    )
+                    .eval_async::<(i64, String)>(),
+                )
+                .await
+            })
+            .expect("waited on its own dead leader")
+            .expect("fetch");
+        assert_eq!(got, (2, "miss".to_owned()));
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(store.in_flight(), 0);
+    }
+
+    /// `end_run` removes whatever the VM still leads (here a guard leaked
+    /// into garbage, as a memory error in mlua's poll loop leaves it) and
+    /// only that VM's flights.
+    #[test]
+    fn end_run_removes_only_what_its_vm_still_leads() {
+        let store = Arc::new(StateStore::default());
+        let config = crate::runtime::RuntimeConfig {
+            state: store.clone(),
+            ..Default::default()
+        };
+        let vm = |lua: &Lua| {
+            lua.app_data_ref::<Arc<VmFlights>>()
+                .expect("lur.state installed")
+                .leads
+                .clone()
+        };
+        let (a, _) = crate::runtime::build_lua(&config, None).expect("vm builds");
+        let (b, _) = crate::runtime::build_lua(&config, None).expect("vm builds");
+        for (lua, key) in [(&a, b"a"), (&b, b"b")] {
+            let Join::Lead(guard) = store.join(key, &vm(lua)) else {
+                panic!("no flight yet, so this leads");
+            };
+            drop(lua.create_any_userdata(guard).expect("userdata"));
+        }
+        assert_eq!(store.in_flight(), 2);
+        end_run(&a);
+        assert_eq!(store.in_flight(), 1);
+        assert!(matches!(store.join(b"a", &vm(&a)), Join::Lead(_)));
+        assert!(matches!(store.join(b"b", &vm(&a)), Join::Wait(..)));
+        end_run(&b);
+        assert_eq!(store.in_flight(), 0);
+    }
 
     fn cache() -> Write {
         Write {
