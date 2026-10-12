@@ -375,11 +375,65 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   other operation sees it as absent. Rejected: a separate `lur.cache`, named cache
   instances (handle lifetime across the VM pool), a global LRU over every entry, negative
   caching of loader errors, and `kv.fetch` for now (needs `--db`, which a cache should not).
-  Not done: single-flight — concurrent misses each run the loader; `fetch` is the one place
-  to add it. The LRU is a separate small index in `state.rs` rather than a shared core with
+  Single-flight came later (next entry). The LRU is a separate small index in `state.rs` rather than a shared core with
   `HttpCache`: the two differ (non-evictable entries, stale windows, versions), and sharing
   would have changed a hot path for no behavioral gain. Counters (`hits`/`misses`/`stale`/
   `evictions`) are kept for a future `/metrics`.
+- **`fetch` is single-flight per key, pool-wide, with no new API.** Without it, N
+  concurrent misses ran the loader N times (a stampede on exactly the slow upstream the
+  cache protects). One caller leads and runs the loader unlocked; the others await a
+  `tokio::sync::watch` channel in the host-side flight table, each under its own timeout.
+  How a leader's run ends decides what waiters get:
+
+  | Leader ends with | Waiters get | Loader runs again? |
+  | --- | --- | --- |
+  | a value (incl. `nil`, or one too big to cache) | the value, status `"hit"` | no |
+  | an error the loader raised (incl. its own `lur.http` timing out, OOM) | the stale value as `"stale"`, else the same error | no, and the failure is not remembered |
+  | no outcome: its own deadline/timeout, or its future dropped (client gone, lost a `race`, shutdown, cron skip) | nothing yet: one waiter becomes the new leader | yes, once |
+
+  Choices: waiters report `"hit"` (meaning "your loader did not run"; a new `"shared"`
+  status would break scripts that branch on the three existing ones). `nil` is shared but,
+  as before, not cached, so the next miss loads again. A non-primitive return is raised to
+  every waiter (it is the loader's verdict, so no stale fallback). Error identity is not
+  kept across VMs: a waiter gets the same `mlua::Error`, i.e. its text, never a Lua value
+  from another VM, so an error table from `lur.validate` or `lur.serve.abort` in a loader
+  arrives as a plain error (a 500, not the abort's status) — a known limitation. OOM inside
+  the loader counts as the loader failing (shared), since it is not the waiter's own limit.
+  The handoff signal is structural: only a `LeadGuard` removes a flight; finishing sends an
+  outcome first, dropping it unfinished closes the channel. So a cancellation path nobody
+  thought of still hands off, and the flight id stops a late guard from removing its
+  successor. Re-entry: a `fetch` inside a loader that would wait on itself — the same key,
+  or a cycle of keys (`a` → `b` → `a`, also across VMs) found by walking wait edges — runs
+  its loader inline without single-flight, exactly as `fetch` behaved before; raising would
+  have broken loaders that worked. Edges and the walk only exist for callers inside a
+  loader, and the hit path is untouched (one lookup, as before). A leader can also be left
+  parked in a coroutine the script suspended and kept reachable (an app.lua upvalue); its
+  guard would never drop, blocking the key pool-wide. Flights therefore record their VM and
+  are removed when that VM's run ends (`state::end_run`, from `with_timeout`; one atomic
+  load when the VM leads nothing). Not covered: a run that waits on a leader it parked
+  itself in the same run waits until its own timeout — telling that apart from sibling
+  `lur.async` tasks legitimately waiting on each other is not worth the bookkeeping. A
+  leader's OOM is shared as plain text so waiters are not themselves classified as OOM.
+  Rejected: a per-key `Mutex` held across the loader (holds a lock across an `await`, and a
+  waiter could not tell success from a leader that died); retrying on failure (the loader
+  has side effects, and N waiters would retry N times: the stampede again); remembering
+  failures (negative caching, rejected for `fetch` before); a chain of `oneshot`s per waiter
+  (`watch` gives late subscribers the outcome and a close signal for free); passing Lua
+  values between VMs (unsound: a VM's values belong to its own state).
+- **The deadline interrupt never raises inside mlua's async poll loop.** Found while adding
+  `fetch` single-flight: a run timed out on a reused VM left its leader's flight in place,
+  so later callers of that key waited until their own timeouts. mlua drives each async host
+  call from a small Lua loop (`=__mlua_async_poll`); the tokio timer and the deadline expire
+  together, the timer wakes the loop first, the interrupt raised in it, and the thread died
+  with the pending host futures on its stack: nothing dropped them until a GC, which an idle
+  pooled VM may not run for a long time. The interrupt now skips that frame (CPU-bound code
+  is still stopped in its own frames; parked code by the wall clock), `with_timeout` clears
+  the deadline before dropping the call so mlua's terminate resume is not aborted, and a
+  timed-out or OOM run ends with a full GC as a backstop. This also makes every other
+  drop guard on a timed-out run (e.g. a cancelled `db.tx`) run promptly. A unit test pins
+  the chunk name so an mlua bump that renames it fails loudly. Rejected: a GC after every
+  run (cost on the hot path); a GC loop alone (one collection only frees one level of
+  nested `lur.async` tasks).
 - **`db.tx` takes the write lock on SQLite even when read-only** (`BEGIN IMMEDIATE`) —
   deliberate.
 

@@ -928,6 +928,18 @@ Expiry and memory:
 - If `fn` raises and a value within `stale_ms` of expiry exists, that value comes back
   as `"stale"` instead.
 - A stale value is invisible to everything but `fetch`.
+- It is single-flight across the whole VM pool: while one caller runs `fn` for a key,
+  other callers missing on that key wait for it instead of running `fn` again (no cache
+  stampede). Each waiter stays under its own request timeout.
+  - `fn` returns: every waiter gets the value as `"hit"` ("your `fn` did not run"), even
+    `nil` or a value too big to cache; neither is stored, so the next miss runs `fn` again.
+  - `fn` raises: every waiter gets the stale value if there is one, else the same error
+    as plain text (a `lur.serve.abort` inside `fn` reaches waiters as a 500). The failure
+    is not remembered.
+  - The running caller times out or is cancelled (client gone, lost a `lur.async.race`,
+    shutdown): there is no outcome, so exactly one waiter runs `fn` in its place.
+  - A `fetch` inside `fn` that would wait on itself (the same key, or a cycle such as
+    `a` → `b` → `a`) runs its own `fn` directly rather than deadlock.
 
 ```lua
 local calls = 0
@@ -936,6 +948,23 @@ local v, status = lur.state.fetch("page", { ttl_ms = 60000 }, load)
 assert(v == "page" and status == "miss")
 v, status = lur.state.fetch("page", { ttl_ms = 60000 }, load)
 assert(v == "page" and status == "hit" and calls == 1)
+
+-- Concurrent misses: one load, everyone shares it.
+local loads = 0
+local function slow()
+  loads = loads + 1
+  lur.async.sleep(20) -- e.g. an HTTP call
+  return "report"
+end
+local function get() return { lur.state.fetch("report", { ttl_ms = 60000 }, slow) } end
+local out = lur.async.all({ get, get, get })
+assert(loads == 1)
+local statuses = {}
+for _, r in ipairs(out) do
+  assert(r[1] == "report")
+  statuses[r[2]] = (statuses[r[2]] or 0) + 1
+end
+assert(statuses.miss == 1 and statuses.hit == 2)
 
 lur.state.incr("window", 1, { ttl_ms = 60000 })  -- fixed-window counter
 local ms, exists = lur.state.ttl("window")

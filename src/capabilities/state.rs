@@ -2,14 +2,19 @@
 //! `update` is optimistic (version-checked retry), so no lock is held across
 //! user code. Entries may carry a TTL and may be marked evictable; only
 //! evictable entries are ever dropped to make room (see `Limits`).
+//!
+//! `fetch` is single-flight per key: on a miss one caller (the *leader*) runs
+//! the loader while concurrent callers for the same key, on any VM, wait for
+//! its outcome (see [`Flight`]). Only Rust data ([`Shared`]) crosses VMs.
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mlua::{Lua, Table, Value};
+use tokio::sync::watch;
 
 use crate::capabilities::argcheck;
 use crate::runtime::RunError;
@@ -125,9 +130,124 @@ struct Inner {
     /// cap skip scanning the map when nothing can have expired.
     earliest: Option<Instant>,
     evictions: u64,
+    /// `fetch` loaders in flight, one per key. Not cache entries: never
+    /// counted against the caps, and removed by the leader's [`LeadGuard`] on
+    /// every exit path.
+    flights: HashMap<Vec<u8>, Flight>,
+    next_flight: u64,
+}
+
+/// A leader's outcome, handed to every waiter of its flight. Rust data only:
+/// waiters may sit on other VMs, so no Lua value is shared.
+#[derive(Debug)]
+enum Shared {
+    /// The loader returned this (`None` = `nil`, which is not cached).
+    Value(Option<Prim>),
+    /// The loader raised: waiters fall back to a stale value as the leader
+    /// does, else raise this.
+    Raised(mlua::Error),
+    /// The loader returned a non-primitive: waiters raise this, as the leader
+    /// does, without a stale fallback.
+    Rejected(mlua::Error),
+}
+
+/// What a waiter sees: `None` while the leader runs, then its outcome. A
+/// leader that ends with no outcome (timed out, cancelled) drops the sender
+/// unsent, which closes the channel: waiters then race to lead (handoff).
+type Outcome = Option<Arc<Shared>>;
+
+/// One in-flight `fetch` loader for a key.
+#[derive(Debug)]
+struct Flight {
+    /// Tells this leadership apart from a later one for the same key.
+    id: u64,
+    tx: watch::Sender<Outcome>,
+    /// Keys that callers nested inside this flight's loader are waiting on,
+    /// with counts: the edges [`Inner::waits_for`] walks to refuse a wait
+    /// that would deadlock.
+    waits: HashMap<Vec<u8>, usize>,
+    /// The leader's VM, so [`end_run`] can remove what a run left behind.
+    owner: Arc<VmLeads>,
+}
+
+/// Flights led from one VM; counts them so [`end_run`] costs one atomic load
+/// when there are none (the usual case).
+#[derive(Debug, Default)]
+pub(crate) struct VmLeads(AtomicUsize);
+
+/// The VM's [`VmLeads`] and store, kept in `lua` app data for [`end_run`].
+struct VmFlights {
+    store: Arc<StateStore>,
+    leads: Arc<VmLeads>,
+}
+
+/// Call when a run on `lua` ends, however it ended. A VM runs one request or
+/// cron job at a time, so any flight it still leads now is orphaned: its
+/// leader is parked in a Lua coroutine the script suspended and never
+/// resumed (which may stay reachable, e.g. in an app.lua upvalue, so no GC
+/// would drop it). Removing the flight hands off to its waiters; the stray
+/// `LeadGuard`, if ever dropped or finished, then finds no flight with its id.
+pub(crate) fn end_run(lua: &Lua) {
+    let Some(vm) = lua.app_data_ref::<VmFlights>() else {
+        return;
+    };
+    if vm.leads.0.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    let mut inner = vm.store.lock_for_drop();
+    let orphaned: Vec<Vec<u8>> = inner
+        .flights
+        .iter()
+        .filter(|(_, f)| Arc::ptr_eq(&f.owner, &vm.leads))
+        .map(|(k, _)| k.clone())
+        .collect();
+    let removed: Vec<Flight> = orphaned
+        .iter()
+        .filter_map(|k| remove_flight(&mut inner, k))
+        .collect();
+    drop(inner);
+    drop(removed); // closes the channels outside the lock
 }
 
 impl Inner {
+    /// Whether waiting on `key` from inside the loaders in `chain` would wait
+    /// on ourselves: `key` is in `chain`, or the leader of `key` (or anything
+    /// its loader waits on, transitively) waits on a key in `chain`.
+    fn waits_for(&self, key: &[u8], chain: &[(Vec<u8>, u64)]) -> bool {
+        let mut stack = vec![key];
+        let mut seen: Vec<&[u8]> = Vec::new();
+        while let Some(k) = stack.pop() {
+            if chain.iter().any(|(c, _)| c.as_slice() == k) {
+                return true;
+            }
+            if seen.contains(&k) {
+                continue;
+            }
+            seen.push(k);
+            if let Some(f) = self.flights.get(k) {
+                stack.extend(f.waits.keys().map(Vec::as_slice));
+            }
+        }
+        false
+    }
+
+    /// Add (`up`) or remove one wait edge to `key` on each flight in `chain`
+    /// that is still the same leadership.
+    fn edge(&mut self, chain: &[(Vec<u8>, u64)], key: &[u8], up: bool) {
+        for (c, id) in chain {
+            let Some(f) = self.flights.get_mut(c).filter(|f| f.id == *id) else {
+                continue;
+            };
+            if up {
+                *f.waits.entry(key.to_vec()).or_default() += 1;
+            } else if let Some(n) = f.waits.get_mut(key) {
+                *n -= 1;
+                if *n == 0 {
+                    f.waits.remove(key);
+                }
+            }
+        }
+    }
     fn stamp(&mut self) -> u64 {
         self.next_tick += 1;
         self.next_tick
@@ -495,6 +615,192 @@ impl StateStore {
             _ => Lookup::Absent,
         }
     }
+
+    /// `fetch` loaders currently in flight (for tests and a future `/metrics`).
+    #[must_use]
+    pub fn in_flight(&self) -> usize {
+        self.lock().flights.len()
+    }
+
+    /// The miss path of `fetch`. Under one lock: re-check for a fresh value
+    /// (a leader may just have stored it), then join the flight for `key` or
+    /// start one. `Inline` means waiting would deadlock on ourselves.
+    fn join(self: &Arc<Self>, key: &[u8], owner: &Arc<VmLeads>) -> Join {
+        let mut inner = self.lock();
+        if let Some(e) = inner.live(key, Instant::now()) {
+            let value = e.value.clone();
+            inner.touch(key);
+            return Join::Hit(value);
+        }
+        if let Some(f) = inner.flights.get(key) {
+            let rx = f.tx.subscribe();
+            let chain = leading(self);
+            if chain.is_empty() {
+                return Join::Wait(rx, None);
+            }
+            if inner.waits_for(key, &chain) {
+                return Join::Inline;
+            }
+            inner.edge(&chain, key, true);
+            return Join::Wait(
+                rx,
+                Some(WaitGuard {
+                    store: self.clone(),
+                    key: key.to_vec(),
+                    chain,
+                }),
+            );
+        }
+        inner.next_flight += 1;
+        let id = inner.next_flight;
+        let (tx, _) = watch::channel(None);
+        owner.0.fetch_add(1, Ordering::AcqRel);
+        inner.flights.insert(
+            key.to_vec(),
+            Flight {
+                id,
+                tx,
+                waits: HashMap::new(),
+                owner: owner.clone(),
+            },
+        );
+        Join::Lead(LeadGuard {
+            store: self.clone(),
+            key: key.to_vec(),
+            id,
+            done: false,
+        })
+    }
+
+    /// Lock even if a panic poisoned the mutex: guards run during unwinding.
+    fn lock_for_drop(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// How a `fetch` miss proceeds.
+enum Join {
+    /// A leader stored the value between the first lookup and the join.
+    Hit(Prim),
+    /// Run the loader for everyone; the guard ends the flight.
+    Lead(LeadGuard),
+    /// Wait for the leader's outcome. The guard (only for a caller inside
+    /// another loader) holds the wait edges used for deadlock detection.
+    Wait(watch::Receiver<Outcome>, Option<WaitGuard>),
+    /// Waiting would deadlock (this key's leader is waiting on us): run the
+    /// loader without single-flight, as `fetch` did before it had any.
+    Inline,
+}
+
+/// Owns a flight. [`LeadGuard::finish`] publishes an outcome; dropping it
+/// unfinished (the leader timed out, was cancelled, or panicked) removes the
+/// flight without one, which wakes the waiters to hand leadership off.
+struct LeadGuard {
+    store: Arc<StateStore>,
+    key: Vec<u8>,
+    id: u64,
+    done: bool,
+}
+
+impl LeadGuard {
+    /// Store a loaded value (unless a write landed meanwhile; one that cannot
+    /// fit goes uncached), then publish `shared` and end the flight, all under
+    /// one lock: a caller arriving later hits.
+    fn finish(mut self, shared: Shared, w: Write) {
+        self.done = true;
+        let store = self.store.clone();
+        let mut inner = store.lock();
+        let now = Instant::now();
+        if let Shared::Value(Some(p)) = &shared
+            && inner.version(&self.key, now) == 0
+        {
+            // Version 0 = still absent or stale, as when we looked: a write
+            // that landed meanwhile (a counter, an inline fetch) wins.
+            let _ = inner.put(self.key.clone(), Some(p.clone()), w, now, store.limits);
+        }
+        if let Some(f) = take_flight(&mut inner, &self.key, self.id) {
+            f.tx.send_replace(Some(Arc::new(shared)));
+        }
+    }
+}
+
+impl Drop for LeadGuard {
+    fn drop(&mut self) {
+        if !self.done {
+            // Dropping the sender unsent closes the channel: no outcome.
+            let flight = take_flight(&mut self.store.lock_for_drop(), &self.key, self.id);
+            drop(flight);
+        }
+    }
+}
+
+fn take_flight(inner: &mut Inner, key: &[u8], id: u64) -> Option<Flight> {
+    if inner.flights.get(key).is_some_and(|f| f.id == id) {
+        remove_flight(inner, key)
+    } else {
+        None
+    }
+}
+
+/// The only place a flight leaves the table, so its owner's count stays exact.
+fn remove_flight(inner: &mut Inner, key: &[u8]) -> Option<Flight> {
+    let f = inner.flights.remove(key)?;
+    f.owner.0.fetch_sub(1, Ordering::AcqRel);
+    Some(f)
+}
+
+/// Removes a waiter's deadlock-detection edges when it stops waiting.
+struct WaitGuard {
+    store: Arc<StateStore>,
+    key: Vec<u8>,
+    chain: Vec<(Vec<u8>, u64)>,
+}
+
+impl Drop for WaitGuard {
+    fn drop(&mut self) {
+        self.store
+            .lock_for_drop()
+            .edge(&self.chain, &self.key, false);
+    }
+}
+
+/// One flight the current task is leading; the chain runs outward through
+/// `parent` to the outermost `fetch` whose loader this task is inside.
+struct Link {
+    /// The `StateStore` the flight belongs to (its address).
+    store: usize,
+    key: Vec<u8>,
+    id: u64,
+    parent: Option<Arc<Link>>,
+}
+
+tokio::task_local! {
+    /// The innermost flight whose loader is running in this task. A task
+    /// local, not a thread local: it follows the loader's future, so it is
+    /// seen by everything the loader awaits (nested `fetch`es, `lur.async`
+    /// tasks it starts) and by nothing else, e.g. a sibling `lur.async` task.
+    static LEADING: Option<Arc<Link>>;
+}
+
+fn current_link() -> Option<Arc<Link>> {
+    LEADING.try_with(Clone::clone).ok().flatten()
+}
+
+/// The flights of `store` this task is leading, innermost first.
+fn leading(store: &Arc<StateStore>) -> Vec<(Vec<u8>, u64)> {
+    let addr = Arc::as_ptr(store).addr();
+    let mut chain = Vec::new();
+    let head = current_link();
+    let mut link = head.as_deref();
+    while let Some(l) = link {
+        if l.store == addr {
+            chain.push((l.key.clone(), l.id));
+        }
+        link = l.parent.as_deref();
+    }
+    chain
 }
 
 thread_local! {
@@ -624,6 +930,113 @@ fn write_opts(value: &Value, fname: &str, no_ttl: NoTtl, counter: bool) -> mlua:
         w.expiry = Expiry::After(ms);
     }
     Ok(w)
+}
+
+/// Run a `fetch` loader. As the leader (`guard`), publish the outcome to the
+/// waiters, unless this VM hit its deadline: then there is none, and dropping
+/// the guard hands off. Without a guard (a deadlocking wait was refused), just
+/// load and store as a plain cache would.
+async fn load(
+    lua: &Lua,
+    s: &Arc<StateStore>,
+    key: &[u8],
+    func: &mlua::Function,
+    w: Write,
+    guard: Option<LeadGuard>,
+) -> mlua::Result<(Value, &'static str)> {
+    let result = match &guard {
+        Some(g) => {
+            let link = Link {
+                store: Arc::as_ptr(s).addr(),
+                key: key.to_vec(),
+                id: g.id,
+                parent: current_link(),
+            };
+            LEADING
+                .scope(Some(Arc::new(link)), func.call_async::<Value>(()))
+                .await
+        }
+        None => func.call_async::<Value>(()).await,
+    };
+    let e = match result {
+        Ok(v) => {
+            s.misses.fetch_add(1, Ordering::Relaxed);
+            let p = match from_lua(&v) {
+                Ok(p) => p,
+                Err(e) => {
+                    if let Some(g) = guard {
+                        g.finish(Shared::Rejected(e.clone()), w);
+                    }
+                    return Err(e);
+                }
+            };
+            match guard {
+                Some(g) => g.finish(Shared::Value(p), w),
+                // A value that cannot fit goes uncached.
+                None => {
+                    if let Some(p) = p {
+                        let _ = s.compare_and_set(key, 0, Some(p), w);
+                    }
+                }
+            }
+            return Ok((v, "miss"));
+        }
+        Err(e) => e,
+    };
+    if let Some(g) = guard {
+        if crate::runtime::deadline_passed(lua) {
+            // Our own timeout, not the loader's verdict: no outcome.
+            drop(g);
+            return Err(e);
+        }
+        // A leader's OOM is the loader failing, not each waiter's own limit:
+        // share it as plain text so waiters are not classified as OOM.
+        let shared = if crate::runtime::is_memory_error(&e) {
+            mlua::Error::RuntimeError(e.to_string())
+        } else {
+            e.clone()
+        };
+        g.finish(Shared::Raised(shared), w);
+    }
+    fallback(lua, s, key, e)
+}
+
+/// A waiter's result from its leader's outcome.
+fn share(
+    lua: &Lua,
+    s: &StateStore,
+    key: &[u8],
+    shared: &Shared,
+) -> mlua::Result<(Value, &'static str)> {
+    match shared {
+        Shared::Value(p) => {
+            s.hits.fetch_add(1, Ordering::Relaxed);
+            Ok((to_lua(lua, p.clone())?, "hit"))
+        }
+        Shared::Raised(e) => fallback(lua, s, key, e.clone()),
+        Shared::Rejected(e) => Err(e.clone()),
+    }
+}
+
+/// The loader raised `e`: serve a value another caller refreshed meanwhile, or
+/// a stale one, else raise.
+fn fallback(
+    lua: &Lua,
+    s: &StateStore,
+    key: &[u8],
+    e: mlua::Error,
+) -> mlua::Result<(Value, &'static str)> {
+    match s.lookup(key) {
+        Lookup::Fresh(p) => {
+            s.hits.fetch_add(1, Ordering::Relaxed);
+            Ok((to_lua(lua, Some(p))?, "hit"))
+        }
+        Lookup::Stale(p) => {
+            s.stale.fetch_add(1, Ordering::Relaxed);
+            Ok((to_lua(lua, Some(p))?, "stale"))
+        }
+        Lookup::Absent => Err(e),
+    }
 }
 
 /// Install `lur.state` backed by the shared `store`.
@@ -762,9 +1175,15 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
     // `fetch(key, { ttl_ms, stale_ms? }, fn) -> value, "hit" | "miss" | "stale"`.
     // `fn` runs with no lock held and may await I/O; it is not retried.
     let s = store.clone();
+    let leads = Arc::new(VmLeads::default());
+    lua.set_app_data(VmFlights {
+        store: store.clone(),
+        leads: leads.clone(),
+    });
     let fetch = lua
         .create_async_function(move |lua, (key, opts, func): (Value, Value, Value)| {
             let s = s.clone();
+            let leads = leads.clone();
             async move {
                 const F: &str = "lur.state.fetch";
                 let key: mlua::LuaString = argcheck::arg(&lua, key, F, 1, "string")?;
@@ -785,34 +1204,35 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
                     s.hits.fetch_add(1, Ordering::Relaxed);
                     return Ok((to_lua(&lua, Some(p))?, "hit"));
                 }
-                match func.call_async::<Value>(()).await {
-                    Ok(v) => {
-                        s.misses.fetch_add(1, Ordering::Relaxed);
-                        if let Some(p) = from_lua(&v)? {
-                            let w = Write {
-                                expiry: Expiry::After(ttl_ms),
-                                evictable: Some(true),
-                                stale_ms,
-                            };
-                            // Version 0 = still absent or stale, as when we looked:
-                            // a write that landed meanwhile (a counter, another
-                            // fetch) wins. A value that cannot fit goes uncached.
-                            let _ = s.compare_and_set(&key, 0, Some(p), w);
+                let w = Write {
+                    expiry: Expiry::After(ttl_ms),
+                    evictable: Some(true),
+                    stale_ms,
+                };
+                // Single-flight: lead, or wait for the leader and share its
+                // outcome. A leader that ends without one hands off: every
+                // waiter wakes and goes round again, and the first to re-join
+                // leads.
+                loop {
+                    match s.join(&key, &leads) {
+                        Join::Hit(p) => {
+                            s.hits.fetch_add(1, Ordering::Relaxed);
+                            return Ok((to_lua(&lua, Some(p))?, "hit"));
                         }
-                        Ok((v, "miss"))
-                    }
-                    Err(e) => {
-                        // Another request may have refreshed it meanwhile.
-                        match s.lookup(&key) {
-                            Lookup::Fresh(p) => {
-                                s.hits.fetch_add(1, Ordering::Relaxed);
-                                Ok((to_lua(&lua, Some(p))?, "hit"))
+                        Join::Lead(guard) => {
+                            return load(&lua, &s, &key, &func, w, Some(guard)).await;
+                        }
+                        Join::Inline => return load(&lua, &s, &key, &func, w, None).await,
+                        Join::Wait(mut rx, _edges) => {
+                            // Bound only by this caller's own timeout.
+                            let outcome = rx
+                                .wait_for(Option::is_some)
+                                .await
+                                .ok()
+                                .and_then(|o| o.clone());
+                            if let Some(shared) = outcome {
+                                return share(&lua, &s, &key, &shared);
                             }
-                            Lookup::Stale(p) => {
-                                s.stale.fetch_add(1, Ordering::Relaxed);
-                                Ok((to_lua(&lua, Some(p))?, "stale"))
-                            }
-                            Lookup::Absent => Err(e),
                         }
                     }
                 }
