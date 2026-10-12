@@ -265,6 +265,28 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   `HttpCache`: the two differ (non-evictable entries, stale windows, versions), and sharing
   would have changed a hot path for no behavioral gain. Counters (`hits`/`misses`/`stale`/
   `evictions`) are kept for a future `/metrics`.
+- **Route parameter validation (design only, not implemented).** Declared in the route's
+  options and checked before the handler runs, so a handler only sees validated, converted
+  values. Scope is the wire input that enters the script as untrusted text: `req.params`
+  and `req.query`/`query_all` first; `headers`/`cookies` later with the same rules.
+  Out of scope: the `req.json()` body (needs a full nested schema language; handlers
+  `pcall` and check by hand), values from `lur.http`/`lur.json.decode`/kv/state (data
+  handling, not a boundary; a standalone `lur.validate` would be the home if wanted), and
+  handler return values (already a 500 on bad status/headers).
+  - **Decided: a path parameter that fails its pattern is a 404**, as with Rails route
+    `constraints`: the route is treated as not matching, the handler never runs, and
+    another route (or the generic 404) can still answer. Rejected: 400, which leaks that the
+    route exists for that segment and prevents a more general route from matching.
+  - **Proposed, not yet decided**: rules are a Lua table (`params = { type = "^%w+$" }`,
+    `query = { limit = { int = true, min = 1, max = 100, default = 20 } }`); Lua patterns,
+    not regex (no new dependency). Types: `string` (`pattern`, `min_len`/`max_len`,
+    `one_of`), `int` (strict decimal; no `1.5`/`1e3`/`0x10`/whitespace), `number` (finite),
+    `bool` (`true`/`false` only), list via `query_all` with `max_items`; date/UUID/email are
+    not built in (use `pattern`, or `lur.time.try_parse` in the handler). A bad `query`
+    value is a 400 by default, with an opt-in `clamp = true` for pagination-style limits;
+    most frameworks reject rather than clamp, Rails callers clamp by hand. Open: whether an
+    empty `?limit=` is absent or invalid, and whether undeclared query keys pass through
+    (compatible) or are dropped (Rails' strong-parameters default).
 - **`db.tx` takes the write lock on SQLite even when read-only** (`BEGIN IMMEDIATE`) —
   deliberate.
 
@@ -277,7 +299,7 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   unless `--timeout` is set.
 - Cron: UTC only (no timezone setting), in-memory schedule, no missed-run replay, no
   `@every` interval syntax.
-- Not implemented: streaming response bodies / `lur.http` downloads, multipart bodies, retries,
+- Not implemented: streaming response bodies / `lur.http` downloads, multipart bodies, `req` form-body parsing (`application/x-www-form-urlencoded`; planned), retries,
   cookie jar, proxies, a TLS-verification opt-out, managed migrations, in-memory DB, named SQL params, socket/queue trigger sources, `lur.serve.on_start`,
   configurable SQLite `busy_timeout`, machine-readable (`--error-format=json`) diagnostics,
   symmetric/asymmetric crypto and KDFs, signed cookies, `lur docs <section>`.
