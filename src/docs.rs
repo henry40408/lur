@@ -1,7 +1,7 @@
 //! Render the embedded `GUIDE.md` for `lur docs`: a hand-rolled
 //! `pulldown-cmark` sink whose plain mode strips all markup and escapes.
 
-use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 const BOLD: &str = "\x1b[1m";
 const H1: &str = "\x1b[1;7m"; // reverse video bar
@@ -105,6 +105,68 @@ fn highlight_lua(code: &str, color: bool) -> String {
     out
 }
 
+/// Printed width of `s`, skipping `ESC [ … m` colour sequences.
+fn visible_len(s: &str) -> usize {
+    let mut n = 0;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            for c in chars.by_ref() {
+                if c == 'm' {
+                    break;
+                }
+            }
+        } else {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Column-aligned table: bold header, dim rule, two-space gutters, last column
+/// unpadded. Every line is prefixed with `indent` spaces.
+fn render_table(rows: &[Vec<String>], indent: usize, color: bool) -> String {
+    let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let mut widths = vec![0; cols];
+    for row in rows {
+        for (i, cell) in row.iter().enumerate() {
+            widths[i] = widths[i].max(visible_len(cell));
+        }
+    }
+    let pad = " ".repeat(indent);
+    let mut out = String::new();
+    for (r, row) in rows.iter().enumerate() {
+        out.push_str(&pad);
+        for (i, cell) in row.iter().enumerate() {
+            if r == 0 && color {
+                out.push_str(BOLD);
+                out.push_str(cell);
+                out.push_str(RESET);
+            } else {
+                out.push_str(cell);
+            }
+            if i + 1 < row.len() {
+                out.push_str(&" ".repeat(widths[i] - visible_len(cell) + 2));
+            }
+        }
+        out.truncate(out.trim_end_matches(' ').len());
+        out.push('\n');
+        if r == 0 {
+            let total = widths.iter().sum::<usize>() + 2 * cols.saturating_sub(1);
+            out.push_str(&pad);
+            if color {
+                out.push_str(DIM);
+            }
+            out.push_str(&"\u{2500}".repeat(total));
+            if color {
+                out.push_str(RESET);
+            }
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Glamour-style terminal rendering. Without `color`, the structure (heading
 /// `#` prefixes, `│ ` code frame, indentation) stays but no escapes are emitted.
 pub fn render(markdown: &str, color: bool) -> String {
@@ -117,8 +179,34 @@ pub fn render(markdown: &str, color: bool) -> String {
     let mut in_blockquote = false;
     let mut heading_level: usize = 0; // 0 = not in a heading
 
-    for ev in Parser::new(markdown) {
+    // Table state: finished rows, the row being built, and the output buffer
+    // parked while a cell collects its text.
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut parked = String::new();
+
+    for ev in Parser::new_ext(markdown, Options::ENABLE_TABLES) {
         match ev {
+            Event::Start(Tag::Table(_)) => {
+                rows.clear();
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                if list_depth == 0 && !out.ends_with("\n\n") {
+                    out.push('\n');
+                }
+            }
+            Event::Start(Tag::TableCell) => parked = std::mem::take(&mut out),
+            Event::End(TagEnd::TableCell) => {
+                let cell = std::mem::replace(&mut out, std::mem::take(&mut parked));
+                row.push(cell);
+            }
+            Event::End(TagEnd::TableHead | TagEnd::TableRow) => rows.push(std::mem::take(&mut row)),
+            Event::End(TagEnd::Table) => {
+                let indent = margin + list_depth * 2;
+                out.push_str(&render_table(&rows, indent, color));
+                rows.clear();
+            }
             Event::Start(Tag::Heading { level, .. }) => {
                 let lvl = level as usize;
                 heading_level = lvl;
@@ -143,13 +231,21 @@ pub fn render(markdown: &str, color: bool) -> String {
                 heading_level = 0;
             }
             Event::Start(Tag::Paragraph) => {
-                if !in_blockquote {
+                if !in_blockquote && !out.ends_with("- ") {
                     out.push_str(&" ".repeat(margin));
                 }
             }
             Event::Start(Tag::Strong | Tag::Emphasis) => out.push_str(st(BOLD)),
             Event::End(TagEnd::Strong | TagEnd::Emphasis) => out.push_str(st(RESET)),
-            Event::Start(Tag::List(_)) => list_depth += 1,
+            Event::Start(Tag::List(_)) => {
+                if list_depth == 0 && !out.is_empty() && !out.ends_with("\n\n") {
+                    if !out.ends_with('\n') {
+                        out.push('\n');
+                    }
+                    out.push('\n');
+                }
+                list_depth += 1;
+            }
             Event::End(TagEnd::List(_)) => {
                 list_depth = list_depth.saturating_sub(1);
                 if list_depth == 0 {
@@ -201,7 +297,7 @@ pub fn render(markdown: &str, color: bool) -> String {
             }
             Event::SoftBreak | Event::HardBreak => {
                 out.push('\n');
-                out.push_str(&" ".repeat(margin));
+                out.push_str(&" ".repeat(margin + list_depth * 2));
             }
             Event::Rule => out.push_str("\n---\n"),
             _ => {}
