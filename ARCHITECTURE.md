@@ -328,10 +328,13 @@ Invariants:
   plus the tasks it runs under. Each flight records the stack its leader started under
   (empty = the run's top level). `parked_by_us` finds the leader's innermost task on the
   caller's stack and returns `Inline` unless, just below it, the leader runs under a
-  sibling task of the caller's own combinator call (the only case that waits). Dropping a `Task` (its future done or dropped) removes
-  flights led under it, handing off; a per-task count skips that unless it led something.
-  The rule errs only towards a duplicate load. Siblings still wait on each other, until
-  the parking task ends or their own timeout.
+  sibling task of the caller's own combinator call (the only case that waits). Dropping a
+  `Task` (its future done or dropped) removes flights led under it, handing off; a per-task
+  count skips that unless it led something. The rule errs towards a duplicate load, with
+  one known exception: a leader's coroutine moved between sibling tasks of one combinator
+  call (a raw `coroutine.resume` around async calls) can still be waited on by the task
+  that parked it. Siblings also wait on each other until the parking task ends or their
+  own timeout; neither run mode has a default timeout, so that can be forever.
 
 ## Validation & structured errors
 

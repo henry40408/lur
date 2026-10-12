@@ -426,19 +426,25 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   inline as before single-flight, when that task is the leader's own, or is the caller's
   innermost (which runs this `fetch` and awaits no combinator), or when the leader's next
   task belongs to another combinator call than the caller's next. Only a leader under a
-  sibling task of the caller's own combinator call is waited on: it may be live. When a task ends (its future completes or is dropped), flights led under it are
-  removed, handing off to waiters; a leader still in the task's own future has already
+  sibling task of the caller's own combinator call is waited on: it may be live. When a
+  task ends (its future completes or is dropped), flights led under it are removed, handing off to waiters; a leader still in the task's own future has already
   dropped its guard by then, so what is left is parked in a coroutine that outlived the
   task. A per-task count keeps that check off the store lock unless the task led
-  something. The rule errs only towards inline: if the run resumes the parked coroutine
-  later, both load, a duplicate rather than a deadlock. Still not covered: a leader parked
+  something. The rule errs towards inline: if the run resumes the parked coroutine
+  later, both load, a duplicate rather than a deadlock. Known exception: a flight records
+  the stack of its first poll only, so a leader's coroutine resumed and re-parked by a
+  different sibling task of the same combinator call is still waited on by that task (it
+  needs async calls inside a raw `coroutine.resume`, itself unsupported). Still not covered: a leader parked
   in a coroutine inside a sibling task that is still running. The host cannot tell it from
   a live one, so the sibling waits until that task ends or its own timeout fires, forever
   only if that task never ends and there is no timeout; if that task in turn waits on a
   key the sibling leads, neither ends before the timeout (wait edges only exist inside a
   loader). Cost: an app-data lookup and counter bump per combinator call, a counter bump
-  per task, a push/pop per poll: about +1.6% instructions on a combinator-only
-  micro-benchmark of tiny `map`/`all`/`race` tasks (a task-local parent chain cost +6%).
+  per task, a push/pop per poll: instructions +1.6%, wall time +3-6% on combinator-only
+  micro-benchmarks of tiny `map`/`all`/`race` tasks (a task-local parent chain cost +6%).
+  A simpler design, wrapping `coroutine.resume`/`wrap` to drop flights whose coroutine
+  returned the pending sentinel, would remove this machinery and cost; it needs the hidden
+  `Lua::poll_pending()` and a sandbox review, so it is a follow-up.
   The first loader to finish stores (normally the leader; an inline caller can beat it),
   so the leader's `ttl_ms`/`stale_ms` win over its waiters': a waiter's own options never
   reach the store. The stale fallback on a shared failure uses the window stored with the
