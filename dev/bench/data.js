@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791770625880,
+  "lastUpdate": 1791775431645,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4385,6 +4385,54 @@ window.BENCHMARK_DATA = {
             "name": "async_map_20k_limit_64",
             "value": 19801021,
             "range": "± 170481",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6caf26d8c9c73c6e7eeb898fc9b9ef322ef3c6c3",
+          "message": "feat(html,xml): add node:text(css) shorthand (#152)\n\n* feat(html): add node:text(css) shorthand returning nil when nothing matches\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* feat(xml): add node:text(path) and reject extra text() arguments\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T11:21:20+08:00",
+          "tree_id": "0a4de4945dac2d94c28e40e4624c65ff1d79370d",
+          "url": "https://github.com/henry40408/lur/commit/6caf26d8c9c73c6e7eeb898fc9b9ef322ef3c6c3"
+        },
+        "date": 1791775430973,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 369810,
+            "range": "± 2907",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5737,
+            "range": "± 124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 184131,
+            "range": "± 1128",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 21779391,
+            "range": "± 368292",
             "unit": "ns/iter"
           }
         ]
