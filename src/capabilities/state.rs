@@ -42,7 +42,7 @@ const SWEEP_EVERY: Duration = Duration::from_secs(60);
 /// gets a newer version than any a reader could still hold (no ABA), and a
 /// deleted key needs no entry. An absent key reads as version 0.
 ///
-/// An entry past `expires` but before `stale_until` is *stale*: invisible to
+/// An entry past `expires` but within `stale_for` of it is *stale*: invisible to
 /// every operation except `fetch`, which may fall back to it when its loader
 /// fails. A stale entry reads as version 0, like an absent one.
 #[derive(Debug, Clone)]
@@ -51,8 +51,8 @@ struct Entry {
     version: u64,
     /// Fresh until this instant; `None` never expires.
     expires: Option<Instant>,
-    /// Kept for `fetch` fallback until this instant (after `expires`).
-    stale_until: Option<Instant>,
+    /// Kept for `fetch` fallback this long after `expires`.
+    stale_for: Option<Duration>,
     /// Only evictable entries sit in `Inner::order` and may be dropped for room.
     evictable: bool,
     size: usize,
@@ -69,8 +69,8 @@ enum Freshness {
 impl Entry {
     fn freshness(&self, now: Instant) -> Freshness {
         match self.expires {
-            Some(x) if now >= x => match self.stale_until {
-                Some(s) if now < s => Freshness::Stale,
+            Some(x) if now >= x => match self.stale_for {
+                Some(d) if x.checked_add(d).is_none_or(|s| now < s) => Freshness::Stale,
                 _ => Freshness::Dead,
             },
             _ => Freshness::Fresh,
@@ -121,6 +121,9 @@ struct Inner {
     /// Last version handed out; only ever increases.
     last_version: u64,
     last_sweep: Option<Instant>,
+    /// Lower bound on the earliest `expires` of any entry; lets a write at the
+    /// cap skip scanning the map when nothing can have expired.
+    earliest: Option<Instant>,
     evictions: u64,
 }
 
@@ -149,6 +152,35 @@ impl Inner {
         for key in dead {
             self.remove(&key);
         }
+    }
+
+    /// Drop every entry past `expires`: dead ones, and stale ones that may be
+    /// evicted. These go before any live entry is evicted. A no-op unless
+    /// something can have expired, so a full cache does not rescan per write.
+    fn drop_expired(&mut self, now: Instant) {
+        if self.earliest.is_none_or(|e| e > now) {
+            return;
+        }
+        let gone: Vec<Vec<u8>> = self
+            .map
+            .iter()
+            .filter(|(_, e)| {
+                e.expires.is_some_and(|x| x <= now)
+                    && (e.evictable || matches!(e.freshness(now), Freshness::Dead))
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in gone {
+            self.remove(&key);
+        }
+        // What remains and is already past `expires` is stale and unevictable;
+        // it is reaped by `drop_dead` when its window closes.
+        self.earliest = self
+            .map
+            .values()
+            .filter_map(|e| e.expires)
+            .filter(|x| *x > now)
+            .min();
     }
 
     /// The fresh entry for `key`, if any. A dead one is removed on the way; a
@@ -203,18 +235,24 @@ impl Inner {
             self.drop_dead(now);
             self.last_sweep = Some(now);
         }
-        let (prev_expires, prev_evictable) = self
-            .live(&key, now)
-            .map_or((None, false), |e| (e.expires, e.evictable));
-        let expires = match w.expiry {
-            Expiry::Clear => None,
-            Expiry::Keep => prev_expires,
-            Expiry::After(ms) => Some(add_ms(now, ms)),
-            Expiry::AfterIfUnset(ms) => prev_expires.or_else(|| Some(add_ms(now, ms))),
+        let (prev_expires, prev_evictable, prev_stale) =
+            self.live(&key, now).map_or((None, false, None), |e| {
+                (e.expires, e.evictable, e.stale_for)
+            });
+        let (expires, inherited) = match w.expiry {
+            Expiry::Clear => (None, false),
+            Expiry::Keep => (prev_expires, true),
+            Expiry::After(ms) => (Some(add_ms(now, ms)), false),
+            Expiry::AfterIfUnset(ms) => match prev_expires {
+                Some(x) => (Some(x), true),
+                None => (Some(add_ms(now, ms)), false),
+            },
         };
         let evictable = w.evictable.unwrap_or(prev_evictable);
-        let stale_until = match (expires, w.stale_ms) {
-            (Some(x), Some(ms)) => Some(add_ms(x, ms)),
+        // A write that keeps the expiry keeps its stale window too.
+        let stale_for = match (expires, w.stale_ms) {
+            (Some(_), Some(ms)) => Some(Duration::from_millis(ms.cast_unsigned())),
+            (Some(_), None) if inherited => prev_stale,
             _ => None,
         };
         let size = key.len() + value.size() + ENTRY_OVERHEAD;
@@ -230,7 +268,7 @@ impl Inner {
         };
         if over(self) {
             // Expired entries are free to drop; only then evict live ones.
-            self.drop_dead(now);
+            self.drop_expired(now);
         }
         // Evict into a scratch plan first so a write that cannot fit changes
         // nothing: collect victims, and only apply them if the write then fits.
@@ -278,13 +316,16 @@ impl Inner {
             0
         };
         self.bytes += size;
+        if let Some(x) = expires {
+            self.earliest = Some(self.earliest.map_or(x, |e| e.min(x)));
+        }
         self.map.insert(
             key,
             Entry {
                 value,
                 version: self.last_version,
                 expires,
-                stale_until,
+                stale_for,
                 evictable,
                 size,
                 tick,
@@ -753,8 +794,10 @@ pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), Run
                                 evictable: Some(true),
                                 stale_ms,
                             };
-                            // A value that cannot fit is returned uncached.
-                            let _ = s.set(key, Some(p), w);
+                            // Version 0 = still absent or stale, as when we looked:
+                            // a write that landed meanwhile (a counter, another
+                            // fetch) wins. A value that cannot fit goes uncached.
+                            let _ = s.compare_and_set(&key, 0, Some(p), w);
                         }
                         Ok((v, "miss"))
                     }
@@ -900,7 +943,6 @@ mod tests {
             ..Write::default()
         };
         put(&store, "k", 1.0, w).unwrap();
-        assert!(present(&store, "k"));
         std::thread::sleep(Duration::from_millis(20));
         assert_eq!(store.snapshot(b"k"), (None, 0));
         assert!(store.ttl(b"k").is_none());
@@ -982,6 +1024,67 @@ mod tests {
             store.lookup(b"k"),
             Lookup::Fresh(p) if p == Prim::Num(2.0)
         ));
+    }
+
+    #[test]
+    fn a_write_that_keeps_the_expiry_keeps_the_stale_window() {
+        let store = StateStore::default();
+        let w = Write {
+            expiry: Expiry::After(5),
+            evictable: Some(true),
+            stale_ms: Some(60_000),
+        };
+        put(&store, "k", 1.0, w).unwrap();
+        let (_, v) = store.snapshot(b"k");
+        assert!(
+            store
+                .compare_and_set(b"k", v, Some(Prim::Num(2.0)), KEEP)
+                .unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(
+            matches!(store.lookup(b"k"), Lookup::Stale(p) if p == Prim::Num(2.0)),
+            "update/cas must not drop the fallback window"
+        );
+    }
+
+    #[test]
+    fn stale_entries_are_evicted_before_fresh_ones() {
+        let store = StateStore::with_limits(Limits {
+            max_entries: 2,
+            max_bytes: 0,
+        });
+        let stale = Write {
+            expiry: Expiry::After(5),
+            evictable: Some(true),
+            stale_ms: Some(60_000),
+        };
+        put(&store, "fresh", 1.0, cache()).unwrap();
+        put(&store, "stale", 1.0, stale).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        put(&store, "new", 1.0, cache()).unwrap();
+        assert!(
+            present(&store, "fresh"),
+            "a live entry outlives a stale one"
+        );
+        assert!(present(&store, "new"));
+        assert!(matches!(store.lookup(b"stale"), Lookup::Absent));
+        assert_eq!(store.stats().evictions, 0);
+    }
+
+    #[test]
+    fn a_full_store_with_nothing_expiring_does_not_rescan() {
+        let store = StateStore::with_limits(Limits {
+            max_entries: 100,
+            max_bytes: 0,
+        });
+        for i in 0..100 {
+            put(&store, &format!("k{i}"), 1.0, cache()).unwrap();
+        }
+        let before = store.lock().earliest;
+        put(&store, "more", 1.0, cache()).unwrap();
+        assert_eq!(store.lock().earliest, before, "no sweep, bound untouched");
+        assert_eq!(store.stats().evictions, 1);
     }
 
     #[test]

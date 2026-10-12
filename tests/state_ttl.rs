@@ -33,10 +33,11 @@ fn limited(max_entries: usize, max_bytes: usize) -> Runtime {
 
 #[test]
 fn ttl_expires_and_reports_remaining_time() {
-    run("lur.state.set('k', 'v', { ttl_ms = 100 })\n\
-         assert(lur.state.get('k') == 'v', 'live before expiry')\n\
-         local ms, exists = lur.state.ttl('k')\n\
-         assert(exists == true and ms > 0 and ms <= 100, 'remaining ms')\n\
+    run("lur.state.set('long', 'v', { ttl_ms = 60000 })\n\
+         local ms, exists = lur.state.ttl('long')\n\
+         assert(exists == true and ms > 0 and ms <= 60000, 'remaining ms')\n\
+         assert(lur.state.get('long') == 'v')\n\
+         lur.state.set('k', 'v', { ttl_ms = 100 })\n\
          lur.async.sleep(250)\n\
          assert(lur.state.get('k') == nil, 'gone after expiry')\n\
          local ms2, exists2 = lur.state.ttl('k')\n\
@@ -59,16 +60,17 @@ fn set_clears_expiry_while_cas_update_and_incr_keep_it() {
 
 #[test]
 fn incr_ttl_is_a_fixed_window_and_renew_resets_it() {
-    run("lur.state.incr('c', 1, { ttl_ms = 300 })\n\
-         lur.async.sleep(200)\n\
-         lur.state.incr('c', 1, { ttl_ms = 300 })\n\
+    // Windows are 600 ms with 400 ms steps: ~200 ms of scheduling slack.
+    run("lur.state.incr('c', 1, { ttl_ms = 600 })\n\
+         lur.async.sleep(400)\n\
+         lur.state.incr('c', 1, { ttl_ms = 600 })\n\
          assert(lur.state.get('c') == 2)\n\
-         lur.async.sleep(200)\n\
+         lur.async.sleep(400)\n\
          assert(lur.state.get('c') == nil, 'window was not extended')\n\
-         lur.state.incr('r', 1, { ttl_ms = 300, renew_ttl = true })\n\
-         lur.async.sleep(200)\n\
-         lur.state.incr('r', 1, { ttl_ms = 300, renew_ttl = true })\n\
-         lur.async.sleep(200)\n\
+         lur.state.incr('r', 1, { ttl_ms = 600, renew_ttl = true })\n\
+         lur.async.sleep(400)\n\
+         lur.state.incr('r', 1, { ttl_ms = 600, renew_ttl = true })\n\
+         lur.async.sleep(400)\n\
          assert(lur.state.get('r') == 2, 'renewed')");
 }
 
@@ -155,6 +157,31 @@ fn fetch_loader_may_await_and_use_state() {
          end)\n\
          assert(v == 'loaded')\n\
          assert(lur.state.get('side') == 'effect')",
+    );
+}
+
+#[test]
+fn fetch_does_not_overwrite_a_write_made_while_the_loader_ran() {
+    run(
+        "local v, s = lur.state.fetch('c', { ttl_ms = 50 }, function()\n\
+           lur.state.set('c', 7)\n\
+           return 1\n\
+         end)\n\
+         assert(v == 1 and s == 'miss', 'caller still gets the loaded value')\n\
+         lur.async.sleep(150)\n\
+         assert(lur.state.get('c') == 7, 'the concurrent set survives, unexpired')\n\
+         assert(lur.state.ttl('c') == nil, 'and stays a plain, non-expiring key')",
+    );
+}
+
+#[test]
+fn update_keeps_the_stale_window_of_a_fetched_value() {
+    run(
+        "lur.state.fetch('f', { ttl_ms = 50, stale_ms = 60000 }, function() return 'old' end)\n\
+         lur.state.update('f', function(v) return v .. '!' end)\n\
+         lur.async.sleep(150)\n\
+         local v, s = lur.state.fetch('f', { ttl_ms = 50 }, function() error('down') end)\n\
+         assert(v == 'old!' and s == 'stale', tostring(v) .. tostring(s))",
     );
 }
 
