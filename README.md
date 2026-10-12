@@ -359,10 +359,10 @@ Integer milliseconds throughout (divide by `1000` for `os.date`). Malformed inpu
 | `monotonic_ms()` | ms | for elapsed-time differences |
 | `parse_rfc3339(text)` | epoch ms | a UTC offset such as `Z` is required |
 | `parse_http_date(text)` | epoch ms | |
-| `parse_rfc2822(text)` | epoch ms | timezone-aware |
-| `format_rfc3339(ms, tz?)` | string | timezone-aware |
-| `format_rfc2822(ms, tz?)` | string | timezone-aware |
-| `format(ms, strftime, tz?)` | string | timezone-aware |
+| `parse_rfc2822(text)` | epoch ms | honors the offset in the text |
+| `format_rfc3339(ms, tz?)` | string | |
+| `format_rfc2822(ms, tz?)` | string | |
+| `format(ms, strftime, tz?)` | string | |
 | `parse(text, fmt?, tz?)` | epoch ms | see below |
 | `try_parse(text, fmt?, tz?)` | epoch ms or `nil` | `parse` that returns `nil` for unparseable (or `nil`) text; a bad `fmt` or `tz` still raises |
 
@@ -414,14 +414,14 @@ Nodes (the doc and its elements) share these methods; call them with `:`.
 
 | Method | Returns | Notes |
 | --- | --- | --- |
-| `select(css)` | array | descendants only; an invalid selector raises |
-| `select_one(css)` | node or `nil` | descendants only; an invalid selector raises |
+| `select(css)` | array | descendants only |
+| `select_one(css)` | node or `nil` | descendants only; for both, an invalid selector raises |
 | `text(opts?)` | string | `{ trim = true }` strips surrounding whitespace; `lur.html` only |
 | `text(css)` | string or `nil` | shorthand for `select_one(css):text()`; `nil` when nothing matches |
 | `html()`, `inner_html()`, `tag()` | string | |
 | `attr(name)` | string or `nil` | |
 | `attrs()` | table | |
-| `parent()` | node | |
+| `parent()` | node or `nil` | `nil` for the document and the root element |
 | `children()` | array | elements only |
 
 `lur.html.sanitize(html, opts?) → string` strips scripts, styles, event handlers and unsafe
@@ -471,8 +471,10 @@ JSON Feed 1.1).
 | Field | Where | Notes |
 | --- | --- | --- |
 | `title` | `meta`, item | required |
-| `link`, `feed_url`, `description`, `language`, `id`, `updated` | `meta` | optional |
-| `link`, `guid`, `date`, `updated`, `summary`, `content` (HTML), `author` | item | optional |
+| `feed_url`, `description`, `language`, `updated` | `meta` | optional |
+| `link`, `id` | `meta` | optional (see format requirements below) |
+| `guid`, `link` | item | optional (see format requirements below) |
+| `date`, `updated`, `summary`, `content` (HTML), `author` | item | optional |
 | `categories` | item | array of strings |
 | `enclosure` | item | `{ url, type?, length? }` |
 
@@ -529,16 +531,16 @@ modify.
 | `headers` | table | request headers |
 | `query` | table | query parameters |
 | `body` / `json` / `form` | one of | raw body, JSON-encoded value, or a flat table of string/number/boolean (url-encoded with sorted keys; `Content-Type` set unless `headers` has one) |
-| `timeout` | ms | request timeout |
+| `timeout` | ms | per-request timeout; no default of its own (the global `--timeout` still applies) |
 | `cache` | table | see [Caching](#caching) |
 
 Returns `{ status, body, headers, headers_all, json(), text(), html() }`. The helpers are
-closures called with a dot, like `json()` (`res.text()`).
+closures: call them with a dot, e.g. `res.text()`, not `res:text()`.
 
 | Helper | Behaviour |
 | --- | --- |
-| `res.json(opts?)` | `res.json({ null = "drop" })` as in `lur.json.decode` |
-| `res.text()` | decodes `body` by a BOM, then the `Content-Type` charset, then `<meta charset>` in the first 1 KiB, then UTF-8 (an unknown header charset falls back to the `<meta>`/UTF-8 steps; invalid bytes become U+FFFD), the `lur.charset` rules |
+| `res.json(opts?)` | decodes `body`; `opts` as in `lur.json.decode` |
+| `res.text()` | decodes `body` with the `lur.charset` rules: a BOM, then the `Content-Type` charset, then `<meta charset>` in the first 1 KiB, then UTF-8 (an unknown header charset falls back to the `<meta>`/UTF-8 steps; invalid bytes become U+FFFD) |
 | `res.html()` | `lur.html.parse(res.text())` |
 
 Guards:
@@ -611,8 +613,8 @@ native to the backend.
 | `delete(key)` | | |
 | `add(key, value)` | bool | atomic set-if-absent |
 | `cas(key, expected, new)` | bool | atomic; `nil` expected = must be absent, `nil` new = delete |
-| `incr` / `decr(key, n?)` | | integer counters, step 1 |
-| `update(key, fn)` | | read-modify-write; return `nil` to delete |
+| `incr` / `decr(key, n?)` | | atomic integer counters, step 1 |
+| `update(key, fn)` | | atomic read-modify-write; return `nil` to delete |
 | `expire(key, ms)` | bool | |
 | `ttl(key)` | `ms, exists` | |
 
@@ -624,8 +626,6 @@ Expiry: pass `{ ttl_ms = n }` (positive milliseconds) as the last argument of
 | `set` without `ttl_ms` | clears it |
 | `cas` / `update` | keep it |
 | `incr` / `decr` | set it only when the key has none (fixed window); `renew_ttl = true` resets it every call |
-
-Postgres integration tests need a local Postgres: `docker compose up -d`.
 
 ### Concurrency
 
@@ -668,8 +668,8 @@ Process-wide state shared across the VM pool, primitives only.
 | `fetch(key, { ttl_ms, stale_ms? }, fn)` | `value, "hit"\|"miss"\|"stale"` | see below |
 
 - Writes (`set`/`add`/`cas`/`update`/`incr`/`decr`) take `{ ttl_ms = n, evictable = bool }`
-  last, with `lur.kv`'s expiry rules (`set`/`add` clear it, `cas`/`update`/`incr`/`decr`
-  keep it, `incr`/`decr` set it only when absent unless `renew_ttl = true`).
+  last, with the same expiry rules as the [`lur.kv` expiry table](#lurkv) except that `add`
+  also clears an existing expiry and `evictable` is state-only.
 - `fetch` runs `fn` on a miss (async, unlocked, not retried) and stores the value as
   evictable. If `fn` raises and a value within `stale_ms` of expiry exists, that value
   comes back as `"stale"`. `nil` from `fn` is not cached.
@@ -709,9 +709,9 @@ cron runs drain within `--shutdown-grace`.
 
 | `opts` | Default | Meaning |
 | --- | --- | --- |
-| `name` | | job name |
+| `name` | `cron[<spec>]` | job name, shown in logs |
 | `overlap` | `false` | `false` skips a tick while the previous run is going |
-| `timeout` | | ms |
+| `timeout` | `--timeout` | ms; overrides the global per-event timeout |
 
 #### `lur.serve.abort(status, message, data?)`
 
@@ -766,7 +766,14 @@ Ends the handler at once with an HTTP error.
 
 `req.valid_query(schema, opts?)`, `req.valid_params(schema, opts?)` and
 `req.valid_body(schema, opts?)` run [`lur.validate`](#validation-lurvalidate) over client
-input and return the converted value (a fresh table).
+input and return the converted value (a fresh table, except `valid_body` may return
+`nil`; see below).
+
+| Helper | Reads |
+| --- | --- |
+| `req.valid_query` | `req.query` (and `req.query_all` for `list(...)` fields) |
+| `req.valid_params` | `req.params` |
+| `req.valid_body` | the request body, decoded by `Content-Type` |
 
 - `opts.fail_status` is an integer `400..=599`, default `400`, checked at call time. On a
   validation failure they abort with that status, `message = "validation failed"` and
@@ -788,8 +795,7 @@ input and return the converted value (a fresh table).
   `form_all`.
 - With several `Content-Type` headers the last one wins, as for `req.headers`.
 - A JSON `null` (top level or as an object field) counts as absent, as in
-  `lur.validate`: `optional` gives `nil`, `default` fills, a required value reports
-  `is required`.
+  [Missing values and defaults](#missing-values-and-defaults).
 
 | Case | Status | Message | Notes |
 | --- | --- | --- | --- |
@@ -798,7 +804,7 @@ input and return the converted value (a fresh table).
 | Empty JSON body | **400** | `invalid JSON body` | always 400, unless the schema accepts `nil` (`v.optional(...)`), in which case it returns `nil` |
 | Validation failure | `opts.fail_status` (default 400) | `validation failed` | `data = issues` |
 
-#### Examples
+#### Server examples
 
 ```lua
 lur.serve.http("GET", "/users/:id", function(req)
@@ -854,6 +860,7 @@ cargo nextest run        # tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all
 cargo bench --bench runtime
+docker compose up -d     # Postgres for tests/pg.rs (skipped locally if down)
 ```
 
 CI runs lint, tests, coverage (Codecov), and a benchmark report on every push and PR.
