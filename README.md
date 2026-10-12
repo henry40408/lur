@@ -686,9 +686,9 @@ Process-wide state shared across the VM pool, primitives only.
   stale fallback. If the running caller times out or is cancelled, one waiter runs `fn`
   instead. A `fetch` that would wait on itself runs its own `fn` directly instead of
   deadlocking. That covers a `fetch` from inside `fn` (same key, or a cycle of keys), and
-  one on a key whose `fn` this run left suspended in a coroutine. One exception: a key
-  parked that way inside a `lur.async` task that is still running, then fetched from a
-  sibling task, still waits: until that task ends or the sibling's timeout fires. Waiters
+  one on a key whose `fn` this run left suspended in a coroutine: once the
+  `coroutine.resume` (or `wrap` call) running `fn` returns, the next caller runs `fn`
+  itself. (`coroutine.resume`/`wrap` are lur's own for this; they behave as Luau's.) Waiters
   do not store: the first `fn` to finish does (normally the running caller's), with its
   caller's `ttl_ms`/`stale_ms`.
   Waiters get a loader's error as plain text: a `lur.serve.abort` inside `fn` reaches them

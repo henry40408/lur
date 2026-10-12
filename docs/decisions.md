@@ -414,37 +414,43 @@ For *what* the code does, see [ARCHITECTURE.md](../ARCHITECTURE.md).
   are removed when that VM's run ends (`state::end_run`, from `with_timeout`; one atomic
   load when the VM leads nothing). A run can also fetch a key whose leader it parked itself,
   earlier in the same run. Waiting there would wait on itself: forever without a timeout,
-  and in serve also for every later caller of the key, since `end_run` never comes. Each
-  `lur.async` task therefore gets per-VM numbers for itself and for its combinator call
-  (`state::TaskGroup`, `state::Task`), and the combinators push them on a thread-local
-  stack (`POLLING`) around every poll of the task's future. Polls nest synchronously, so
-  the stack is exactly the running task and the tasks it runs under, each busy here or
-  awaiting the one combinator call that holds the next. A flight records the stack its
-  leader started under. A caller on the leader's VM finds the leader's innermost task on
-  its own stack (the top level if none; the stacks need not share a prefix, as a coroutine
-  can be resumed from another task). The leader is parked, so the caller runs its loader
-  inline as before single-flight, when that task is the leader's own, or is the caller's
-  innermost (which runs this `fetch` and awaits no combinator), or when the leader's next
-  task belongs to another combinator call than the caller's next. Only a leader under a
-  sibling task of the caller's own combinator call is waited on: it may be live. When a
-  task ends (its future completes or is dropped), flights led under it are removed, handing off to waiters; a leader still in the task's own future has already
-  dropped its guard by then, so what is left is parked in a coroutine that outlived the
-  task. A per-task count keeps that check off the store lock unless the task led
-  something. The rule errs towards inline: if the run resumes the parked coroutine
-  later, both load, a duplicate rather than a deadlock. Known exception: a flight records
-  the stack of its first poll only, so a leader's coroutine resumed and re-parked by a
-  different sibling task of the same combinator call is still waited on by that task (it
-  needs async calls inside a raw `coroutine.resume`, itself unsupported). Still not covered: a leader parked
-  in a coroutine inside a sibling task that is still running. The host cannot tell it from
-  a live one, so the sibling waits until that task ends or its own timeout fires, forever
-  only if that task never ends and there is no timeout; if that task in turn waits on a
-  key the sibling leads, neither ends before the timeout (wait edges only exist inside a
-  loader). Cost: an app-data lookup and counter bump per combinator call, a counter bump
-  per task, a push/pop per poll: instructions +1.6%, wall time +3-6% on combinator-only
-  micro-benchmarks of tiny `map`/`all`/`race` tasks (a task-local parent chain cost +6%).
-  A simpler design, wrapping `coroutine.resume`/`wrap` to drop flights whose coroutine
-  returned the pending sentinel, would remove this machinery and cost; it needs the hidden
-  `Lua::poll_pending()` and a sandbox review, so it is a follow-up.
+  and in serve also for every later caller of the key, since `end_run` never comes. So
+  `coroutine.resume` and `coroutine.wrap` are replaced (before the sandbox freezes
+  `coroutine`) by versions that count the Lua-level resumes running on the VM; a flight
+  records the count when it starts, and when the resume at depth `d` returns, for any
+  reason, the VM's flights at depth `>= d` are removed (hand-off). Resumes nest strictly on
+  the host stack (a coroutine that awaits a host call yields mlua's pending sentinel to
+  whoever resumed it), so a leader still at depth `> 0` after its resume returned can only
+  be parked; one at depth 0 is the run's top level or a `lur.async` task, both being polled.
+  No dependence on mlua's hidden `Lua::poll_pending()`: any return of the resume counts.
+  Consequence: a script-level scheduler that resumes a coroutine, gets the pending sentinel
+  and forwards it with its own `coroutine.yield` (so the host call completes later) loses
+  single-flight for that key: the leader is removed at the resume, a concurrent caller
+  loads too (a duplicate load, never a deadlock; the leader's late `finish` finds no flight
+  and only stores, CAS on version 0). Forwarding the sentinel is undocumented mlua
+  behaviour, so this is accepted. The replacements are Luau's own `lcorolib.cpp` functions
+  (`coresumey`/`auxresume`/`auxwrapy`) redone over the public C API in `state/resume.rs`,
+  the crate's only `unsafe` (it is `deny`ed elsewhere): error messages and values,
+  `luaL_where` prefixes, `debug.info` names and tracebacks match the builtins
+  (`tests/coroutine.rs` compares both). Rejected: a Lua wrapper around the builtins (resume
+  micro-benchmarks +112-127%, VM cold start +21%, an extra frame in tracebacks and
+  `debug.info`); an mlua Rust function (errors become `mlua::Error` userdata, so error
+  values and identity change); per-task tracking (the first design: each `lur.async` task
+  got per-VM numbers pushed on a thread-local stack around every poll, and a flight
+  recorded the stack it started under; it cost +3-6% on combinator micro-benchmarks, and
+  with no timeout still waited forever on a leader parked inside a still-running sibling
+  task or whose coroutine moved between sibling tasks). Cost of the replacement,
+  interleaved medians of 6 rounds vs the builtins (main), two independent runs:
+  `coroutine_resume_10k` +1.5 to +4.8%, `coroutine_wrap_generator_10k` +4.4 to +6.1%,
+  `vm_cold_start` -0.6 to +2.7%, `async_*` -2.8 to +0.8%, `state_fetch_*` -0.2/+2.6%
+  (noise: the hit path did not change). Gap: a memory error
+  raised inside mlua's poll loop kills a leader's thread with its guard still on the stack:
+  garbage, but only dropped at a GC, which a VM that only waits may never start. A caller
+  waiting on a leader of its own VM therefore runs a full GC every second (at most once a
+  second per VM) until it hands off (`wait_same_vm`). That also runs while a sibling waits
+  on a slow live leader, accepted as same-VM waits are rare. A unit test leaks a guard into
+  garbage, since that memory error cannot be raised on demand. A caller on another VM
+  waits for that VM's GC, its `end_run`, or its own timeout.
   The first loader to finish stores (normally the leader; an inline caller can beat it),
   so the leader's `ttl_ms`/`stale_ms` win over its waiters': a waiter's own options never
   reach the store. The stale fallback on a shared failure uses the window stored with the
