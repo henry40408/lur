@@ -832,8 +832,36 @@ mod cache_tests {
         let c = HttpCache::with_limits(2, 0);
         c.put("a".into(), raw(1), 1);
         assert_eq!(c.clear(), 1);
+        assert!(c.lock().earliest.is_none());
         c.put("b".into(), raw(1), 60_000);
         assert!(has(&c, "b"));
+    }
+
+    #[test]
+    fn a_full_cache_with_nothing_expiring_does_not_rescan() {
+        let c = HttpCache::with_limits(2, 0);
+        c.put("a".into(), raw(1), 60_000);
+        c.put("b".into(), raw(1), 60_000);
+        let before = c.lock().earliest;
+        assert!(before.is_some());
+        c.put("c".into(), raw(1), 60_000); // evicts LRU, no scan
+        assert_eq!(c.lock().earliest, before);
+    }
+
+    #[test]
+    fn bound_is_recomputed_after_a_scan() {
+        let c = HttpCache::with_limits(3, 0);
+        c.put("long".into(), raw(1), 400);
+        c.put("short".into(), raw(1), 30);
+        c.put("live".into(), raw(1), 60_000);
+        std::thread::sleep(Duration::from_millis(80));
+        c.put("x".into(), raw(1), 60_000); // scan drops `short`
+        assert!(!has(&c, "short") && has(&c, "long"));
+        std::thread::sleep(Duration::from_millis(450));
+        c.put("y".into(), raw(1), 60_000);
+        // The recomputed bound finds `long`; LRU `live` must survive.
+        assert!(!has(&c, "long"));
+        assert!(has(&c, "live") && has(&c, "x") && has(&c, "y"));
     }
 
     /// Cost of cache-full inserts of live entries (prints; `--run-ignored all --no-capture`).
