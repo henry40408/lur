@@ -5,10 +5,11 @@
 by a policy (default `strict` — deny-all). Flags and the sandbox model are in
 the [README](../README.md).
 
-Every example below runs in the test suite (except those that need a network,
-a Postgres database, piped input or server mode).
+Every example below runs in the test suite, except those that need a network, a Postgres
+database or piped input. Server-mode examples are loaded as one app and sent requests.
 
-- Failures, including policy denials, raise a Lua error; catch them with `pcall`.
+- Failures, including policy denials, raise a Lua error; catch them with `pcall`. The
+  exception is `lur.env`, which returns `nil` for denied and unset alike.
 - Every `lur.*` table is read-only: assigning into one raises. Copy into a local
   table to modify.
 
@@ -573,12 +574,9 @@ cached responses.
 | `res.text()` | decodes `body` with the `lur.charset` rules: a BOM, then the `Content-Type` charset, then `<meta charset>` in the first 1 KiB, then UTF-8 (an unknown header charset falls back to the `<meta>`/UTF-8 steps; invalid bytes become U+FFFD), so a Big5 or Shift_JIS page arrives as proper UTF-8 |
 | `res.html()` | the same document node as `lur.html.parse(res.text())` |
 
-Guards:
-
-- Every request and redirect hop is checked against the allowlist and the private-IP
-  (SSRF) guard.
-- TLS is always verified; the body is capped by `--max-http-body`.
-- Proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) are ignored.
+Every request and redirect hop is checked against the allowlist and the private-IP (SSRF)
+guard; TLS is always verified and proxy environment variables are ignored. The full guard
+list is in the [README](../README.md#lurhttp).
 
 The examples need a network, so they are shown but not run.
 
@@ -763,26 +761,23 @@ if hits > 60 then
 end
 ```
 
-### Postgres backend
+### Backend notes
 
-`--db postgres://…` (or `postgresql://`) selects Postgres. Nothing is translated.
+Nothing is translated between backends. The details (exact column types, error text,
+busy-retry numbers) are in the [README](../README.md#lurdb).
 
-- **Placeholders** are `$1, $2, …`.
+- **Placeholders**: `?` on SQLite, `$1, $2, …` on Postgres.
 - **`last_insert_id` is SQLite-only**: always `0` on Postgres; use
   `INSERT … RETURNING id` via `db.query`.
-- **Row types**: only `int2`/`int4`/`int8` (integer), `float4`/`float8` (number), and
-  `text`/`varchar`/`bpchar`/`name`/`bytea` (string) map to Lua. Anything else
-  (`numeric`, `timestamptz`, `jsonb`, `uuid`, `bool`, arrays, …) raises
-  `lur.db: unsupported column type '<T>' in column '<name>'; CAST it to text (e.g.
-  <name>::text)`, so cast it, e.g. `col::text`.
-- **TLS**: append `?sslmode=require` (or another `sslmode`) to the URL.
-- **SQLite contention**: write transactions use `BEGIN IMMEDIATE`; a 5 s
-  `busy_timeout` plus up to 5 jittered attempts on single-statement writes, lock
-  acquisition, and open absorb "database is locked".
+- **Postgres row types**: only integers, floats and text/bytea types map to Lua; anything
+  else (`numeric`, `timestamptz`, `jsonb`, `uuid`, `bool`, arrays, …) raises, so cast it,
+  e.g. `col::text`.
+- **TLS**: append `?sslmode=require` (or another `sslmode`) to the Postgres URL.
+- **SQLite contention**: write transactions use `BEGIN IMMEDIATE`, and a `busy_timeout`
+  with jittered retries absorbs "database is locked".
 - **`db.tx` / `kv.update` can fail**: on Postgres they run at `SERIALIZABLE` and may
-  raise a serialization conflict with a stable, locale-independent message containing
-  `SQLSTATE 40001`; on SQLite they may raise once busy retries run out. `lur` does
-  **not** retry them: wrap them in `pcall` or your own retry.
+  raise a serialization conflict (`SQLSTATE 40001`); on SQLite they may raise once busy
+  retries run out. `lur` does **not** retry them: wrap them in `pcall` or your own retry.
 
 ```lua ignore
 -- lur --db postgres://user:pass@localhost/lur_dev?sslmode=disable app.lua
@@ -815,7 +810,7 @@ assert(ok or err ~= nil)
 - `map` options: `opts.limit` (integer >= 1) caps that call's in-flight tasks;
   `opts.drop_errors` omits failed items instead of failing fast.
 - Lua runs one step at a time; tasks interleave only at I/O awaits.
-- `--max-concurrency` caps in-flight tasks.
+- `--max-concurrency` caps in-flight tasks per VM.
 
 ```lua
 lur.async.sleep(1)
@@ -871,10 +866,10 @@ Process-wide state shared across the VM pool, primitives only.
 | --- | --- | --- |
 | `get(key)` | value | |
 | `set(key, value)` | | `nil` deletes |
-| `incr` / `decr(key, n?)` | | atomic; integer step, default 1 |
+| `incr` / `decr(key, n?)` | new integer | atomic; integer step, default 1 |
 | `add(key, value)` | bool | set-if-absent |
 | `cas(key, expected, new)` | bool | compare-and-set; `nil` = absent |
-| `update(key, fn)` | | optimistic CAS retry; `fn` runs unlocked |
+| `update(key, fn)` | new value | optimistic CAS retry: `fn` runs unlocked and may run more than once if it loses a race |
 | `ttl(key)` | `ms, exists` | |
 | `fetch(key, { ttl_ms, stale_ms? }, fn)` | `value, "hit"\|"miss"\|"stale"` | a cache; see below |
 
@@ -898,15 +893,17 @@ assert(lur.state.get("once") == "hello")
 Expiry and memory:
 
 - Writes (`set`/`add`/`cas`/`update`/`incr`/`decr`) take `{ ttl_ms = n, evictable = bool }`
-  last, with the same expiry rules as the [`lur.kv` expiry table](#expiry) except that
-  `add` also clears an existing expiry and `evictable` is state-only.
+  last, with the same expiry rules as the [`lur.kv` expiry table](#expiry). `evictable` is
+  state-only: `set`/`add` without `evictable = true` make the entry non-evictable, while
+  `cas`/`update`/`incr`/`decr` keep its current setting.
 - `--state-max-entries` / `--state-max-bytes` (default unlimited) drop only `evictable`
   entries, expired first, then least recently used; a write that cannot fit raises.
 
 `fetch` is a read-through cache:
 
 - `fn` runs on a miss (it may await I/O; unlocked, not retried) and its value is stored
-  as evictable. `nil` from `fn` is not cached.
+  as evictable. `nil` from `fn` is not cached, and a value that does not fit under the
+  caps is still returned (`"miss"`) but silently left uncached.
 - If `fn` raises and a value within `stale_ms` of expiry exists, that value comes back
   as `"stale"` instead.
 - A stale value is invisible to everything but `fetch`.
@@ -930,7 +927,7 @@ assert(exists and ms > 0)
 
 Only under `lur serve`; handlers are registered once at load time. On `SIGTERM` /
 `SIGINT`, in-flight requests and cron runs drain within `--shutdown-grace`. The examples
-below need a running server, so they are shown but not run.
+below are loaded together as one app and driven with requests by the test suite.
 
 #### Routing: `lur.serve.http(method, path, handler)`
 
@@ -940,8 +937,9 @@ below need a running server, so they are shown but not run.
   `:name?` is optional (`/feed/:tag?` matches `/feed` and `/feed/lua`; absent is `nil`);
   it may not share a static/param shape with another route of the same method, e.g.
   `/feed`.
-- **Precedence**: the most specific route wins regardless of order (more static segments,
-  then a concrete method over `ANY`).
+- **Precedence**: the most specific route wins regardless of order: at the first segment
+  where two routes differ a static segment beats a param; then a concrete method beats
+  `ANY`.
 - **Response**: `handler(req)` returns a table:
 
   | Field | Default | Notes |
@@ -954,7 +952,7 @@ below need a running server, so they are shown but not run.
 - An invalid header name/value (including CR/LF), or `Content-Length` /
   `Transfer-Encoding`, is a **500**.
 
-```lua ignore
+```lua serve
 lur.serve.http("POST", "/echo", function(req)
   local data = req.json()
   return {
@@ -981,7 +979,7 @@ end)
 | `overlap` | `false` | `false` skips a tick while the previous run is going |
 | `timeout` | `--timeout` | ms; overrides the global per-event timeout |
 
-```lua ignore
+```lua serve
 lur.serve.cron("0 */5 * * * *", function()
   lur.log.info("tick")
 end, { name = "ticker", overlap = false })
@@ -1003,9 +1001,9 @@ Ends the handler at once with an HTTP error.
 - Raised inside a `lur.async` task, `pcall` around the combinator sees a string, not the
   table (use it in the handler itself).
 
-```lua ignore
+```lua serve
 lur.serve.http("GET", "/items/:id", function(req)
-  local id = tonumber(req.params.id)
+  local id = tonumber(req.params.id) or lur.serve.abort(404, "not found")
   if id > 1000 then
     lur.serve.abort(410, "gone", { id = id })
   end
@@ -1035,18 +1033,13 @@ end)
 `req.form()` parses an `application/x-www-form-urlencoded` body into `{key = last value}`;
 `req.form_all()` returns `{key = {values...}}`, like `query` / `query_all`.
 
-- The media type is matched case-insensitively; parameters such as `; charset=utf-8` are
-  ignored.
-- Decoding is the query-string decoding: `+` is a space, `%XX` is decoded, a malformed `%`
-  stays literal, a key without `=` has value `""`, an empty body gives `{}`; `;` is not a
-  separator and `%00` yields a NUL byte.
-- The body is first read as lossy UTF-8, so invalid bytes in it become U+FFFD (bytes
-  produced by `%XX` escapes are kept raw).
 - Any other content type (or none) raises an ordinary error naming it, so branch on
   `req.headers["content-type"]` first if you accept several.
 - Multipart is not supported. `--max-body` applies as usual.
+- Decoding is the query-string decoding (`+` is a space, `%XX` decoded, a malformed `%`
+  stays literal); the exact edge cases are in the [README](../README.md#forms).
 
-```lua ignore
+```lua serve
 lur.serve.http("POST", "/search", function(req)
   local f = req.form()          -- { q = "luau", tag = "b" } for q=luau&tag=a&tag=b
   local all = req.form_all()    -- { q = { "luau" }, tag = { "a", "b" } }
@@ -1096,7 +1089,7 @@ below).
 | Empty JSON body | **400** | `invalid JSON body` | always 400, unless the schema accepts `nil` (`v.optional(...)`), in which case it returns `nil` |
 | Validation failure | `opts.fail_status` (default 400) | `validation failed` | `data = issues` |
 
-```lua ignore
+```lua serve
 lur.serve.http("GET", "/users/:id", function(req)
   local v = lur.validate
   local p = req.valid_params(v.object({ id = v.int({ min = 1 }) }), { fail_status = 404 })
