@@ -121,7 +121,9 @@ assert(not clean:find("script") and not clean:find("onclick"))
 `lur.feed.rss` / `.atom` / `.json` take `(meta, items, opts?)`; item `date` is epoch milliseconds.
 
 `node:text({ trim = true })` strips leading and trailing whitespace from the text
-(default `false`: the text is returned as is). `opts.skip_invalid = true` skips items whose
+(default `false`: the text is returned as is). `node:text(css)` is shorthand for
+`node:select_one(css):text()`: it returns `nil` when nothing matches and `""` when the match
+has no text (it takes no options; use `select_one` for `{ trim = true }`). `opts.skip_invalid = true` skips items whose
 `title` is missing (these raise by default) and also drops empty or blank titles, which are
 accepted by default; any other problem
 (wrong types, bad dates, no `guid`/`link` for Atom/JSON) still raises.

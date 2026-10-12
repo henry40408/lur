@@ -111,12 +111,28 @@ impl UserData for Node {
             Ok(this.select(&css, true)?.into_iter().next())
         });
         methods.add_method("text", |lua, this, opts: Value| {
+            // `text(css)`: shorthand for `select_one(css)` then `:text()`;
+            // `nil` when nothing matches, `""` when the match has no text.
+            if matches!(opts, Value::String(_)) {
+                let css = css_arg(lua, opts, "lur.html.text")?;
+                let Some(found) = this.select(&css, true)?.into_iter().next() else {
+                    return Ok(None);
+                };
+                return found
+                    .with_element(|html, el| {
+                        el.unwrap_or_else(|| html.root_element())
+                            .text()
+                            .collect::<String>()
+                    })
+                    .map(Some);
+            }
             let trim = text_opts(lua, opts)?;
             this.with_element(|html, el| {
                 let el = el.unwrap_or_else(|| html.root_element());
                 let text = el.text().collect::<String>();
                 if trim { text.trim().to_owned() } else { text }
             })
+            .map(Some)
         });
         methods.add_method("html", |_, this, ()| {
             this.with_element(|html, el| el.map_or_else(|| html.html(), |e| e.html()))

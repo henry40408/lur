@@ -229,7 +229,8 @@ Lua error (catch with `pcall`).
   `lur.charset` first). Nodes (the doc and its
   elements) share methods: `select(css) → array`, `select_one(css) → node | nil`
   (descendants only; invalid selector raises), `text(opts?)` (`{ trim = true }` strips
-  surrounding whitespace; `lur.html` only), `html()`, `inner_html()`, `tag()`,
+  surrounding whitespace; `lur.html` only), `text(css) → string | nil` (shorthand for
+  `select_one(css):text()`; `nil` when nothing matches, `lur.html` only), `html()`, `inner_html()`, `tag()`,
   `attr(name) → string | nil`, `attrs()`, `parent()`, `children()` (elements only).
   Call with `:`. Parsing follows the HTML5 algorithm, so `<td>` outside a `<table>` is dropped.
 - **`lur.html.sanitize(html, opts?) → string`** — strips scripts, styles, event handlers and
