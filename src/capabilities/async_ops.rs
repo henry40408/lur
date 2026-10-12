@@ -98,6 +98,9 @@ async fn run_task(f: Function, sem: Option<Arc<Semaphore>>) -> mlua::Result<Valu
 
 /// `max_concurrency` caps concurrently running combinator tasks per VM.
 pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result<(), RunError> {
+    // Zero would park every task until the timeout; clamp for library callers
+    // (the CLI rejects it earlier).
+    let max_concurrency = max_concurrency.map(|n| n.max(1));
     let sem = max_concurrency.map(|n| Arc::new(Semaphore::new(n)));
     // A call can never run more than `max_concurrency` tasks, so that is also
     // the most futures worth keeping alive for it.
