@@ -619,6 +619,14 @@ body? }`, where a header value is a string or an array of strings.
 `read(n)`. `origin`/`url` come from `Host` and `X-Forwarded-Proto` (`nil`
 without a valid `Host`); they are client-controlled, so use them for links only.
 
+`serve.abort(status, message, data?)` ends the handler with an error response: `status`
+is an integer in 400–599 and the client gets `{"error": message, "data": data}` as JSON
+(`data` omitted when `nil`). It raises a table `{ kind = "abort", status, message, data }`
+(`pcall` catches it); earlier side effects are not rolled back, and it only works inside
+an HTTP handler. `req.valid_query(schema, opts?)` / `req.valid_params(schema, opts?)`
+validate `req.query` / `req.params` with `lur.validate` and abort with `opts.fail_status`
+(default 400) and `data = issues` on failure; `list(...)` fields read `query_all`.
+
 ```lua ignore
 lur.serve.http("POST", "/echo", function(req)
   local data = req.json()
@@ -626,6 +634,19 @@ lur.serve.http("POST", "/echo", function(req)
     headers = { ["Content-Type"] = "application/json" },
     body = lur.json.encode(data),
   }
+end)
+
+lur.serve.http("GET", "/items/:id", function(req)
+  local v = lur.validate
+  local p = req.valid_params(v.object({ id = v.int({ min = 1 }) }), { fail_status = 404 })
+  local q = req.valid_query(v.object({
+    limit = v.int({ min = 1, max = 100, default = 20 }),
+    tag = v.list(v.str()),
+  }))
+  if p.id > 1000 then
+    lur.serve.abort(410, "gone", { id = p.id })
+  end
+  return { body = lur.json.encode({ id = p.id, limit = q.limit, tags = q.tag }) }
 end)
 
 lur.serve.cron("0 */5 * * * *", function()

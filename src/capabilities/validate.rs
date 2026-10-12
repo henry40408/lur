@@ -1081,6 +1081,32 @@ fn build_error(lua: &Lua, meta: &Table, cx: &Ctx<'_>) -> mlua::Result<Table> {
     Ok(err)
 }
 
+/// Names of the top-level fields of an object schema that are lists (also
+/// when wrapped in `optional`); `None` if `schema` is not an object schema.
+/// `req.valid_query` uses it to feed those fields from `query_all`.
+pub(crate) fn list_field_names(schema: &Value) -> Option<Vec<String>> {
+    let Value::UserData(ud) = schema else {
+        return None;
+    };
+    let s = ud.borrow::<Schema>().ok()?;
+    let Node::Object { fields, .. } = &*s.0 else {
+        return None;
+    };
+    let is_list = |mut n: &Node| {
+        while let Node::Optional(inner) = n {
+            n = inner;
+        }
+        matches!(n, Node::List { .. })
+    };
+    Some(
+        fields
+            .iter()
+            .filter(|(_, n)| is_list(n))
+            .map(|(name, _)| name.clone())
+            .collect(),
+    )
+}
+
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let validate = lua.create_table().map_err(RunError::Init)?;
     install_constructors(lua, &validate)?;

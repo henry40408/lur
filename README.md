@@ -408,6 +408,16 @@ Handlers are registered once at load time.
 - **`lur.serve.cron(spec, handler, opts?)`** — 6-field cron (`sec min hour dom mon dow`).
   `opts`: `name`, `overlap` (default `false` = skip a tick while the previous run is
   going), `timeout` (ms).
+- **`lur.serve.abort(status, message, data?)`** — ends the handler at once with an HTTP
+  error. `status` must be an integer in `400..=599` (`abort(200, …)` is an argument error),
+  `message` a string, `data` any JSON-encodable value. Uncaught, the client gets that
+  status with `Content-Type: application/json` and `{"error": message, "data": data}`
+  (`data` omitted when `nil`); not-encodable `data` is an ordinary error (a 500). It raises
+  a table `{ kind = "abort", status, message, data }` that `pcall` can catch; side effects
+  made before the abort (db writes, …) are **not** rolled back. Only valid inside an HTTP
+  handler: in a cron job or one-shot script it is an ordinary runtime error. Raised inside
+  a `lur.async` task, `pcall` around the combinator sees a string, not the table (use it
+  in the handler itself).
 
 `req` has `method`, `path`, `origin` and `url` (`scheme://host` and the full URL, from `Host`
 and `X-Forwarded-Proto`; `nil` without a valid `Host`; client-controlled, so for links only),
@@ -416,7 +426,28 @@ values), `headers` (lowercased), `cookies` (parsed `Cookie`; empty table if abse
 `body` (raw bytes), and `json()`. `read(n)` streams large bodies in chunks; after that,
 `body`/`json()` raise.
 
+`req.valid_query(schema, opts?)` and `req.valid_params(schema, opts?)` run
+`lur.validate.parse` over `req.query` / `req.params` and return the converted value (a
+fresh table). On failure they abort with `opts.fail_status` (integer `400..=599`, default
+`400`; checked at call time) and `message = "validation failed"`, `data = issues`:
+`{"error":"validation failed","data":[{"path":"limit","message":"must be <= 100"}]}`.
+Use `fail_status = 404` for path params. For an `object` schema, `list(...)` fields in
+`valid_query` read every value (`query_all`) and other fields the last one (`query`).
+Anything that is not a validation failure (a bad schema argument, a timeout) propagates
+unchanged. A bare `lur.validate.parse` that fails inside a handler stays a **500** on
+purpose: use `req.valid_*` for client input.
+
 ```lua
+lur.serve.http("GET", "/users", function(req)
+  local v = lur.validate
+  local q = req.valid_query(v.object({
+    limit = v.int({ min = 1, max = 100, default = 20 }),
+    tag = v.optional(v.list(v.str())), -- absent => nil (a plain list is required)
+  }))
+  if not q.tag then lur.serve.abort(422, "need at least one tag") end
+  return { body = lur.json.encode(q) }
+end)
+
 lur.serve.http("POST", "/echo", function(req)
   local data = req.json()
   return {

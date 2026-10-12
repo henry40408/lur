@@ -1,11 +1,115 @@
 //! `lur.serve.*` — collects route/cron registrations into a [`Registry`] while
 //! `app.lua` runs. Raises in one-shot mode, where there is none.
+//!
+//! Also `lur.serve.abort`: raises a structured `{ kind = "abort", status,
+//! message, data }` table. mlua flattens a table error to a string when it
+//! crosses `call_async`, so the server cannot read the status off the caught
+//! error; instead `abort` stashes its response in an [`AbortSlot`] shared with
+//! the pooled VM, and `serve::call_handler` consults it when the handler fails.
 
 use std::sync::{Arc, Mutex};
 
 use mlua::{Function, Lua, Table, Value};
 
+use crate::capabilities::{argcheck, json, raise};
 use crate::runtime::RunError;
+
+/// The response an `abort` asks for, kept until the handler's outcome is known.
+pub struct PendingAbort {
+    pub status: u16,
+    pub message: String,
+    /// The JSON body, encoded at `abort` time.
+    pub body: Vec<u8>,
+}
+
+/// Per-VM abort state. `in_request` is true only while an HTTP handler runs.
+/// `call_handler` resets it at the start of every run, so an abort caught by
+/// `pcall` cannot leak into a later request on the pooled VM.
+#[derive(Default)]
+pub struct AbortState {
+    pub in_request: bool,
+    pub pending: Option<PendingAbort>,
+}
+
+pub type AbortSlot = Arc<Mutex<AbortState>>;
+
+/// Per-VM helpers for `abort` and `req.valid_*`; kept in `lua` app data.
+#[derive(Clone)]
+pub(crate) struct ServeCtx {
+    pub slot: AbortSlot,
+    pub factory: Function,
+    pub meta: Table,
+    /// `lur.validate.try` as installed, so a script that overwrites the
+    /// (per-request writable) `lur` table cannot forge validation results.
+    pub try_fn: Function,
+}
+
+/// Status must be an integer in `400..=599`.
+pub(crate) fn status_arg(value: &Value, fname: &str, what: &str) -> mlua::Result<u16> {
+    let n = match value {
+        Value::Integer(i) => Some(*i),
+        Value::Number(f) => argcheck::whole_f64_to_i64(*f),
+        _ => None,
+    };
+    match n.and_then(|n| u16::try_from(n).ok()) {
+        Some(n) if (400..=599).contains(&n) => Ok(n),
+        _ => Err(mlua::Error::runtime(format!(
+            "{fname}: {what} must be an integer in 400..=599, got {}",
+            match value {
+                Value::Integer(i) => i.to_string(),
+                Value::Number(f) => f.to_string(),
+                other => other.type_name().to_owned(),
+            }
+        ))),
+    }
+}
+
+/// Stash the response and build the error table to raise. `data` must be
+/// JSON-encodable (checked here, so a bad value is an ordinary error at the
+/// call site rather than a surprise when the response is written).
+pub(crate) fn abort_table(
+    lua: &Lua,
+    ctx: &ServeCtx,
+    status: u16,
+    message: &str,
+    data: Value,
+) -> mlua::Result<Table> {
+    let in_request = ctx.slot.lock().expect("abort slot poisoned").in_request;
+    if !in_request {
+        return Err(mlua::Error::runtime(
+            "lur.serve.abort: no request to abort (only valid inside an HTTP handler)",
+        ));
+    }
+    // Encode before taking the lock again; `data` can be large.
+    let mut body = serde_json::Map::new();
+    body.insert(
+        "error".into(),
+        serde_json::Value::String(message.to_owned()),
+    );
+    if !data.is_nil() {
+        let encoded = json::lua_to_json(&data).map_err(|e| {
+            mlua::Error::runtime(format!("lur.serve.abort: data is not JSON-encodable: {e}"))
+        })?;
+        body.insert("data".into(), encoded);
+    }
+    let body = serde_json::to_vec(&serde_json::Value::Object(body))
+        .map_err(|e| mlua::Error::runtime(format!("lur.serve.abort: {e}")))?;
+    ctx.slot.lock().expect("abort slot poisoned").pending = Some(PendingAbort {
+        status,
+        message: message.to_owned(),
+        body,
+    });
+
+    let err = lua.create_table()?;
+    err.set("kind", "abort")?;
+    err.set("status", status)?;
+    err.set("message", message)?;
+    if !data.is_nil() {
+        err.set("data", data)?;
+    }
+    err.set_metatable(Some(ctx.meta.clone()))?;
+    Ok(err)
+}
 
 pub struct Registration {
     /// Upper-cased; `"ANY"` matches every method.
@@ -32,9 +136,15 @@ pub struct CronRegistration {
 pub struct Registry {
     routes: Arc<Mutex<Vec<Registration>>>,
     crons: Arc<Mutex<Vec<CronRegistration>>>,
+    abort: AbortSlot,
 }
 
 impl Registry {
+    /// The VM's abort slot, for the server to reset and consult per run.
+    pub fn abort_slot(&self) -> AbortSlot {
+        Arc::clone(&self.abort)
+    }
+
     pub fn take(&self) -> Vec<Registration> {
         std::mem::take(&mut self.routes.lock().expect("registry mutex poisoned"))
     }
@@ -46,6 +156,45 @@ impl Registry {
 
 pub fn install(lua: &Lua, lur: &Table, registry: Option<&Registry>) -> Result<(), RunError> {
     let serve = lua.create_table().map_err(RunError::Init)?;
+
+    let abort = match registry {
+        Some(registry) => {
+            let ctx = ServeCtx {
+                slot: registry.abort_slot(),
+                factory: raise::factory(lua).map_err(RunError::Init)?,
+                meta: raise::error_meta(lua).map_err(RunError::Init)?,
+                try_fn: lur
+                    .get::<Table>("validate")
+                    .and_then(|v| v.get::<Function>("try"))
+                    .map_err(RunError::Init)?,
+            };
+            let inner = {
+                let ctx = ctx.clone();
+                lua.create_function(move |lua, (status, message, data): (Value, Value, Value)| {
+                    const F: &str = "lur.serve.abort";
+                    let status = status_arg(&status, F, "argument #1 (status)")?;
+                    let message: mlua::LuaString = argcheck::arg(lua, message, F, 2, "string")?;
+                    let message = message.to_str().map_err(|e| {
+                        mlua::Error::runtime(format!("{F}: argument #2 must be valid UTF-8: {e}"))
+                    })?;
+                    let err = abort_table(lua, &ctx, status, &message, data)?;
+                    Ok((false, Value::Table(err)))
+                })
+                .map_err(RunError::Init)?
+            };
+            let wrapped = raise::raising(&ctx.factory, inner).map_err(RunError::Init)?;
+            lua.set_app_data(ctx);
+            wrapped
+        }
+        None => lua
+            .create_function(|_, _args: (Value, Value, Value)| -> mlua::Result<()> {
+                Err(mlua::Error::RuntimeError(
+                    "lur.serve.abort is only available under `lur serve`".into(),
+                ))
+            })
+            .map_err(RunError::Init)?,
+    };
+    serve.set("abort", abort).map_err(RunError::Init)?;
 
     let http = match registry {
         Some(registry) => {
