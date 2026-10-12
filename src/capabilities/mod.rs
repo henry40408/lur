@@ -19,11 +19,13 @@ pub mod json;
 pub mod kv;
 pub mod log;
 pub mod null;
+pub(crate) mod raise;
 pub mod serve;
 pub mod state;
 mod storage;
 pub mod time;
 pub mod url;
+pub mod validate;
 pub mod xml;
 
 use mlua::Lua;
@@ -50,6 +52,7 @@ pub fn install(
     html::install(lua, &lur)?;
     xml::install(lua, &lur)?;
     feed::install(lua, &lur)?;
+    validate::install(lua, &lur)?;
     io::install(lua, &lur)?;
     fs::install(lua, &lur, config.policy.clone())?;
     http::install(

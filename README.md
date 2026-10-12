@@ -252,6 +252,38 @@ Lua error (catch with `pcall`).
   characters illegal in XML 1.0 are dropped. An optional third argument `{ skip_invalid = true }`
   skips items whose `title` is missing (these raise by default) and also drops empty or blank
   titles, which are accepted by default; other item errors still raise.
+- **`lur.validate`** — validate and convert untrusted input (query strings, JSON bodies).
+  Small composable schemas plus two entry points; pure compute, no policy, same in one-shot
+  and serve mode. `parse(schema, value) → converted` raises on failure;
+  `try(schema, value) → true, converted | false, err` returns the same `err`. The result is
+  always a new table; the input is never modified.
+  Schemas (`opts` optional): `str{ pattern?, min_len?, max_len?, default? }` (`pattern` is a Lua
+  pattern, as in `string.find`, unanchored; lengths count characters; numbers are not
+  coerced), `int{ min?, max?, default?, clamp? }` (a number with an integral value, or a string
+  that is strictly `-?%d+`; |n| must be <= 2^53), `number{ min?, max?, default?, clamp? }`
+  (finite only; strings must be decimal floats), `bool{ default? }` (a boolean, or the strings
+  `"true"`/`"false"`), `one_of{ ... }` (strict equality over strings/numbers/booleans),
+  `list(item, { min_items?, max_items? }?)`, `object(fields, { strict? }?)` and
+  `optional(schema)`. A plain function `function(value) → value` is a schema anywhere one is
+  accepted; raising rejects (the message, minus its position, becomes the issue message).
+  Values are required unless wrapped in `optional(...)` or given a `default` (which fills a
+  missing value as-is). For `int`/`number`/`bool`, `""` counts as missing, so `?limit=` falls
+  back to the default. Unknown `object` keys are dropped; `strict = true` makes them issues.
+  `clamp = true` clamps into `[min, max]` instead of failing.
+  On failure `err` is a table `{ kind = "validation", message, issues = { { path, message }, … } }`
+  (all issues are collected; paths read `a.b[2].c`, the root is `""`; at most 100 issues, then
+  `truncated = true`). `tostring(err)` is `message`, an uncaught one prints that message, and it
+  is catchable with `pcall` (also through `lur.async.*`). Bad arguments (unknown option,
+  `min > max`) raise `lur.validate.<fn>: …`. Schemas nest at most 64 levels.
+
+```lua
+local v = lur.validate
+local q = v.parse(v.object({
+  q = v.str({ min_len = 1 }),
+  limit = v.int({ min = 1, max = 100, default = 20 }),
+}), { q = "luau", limit = "5" })           -- { q = "luau", limit = 5 }
+local ok, err = v.try(v.int({ max = 10 }), "11")  -- false, err.issues[1].message == "must be <= 10"
+```
 - **`lur.log`** — `info`/`warn`/`error(msg)` write `<level>: <msg>\n` to stderr (stdout is
   the data channel).
 - **`lur.stdin`** — `read()` drains all bytes, `read(n)` reads up to `n` (`nil` at EOF),

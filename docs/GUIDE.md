@@ -214,6 +214,43 @@ assert(q == "a=1&a=2&b=x+y")
 assert(lur.url.decode_query("?b=x+y").b == "x y")
 ```
 
+### lur.validate
+
+Validate and convert untrusted input (query strings, JSON bodies) with small composable
+schemas. `parse` raises a structured error on failure; `try` returns `true, value` or
+`false, err`. Every issue is collected, and the result is always a new table.
+
+```lua
+local schema = lur.validate.object({
+  q = lur.validate.str({ min_len = 1, max_len = 100 }),
+  limit = lur.validate.int({ min = 1, max = 100, default = 20 }),
+  order = lur.validate.optional(lur.validate.one_of({ "asc", "desc" })),
+  tags = lur.validate.list(lur.validate.str({ pattern = "^%w+$" }), { max_items = 5 }),
+  ratio = lur.validate.number({ min = 0, max = 1, default = 0.5 }),
+  exact = lur.validate.bool({ default = false }),
+})
+
+-- strings from a query string are converted; unknown keys are dropped
+local ok, out = lur.validate.try(schema, { q = "luau", limit = "5", tags = { "a" }, junk = 1 })
+assert(ok and out.limit == 5 and out.ratio == 0.5 and out.junk == nil)
+
+-- all problems are reported, with paths
+local ok2, err = lur.validate.try(schema, { q = "", limit = "500", tags = { "a", "b c" } })
+assert(not ok2 and err.kind == "validation" and #err.issues == 3)
+assert(err.issues[1].path == "limit" and err.issues[1].message == "must be <= 100")
+
+-- parse raises the same value; catch it with pcall
+local caught, e = pcall(lur.validate.parse, schema, {})
+assert(not caught and e.kind == "validation" and tostring(e) == e.message)
+
+-- a plain function is a schema too: return the value, or raise to reject
+local even = function(n)
+  assert(n % 2 == 0, "must be even")
+  return n
+end
+assert(lur.validate.parse(lur.validate.object({ n = even }), { n = 4 }).n == 4)
+```
+
 ### lur.log
 
 `info`/`warn`/`error` write `<level>: <msg>\n` to **stderr** (stdout is the

@@ -40,6 +40,8 @@ One binary, two modes, one shared core:
 | `src/capabilities/` | One submodule per `lur.*` table; `mod.rs::install` orchestrates. |
 | `src/capabilities/storage/` | Backend seam: `Backend`/`Transaction` enums (`Sqlite`/`Postgres`), lazy `Shared` handle, `ExecResult`; `sqlite.rs` and `postgres.rs` own all backend-specific SQL, binding, row mapping, transactions, and kv. |
 | `src/capabilities/db.rs` | `lur.db` (`exec`/`query`/`tx`) over `storage::Backend`; hands `storage::Shared` to `kv`. |
+| `src/capabilities/validate.rs` | `lur.validate`: schema nodes (opaque userdata), `parse`/`try`, issue collection; pure compute. |
+| `src/capabilities/raise.rs` | The one way to raise a *table* as a Lua error (`raising`), carry it across Rust (`rescue`/`Raised`), and give it a `__tostring`. |
 | `src/capabilities/kv.rs` | `lur.kv` over the backend's kv methods; owns the `IN_KV_UPDATE` reentrancy guard. |
 
 ## Shared core: `build_lua`
@@ -69,7 +71,7 @@ out-of-memory → `RunError::OutOfMemory`, past-deadline → `Timeout`, else `Sc
 [`capabilities::install`](src/capabilities/mod.rs) fills the flat `lur` table in fixed order:
 
 ```
-null · log · json · base64 · crypto · cookie · time · url · charset · html · xml · feed · io · fs · http · env · db · kv · async · args · serve · state
+null · log · json · base64 · crypto · cookie · time · url · charset · html · xml · feed · validate · io · fs · http · env · db · kv · async · args · serve · state
 ```
 
 `fs`/`http`/`env` get an `Arc<Policy>`; `db` gets the `--db` target and passes the shared
@@ -258,6 +260,26 @@ evictable entries raises and changes nothing. An entry past `expires` but inside
 is *stale*: it reads as absent (version 0) everywhere except `fetch`, which falls back to it
 when its loader raises. `fetch` is the one async function here; like `update`, its function
 runs with no lock held, but unlike `update` it is never retried (it has side effects).
+
+## Validation & structured errors
+
+[`capabilities/validate.rs`](src/capabilities/validate.rs) is installed after `feed` (pure
+group, no `Policy`, no registry). A schema is an opaque userdata holding an immutable
+`Node` tree built bottom-up (never cyclic; depth capped at 64, so cyclic *input* is safe);
+a Lua function is a `Node::Func`. `check` is an async recursive walk (validators may call
+async `lur.*`) that builds a fresh result and records `Issue`s (cap 100) instead of
+stopping at the first.
+
+Raising a table: a Rust callback's `Err` reaches Lua as userdata, and a table crossing
+`call_async` is flattened to a string by mlua. So [`capabilities/raise.rs`](src/capabilities/raise.rs)
+splits it: a Rust function returns `(ok, value | error_table)` and a tiny Lua wrapper
+(`raising`) does `error(tbl, 0)`. `pcall` therefore sees the real table. `lur.async` runs
+each task through a Lua `rescue` trampoline (`xpcall`; non-table errors are re-raised
+unchanged, with their traceback) that turns a table error back into `(false, table)`,
+carried through Rust as `Raised` and re-raised by the same `raising` wrapper — so `all`/
+`race`/`map` raise the original table and `settled` reports it in `err`. Uncaught, the
+error's `__tostring` (its `message`) is what the CLI prints. `lur.serve.abort` is meant to
+reuse `raising`/`error_meta`.
 
 ## Async core
 

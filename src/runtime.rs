@@ -241,6 +241,8 @@ impl Runtime {
 fn is_memory_error(e: &mlua::Error) -> bool {
     match e {
         mlua::Error::MemoryError(_) => true,
+        // A task re-raised by the `lur.async` trampoline arrives as text.
+        mlua::Error::RuntimeError(s) => s.starts_with("not enough memory"),
         mlua::Error::CallbackError { cause, .. } => is_memory_error(cause),
         _ => false,
     }
