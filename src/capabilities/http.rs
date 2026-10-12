@@ -221,6 +221,9 @@ struct CacheInner {
     next_tick: u64,
     bytes: usize,
     last_sweep: Option<Instant>,
+    /// Lower bound on the earliest `expires` of any entry; lets an over-capacity
+    /// insert skip the expiry scan when nothing can have expired.
+    earliest: Option<Instant>,
 }
 
 impl CacheInner {
@@ -237,6 +240,9 @@ impl CacheInner {
     }
 
     fn drop_expired(&mut self, now: Instant) {
+        if self.earliest.is_none_or(|e| e > now) {
+            return;
+        }
         let dead: Vec<String> = self
             .entries
             .iter()
@@ -246,6 +252,7 @@ impl CacheInner {
         for key in dead {
             self.remove(&key);
         }
+        self.earliest = self.entries.values().map(|e| e.expires).min();
     }
 }
 
@@ -349,6 +356,7 @@ impl HttpCache {
             .checked_add(Duration::from_millis(ttl_ms.cast_unsigned()))
             .unwrap_or_else(|| now + Duration::from_secs(10 * 365 * 24 * 3600));
         inner.remove(&key);
+        inner.earliest = Some(inner.earliest.map_or(expires, |e| e.min(expires)));
         let tick = inner.stamp();
         inner.order.insert(tick, key.clone());
         inner.bytes += size;
@@ -383,6 +391,7 @@ impl HttpCache {
         inner.entries.clear();
         inner.order.clear();
         inner.bytes = 0;
+        inner.earliest = None;
         n
     }
 }
@@ -743,4 +752,104 @@ fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
     res.set("html", html_fn)?;
 
     Ok(res)
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    fn raw(n: usize) -> RawResponse {
+        RawResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: vec![0; n],
+        }
+    }
+
+    fn has(c: &HttpCache, k: &str) -> bool {
+        c.lock().entries.contains_key(k)
+    }
+
+    #[test]
+    fn full_of_live_entries_evicts_lru() {
+        let c = HttpCache::with_limits(3, 0);
+        for k in ["a", "b", "c"] {
+            c.put(k.into(), raw(1), 60_000);
+        }
+        assert!(c.get("a").is_some()); // touch: b is now oldest
+        c.put("d".into(), raw(1), 60_000);
+        assert!(!has(&c, "b"));
+        assert!(has(&c, "a") && has(&c, "c") && has(&c, "d"));
+        assert_eq!(c.lock().entries.len(), 3);
+        assert_eq!(c.lock().order.len(), 3);
+    }
+
+    #[test]
+    fn expired_entries_go_before_live_lru() {
+        let c = HttpCache::with_limits(3, 0);
+        c.put("old".into(), raw(1), 60_000); // oldest, live
+        c.put("short".into(), raw(1), 1);
+        c.put("live".into(), raw(1), 60_000);
+        std::thread::sleep(Duration::from_millis(20));
+        c.put("new".into(), raw(1), 60_000);
+        // `short` expired and is dropped; the LRU live `old` survives.
+        assert!(!has(&c, "short"));
+        assert!(has(&c, "old") && has(&c, "live") && has(&c, "new"));
+    }
+
+    #[test]
+    fn byte_limit_evicts_expired_then_lru() {
+        let one = 100 + 1; // body + key "x"
+        let c = HttpCache::with_limits(0, one * 2);
+        c.put("a".into(), raw(100), 60_000);
+        c.put("b".into(), raw(100), 1);
+        std::thread::sleep(Duration::from_millis(20));
+        c.put("c".into(), raw(100), 60_000);
+        assert!(!has(&c, "b"));
+        assert!(has(&c, "a") && has(&c, "c"));
+        c.put("d".into(), raw(100), 60_000);
+        assert!(!has(&c, "a"), "LRU evicted once nothing is expired");
+        assert!(has(&c, "c") && has(&c, "d"));
+        assert_eq!(c.lock().bytes, one * 2);
+    }
+
+    #[test]
+    fn expiry_after_bound_was_set_still_found() {
+        let c = HttpCache::with_limits(2, 0);
+        c.put("a".into(), raw(1), 60_000);
+        c.put("short".into(), raw(1), 30);
+        // Nothing expired yet: LRU evicts.
+        c.put("b".into(), raw(1), 60_000);
+        assert!(!has(&c, "a"));
+        std::thread::sleep(Duration::from_millis(60));
+        c.put("c".into(), raw(1), 60_000);
+        assert!(!has(&c, "short"));
+        assert!(has(&c, "b") && has(&c, "c"));
+    }
+
+    #[test]
+    fn clear_resets() {
+        let c = HttpCache::with_limits(2, 0);
+        c.put("a".into(), raw(1), 1);
+        assert_eq!(c.clear(), 1);
+        c.put("b".into(), raw(1), 60_000);
+        assert!(has(&c, "b"));
+    }
+
+    /// Cost of cache-full inserts of live entries (prints; `--run-ignored all --no-capture`).
+    #[test]
+    #[ignore = "timing probe"]
+    fn full_insert_timing() {
+        let c = HttpCache::with_limits(DEFAULT_HTTP_CACHE_MAX_ENTRIES, 0);
+        for i in 0..DEFAULT_HTTP_CACHE_MAX_ENTRIES {
+            c.put(format!("k{i}"), raw(16), 3_600_000);
+        }
+        let n = 20_000;
+        let t = Instant::now();
+        for i in 0..n {
+            c.put(format!("n{i}"), raw(16), 3_600_000);
+        }
+        let el = t.elapsed();
+        println!("full_insert: {n} puts in {el:?} ({:?}/put)", el / n);
+    }
 }
