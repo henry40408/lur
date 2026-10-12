@@ -182,109 +182,320 @@ allowlists are additive (config ∪ flags). `~` in config paths expands to `$HOM
 ## Lua API
 
 Everything lives under the `lur` global. Failures, including policy denials, raise a
-Lua error (catch with `pcall`).
+Lua error (catch with `pcall`). Every `lur.*` table is read-only.
+
+Sections: [Data & I/O](#data--io) · [Validation](#validation-lurvalidate) ·
+[Capabilities](#capabilities-policy-gated) · [Storage](#storage-requires---db) ·
+[Concurrency](#concurrency) · [Server mode](#server-mode-lur-serve) ·
+[Diagnostics](#diagnostics)
 
 ### Data & I/O
 
-- **`lur.null`** — sentinel distinct from `nil` (which means *absent*); round-trips JSON
-  `null` and SQL `NULL`.
-- **`lur.json`** — `encode(value) → string`, `decode(text) → value`. JSON `null` decodes
-  to `lur.null`; strings must be UTF-8 (base64 binary first). `decode(text, { null = "drop" })`
-  omits object keys whose value is `null` and removes `null` array elements (compacting the
-  array); `"keep"` is the default, and a bare top-level `null` stays `lur.null`.
-- **`lur.base64`** — `encode(bytes) → string`, `decode(text) → bytes`.
-- **`lur.crypto`** — `sha256`/`sha512`/`sha1`/`md5(data) → bytes`;
-  `hmac_sha256`/`hmac_sha512`/`hmac_sha1(key, msg) → bytes`; `hex.encode(bytes)` /
-  `hex.decode(text)`; `random_bytes(n)` (OS CSPRNG); `constant_eq(a, b) → bool`
-  (timing-safe). Digests are raw bytes. `sha1`/`md5` are for legacy interop only.
-- **`lur.cookie`** — `parse(header) → { name = value, … }` reads a `Cookie` header
-  (lenient: malformed segments skipped, later duplicate wins, no decoding).
-  `serialize(name, value, opts?) → string` builds one `Set-Cookie` value (no prefix);
-  `opts`: `domain`/`path`/`expires` (string), `max_age` (integer seconds),
-  `secure`/`http_only` (boolean), `same_site` (`"Strict"`/`"Lax"`/`"None"`). An invalid
-  name, a value with `;`/CR/LF, or `same_site="None"` without `secure=true` raises.
-  Format `expires` with `os.date("!%a, %d %b %Y %H:%M:%S GMT", t)`.
-- **`lur.time`** — integer milliseconds throughout. `now_ms()` (Unix time),
-  `monotonic_ms()` (for elapsed-time differences), `parse_rfc3339(text)` (UTC offset
-  such as `Z` required) and `parse_http_date(text)` → epoch ms; malformed input raises.
-  Divide by `1000` for `os.date`. Timezone-aware: `format_rfc3339(ms, tz?)`,
-  `format_rfc2822(ms, tz?)`, `format(ms, strftime, tz?)`, `parse_rfc2822(text)`, and
-  `parse(text, fmt?, tz?)`. `tz` is an IANA name (`"Asia/Taipei"`), a fixed offset
-  (`"+08:00"`), or `nil`/`"UTC"`. `parse` without `fmt` accepts RFC 3339, RFC 2822,
-  HTTP-date, then `YYYY-MM-DD[ T]HH:MM[:SS[.f]]` and `YYYY/MM/DD[ HH:MM[:SS]]`; wall-clock
-  text with no offset is read in `tz`. A local time in a DST gap raises; in an overlap the
-  earlier instant wins. `try_parse(text, fmt?, tz?)` is `parse` that returns `nil` for
-  unparseable (or `nil`) text; a bad `fmt` or `tz` still raises.
-- **`lur.url`** — `parse(url) → { href, scheme, host?, port?, username?, password?, path,
-  query?, fragment? }` (`port` only when explicit and non-default; invalid URL raises),
-  `join(base, relative) → string` (resolves relative links, `base` must be absolute),
-  `encode_query(table) → string` (keys sorted; an array value repeats the key; string,
-  number and boolean values) and `decode_query(text) → table` (leading `?` optional, last
-  duplicate wins, `+` is a space).
-- **`lur.charset`** — `decode(bytes, hint?) → string` and `encode(text, label) → bytes` for
-  non-UTF-8 pages (Big5, GBK, Shift_JIS, … via `encoding_rs`, WHATWG labels). `hint` is a
-  charset label or a whole `Content-Type` value. Precedence: BOM, then `hint`, then a
-  `<meta charset>` in the first 1 KiB, then UTF-8; invalid bytes become U+FFFD; an unknown
-  label raises. `encode` writes unmappable characters as `&#NNN;` and refuses UTF-16.
-- **`lur.html`** — `parse(html) → doc` (invalid UTF-8 is replaced; decode other encodings with
-  `lur.charset` first). Nodes (the doc and its
-  elements) share methods: `select(css) → array`, `select_one(css) → node | nil`
-  (descendants only; invalid selector raises), `text(opts?)` (`{ trim = true }` strips
-  surrounding whitespace; `lur.html` only), `text(css) → string | nil` (shorthand for
-  `select_one(css):text()`; `nil` when nothing matches), `html()`, `inner_html()`, `tag()`,
-  `attr(name) → string | nil`, `attrs()`, `parent()`, `children()` (elements only).
-  Call with `:`. Parsing follows the HTML5 algorithm, so `<td>` outside a `<table>` is dropped.
-- **`lur.html.sanitize(html, opts?) → string`** — strips scripts, styles, event handlers and
-  unsafe URLs with `ammonia`'s allowlist; only `http`, `https` and `mailto` links survive and
-  links get `rel="noopener noreferrer"`. `opts.base` (absolute URL) resolves relative
-  `href`/`src`; without it they are kept as written. Broken markup is repaired.
-- **`lur.xml`** — `parse(xml) → doc`. Same node methods as `lur.html` (`select`, `select_one`,
-  `text`, `tag`, `attr`, `attrs`, `parent`, `children`) but selection takes a slash path:
-  `a/b` (children), `//a` (descendants, also mid-path), `*` (any name); results are in document
-  order and deduplicated. Names match exactly as written (`dc:creator`); namespaces are not
-  resolved. Malformed XML raises with line/column; unknown entities such as `&nbsp;` are kept
-  as text; `DOCTYPE` is ignored, so custom entities are not expanded. A BOM or the
-  declaration's `encoding` selects the charset; otherwise invalid UTF-8 is replaced.
-- **`lur.feed`** — `rss(meta, items)`, `atom(meta, items)`, `json(meta, items)` → string
-  (RSS 2.0 / Atom 1.0 / JSON Feed 1.1). `meta`: `title` (required), `link`, `feed_url`,
-  `description`, `language`, `id`, `updated`. Each item: `title` (required), `link`, `guid`,
-  `date`, `updated`, `summary`, `content` (HTML), `author`, `categories` (array of strings),
-  `enclosure` (`{ url, type?, length? }`). Dates are epoch ms. RSS needs `meta.link`; Atom
-  needs `meta.id` or `meta.link`; Atom/JSON items need `guid` or `link`. XML is escaped and
-  characters illegal in XML 1.0 are dropped. An optional third argument `{ skip_invalid = true }`
-  skips items whose `title` is missing (these raise by default) and also drops empty or blank
-  titles, which are accepted by default; other item errors still raise.
-- **`lur.validate`** — validate and convert untrusted input (query strings, JSON bodies).
-  Small composable schemas plus two entry points; pure compute, no policy, same in one-shot
-  and serve mode. `parse(schema, value) → converted` raises on failure;
-  `try(schema, value) → true, converted | false, err` returns the same `err`. The result is
-  always a new table; the input is never modified.
-  Schemas (`opts` optional): `str{ pattern?, min_len?, max_len?, default? }` (`pattern` is a Lua
-  pattern, as in `string.find`, unanchored; lengths count characters; numbers are not
-  coerced), `int{ min?, max?, default?, clamp? }` (a number with an integral value, or a string
-  that is strictly `-?%d+`; |n| must be <= 2^53), `number{ min?, max?, default?, clamp? }`
-  (finite only; strings must be decimal floats), `bool{ default? }` (a boolean, or the strings
-  `"true"`/`"false"`), `one_of{ ... }` (strict equality over strings/numbers/booleans),
-  `list(item, { min_items?, max_items? }?)`, `object(fields, { strict? }?)` and
-  `optional(schema)`. A plain function `function(value) → value` is a schema anywhere one is
-  accepted; raising rejects (the message, minus its position, becomes the issue message).
-  Values are required unless wrapped in `optional(...)` or given a `default` (which fills a
-  missing value as-is). For `int`/`number`/`bool`, `""` counts as missing, so `?limit=` falls
-  back to the default. Unknown `object` keys are dropped; `strict = true` makes them issues.
-  `clamp = true` clamps into `[min, max]` instead of failing.
-  On failure `err` is a table `{ kind = "validation", message, issues = { { path, message }, … } }`
-  (all issues are collected; paths read `a.b[2].c`, the root is `""`; at most 100 issues, then
-  `truncated = true`). `tostring(err)` is `message`, an uncaught one prints that message, and it
-  is catchable with `pcall`. Raised inside a `lur.async` task it reaches the combinator's caller
-  as a plain string (its message), not a table; use `try` there. Bad arguments (unknown
-  option, `min > max`) raise `lur.validate.<fn>: …`. Schemas nest at most 64 levels.
-  `optional(x)` only waives "required": an inner `default` still fills. A `lur.null` (JSON
-  `null`) given for an object field or the root counts as absent: `optional` yields `nil`,
-  `default` fills, and a required value reports `is required`. Function validators still
-  receive the raw `lur.null`, and `null` list items are not absent (they fail normally).
-  `default` values are returned as given, not checked against `min`/`max`/`pattern`. A function validator's result
-  is used as is, so returning (or mutating) its input table aliases it — the input is not
-  deep-copied there.
+| Module | Purpose |
+| --- | --- |
+| [`lur.null`](#lurnull) | sentinel for JSON `null` / SQL `NULL` |
+| [`lur.json`](#lurjson) | encode / decode JSON |
+| [`lur.base64`](#lurbase64) | base64 encode / decode |
+| [`lur.crypto`](#lurcrypto) | digests, HMAC, hex, random bytes |
+| [`lur.cookie`](#lurcookie) | `Cookie` / `Set-Cookie` helpers |
+| [`lur.time`](#lurtime) | clocks, parsing and formatting |
+| [`lur.url`](#lururl) | URL parse / join / query strings |
+| [`lur.charset`](#lurcharset) | non-UTF-8 text |
+| [`lur.html`](#lurhtml) | HTML parse, CSS selectors, sanitize |
+| [`lur.xml`](#lurxml) | XML parse, slash-path selection |
+| [`lur.feed`](#lurfeed) | RSS / Atom / JSON Feed output |
+| [`lur.log`](#lurlog), [`lur.stdin`](#lurstdin), [`lur.stdout`](#lurstdout), [`lur.args`](#lurargs) | process I/O |
+
+#### `lur.null`
+
+Sentinel distinct from `nil` (which means *absent*); round-trips JSON `null` and SQL
+`NULL`.
+
+#### `lur.json`
+
+| Call | Returns |
+| --- | --- |
+| `encode(value)` | string |
+| `decode(text, opts?)` | value |
+
+- JSON `null` decodes to `lur.null`; strings must be UTF-8 (base64 binary first).
+- `decode(text, { null = "drop" })` omits object keys whose value is `null` and removes
+  `null` array elements (compacting the array); `"keep"` is the default, and a bare
+  top-level `null` stays `lur.null`.
+
+#### `lur.base64`
+
+`encode(bytes) → string`, `decode(text) → bytes`.
+
+#### `lur.crypto`
+
+| Call | Returns | Notes |
+| --- | --- | --- |
+| `sha256` / `sha512` / `sha1` / `md5(data)` | bytes | `sha1`/`md5` are for legacy interop only |
+| `hmac_sha256` / `hmac_sha512` / `hmac_sha1(key, msg)` | bytes | |
+| `hex.encode(bytes)` / `hex.decode(text)` | string / bytes | |
+| `random_bytes(n)` | bytes | OS CSPRNG |
+| `constant_eq(a, b)` | bool | timing-safe |
+
+Digests are raw bytes.
+
+```lua
+print(lur.crypto.hex.encode(lur.crypto.sha256("hello")))
+```
+
+#### `lur.cookie`
+
+| Call | Returns | Notes |
+| --- | --- | --- |
+| `parse(header)` | `{ name = value, … }` | reads a `Cookie` header |
+| `serialize(name, value, opts?)` | string | builds one `Set-Cookie` value (no prefix) |
+
+- `parse` is lenient: malformed segments are skipped, a later duplicate wins, nothing is
+  decoded.
+- `serialize` options:
+
+  | Option | Type |
+  | --- | --- |
+  | `domain`, `path`, `expires` | string |
+  | `max_age` | integer seconds |
+  | `secure`, `http_only` | boolean |
+  | `same_site` | `"Strict"` / `"Lax"` / `"None"` |
+
+- An invalid name, a value with `;`/CR/LF, or `same_site="None"` without `secure=true`
+  raises.
+- Format `expires` with `os.date("!%a, %d %b %Y %H:%M:%S GMT", t)`.
+
+```lua
+print(lur.cookie.serialize("sid", "abc", { path = "/", http_only = true, max_age = 3600 }))
+```
+
+#### `lur.time`
+
+Integer milliseconds throughout (divide by `1000` for `os.date`). Malformed input raises.
+
+| Call | Returns | Notes |
+| --- | --- | --- |
+| `now_ms()` | epoch ms | Unix time |
+| `monotonic_ms()` | ms | for elapsed-time differences |
+| `parse_rfc3339(text)` | epoch ms | a UTC offset such as `Z` is required |
+| `parse_http_date(text)` | epoch ms | |
+| `parse_rfc2822(text)` | epoch ms | honors the offset in the text |
+| `format_rfc3339(ms, tz?)` | string | |
+| `format_rfc2822(ms, tz?)` | string | |
+| `format(ms, strftime, tz?)` | string | |
+| `parse(text, fmt?, tz?)` | epoch ms | see below |
+| `try_parse(text, fmt?, tz?)` | epoch ms or `nil` | `parse` that returns `nil` for unparseable (or `nil`) text; a bad `fmt` or `tz` still raises |
+
+- `tz` is an IANA name (`"Asia/Taipei"`), a fixed offset (`"+08:00"`), or `nil`/`"UTC"`.
+- `parse` without `fmt` accepts RFC 3339, RFC 2822, HTTP-date, then
+  `YYYY-MM-DD[ T]HH:MM[:SS[.f]]` and `YYYY/MM/DD[ HH:MM[:SS]]`; wall-clock text with no
+  offset is read in `tz`.
+- A local time in a DST gap raises; in an overlap the earlier instant wins.
+
+```lua
+local ms = lur.time.parse("2024-03-01 12:00", nil, "Asia/Taipei")
+print(lur.time.format_rfc3339(ms, "+08:00"))
+```
+
+#### `lur.url`
+
+| Call | Returns | Notes |
+| --- | --- | --- |
+| `parse(url)` | `{ href, scheme, host?, port?, username?, password?, path, query?, fragment? }` | `port` only when explicit and non-default; an invalid URL raises |
+| `join(base, relative)` | string | resolves relative links; `base` must be absolute |
+| `encode_query(table)` | string | keys sorted; an array value repeats the key; string, number and boolean values |
+| `decode_query(text)` | table | leading `?` optional, last duplicate wins, `+` is a space |
+
+```lua
+print(lur.url.join("https://example.com/a/b", "../c?x=1"))
+print(lur.url.encode_query({ b = 2, a = { "x", "y" } }))
+```
+
+#### `lur.charset`
+
+For non-UTF-8 pages (Big5, GBK, Shift_JIS, … via `encoding_rs`, WHATWG labels).
+
+| Call | Returns |
+| --- | --- |
+| `decode(bytes, hint?)` | string |
+| `encode(text, label)` | bytes |
+
+- `hint` is a charset label or a whole `Content-Type` value.
+- Precedence: BOM, then `hint`, then a `<meta charset>` in the first 1 KiB, then UTF-8.
+- Invalid bytes become U+FFFD; an unknown label raises.
+- `encode` writes unmappable characters as `&#NNN;` and refuses UTF-16.
+
+#### `lur.html`
+
+`parse(html) → doc`. Invalid UTF-8 is replaced; decode other encodings with `lur.charset`
+first. Parsing follows the HTML5 algorithm, so `<td>` outside a `<table>` is dropped.
+
+Nodes (the doc and its elements) share these methods; call them with `:`.
+
+| Method | Returns | Notes |
+| --- | --- | --- |
+| `select(css)` | array | descendants only |
+| `select_one(css)` | node or `nil` | descendants only; for both, an invalid selector raises |
+| `text(opts?)` | string | `{ trim = true }` strips surrounding whitespace; `lur.html` only |
+| `text(css)` | string or `nil` | shorthand for `select_one(css):text()`; `nil` when nothing matches |
+| `html()`, `inner_html()`, `tag()` | string | |
+| `attr(name)` | string or `nil` | |
+| `attrs()` | table | |
+| `parent()` | node or `nil` | `nil` for the document and the root element |
+| `children()` | array | elements only |
+
+`lur.html.sanitize(html, opts?) → string` strips scripts, styles, event handlers and unsafe
+URLs with `ammonia`'s allowlist.
+
+- Only `http`, `https` and `mailto` links survive, and links get
+  `rel="noopener noreferrer"`.
+- `opts.base` (absolute URL) resolves relative `href`/`src`; without it they are kept as
+  written.
+- Broken markup is repaired.
+
+```lua
+local doc = lur.html.parse('<ul><li class="a">one</li><li>two</li></ul>')
+print(doc:text("li.a"), #doc:select("li"))
+print(lur.html.sanitize('<a href="javascript:x" onclick="y">hi</a><script>1</script>'))
+```
+
+#### `lur.xml`
+
+`parse(xml) → doc`. Same node methods as `lur.html` (`select`, `select_one`, `text`,
+`tag`, `attr`, `attrs`, `parent`, `children`) but selection takes a slash path.
+
+| Path | Meaning |
+| --- | --- |
+| `a/b` | children |
+| `//a` | descendants (also mid-path) |
+| `*` | any name |
+
+- Results are in document order and deduplicated.
+- Names match exactly as written (`dc:creator`); namespaces are not resolved.
+- Malformed XML raises with line/column.
+- Unknown entities such as `&nbsp;` are kept as text; `DOCTYPE` is ignored, so custom
+  entities are not expanded.
+- A BOM or the declaration's `encoding` selects the charset; otherwise invalid UTF-8 is
+  replaced.
+
+```lua
+local doc = lur.xml.parse("<r><a>1</a><b><a>2</a></b></r>")
+print(#doc:select("//a"), doc:select_one("r/a"):text())
+```
+
+#### `lur.feed`
+
+`rss(meta, items)`, `atom(meta, items)`, `json(meta, items)` → string (RSS 2.0 / Atom 1.0 /
+JSON Feed 1.1).
+
+| Field | Where | Notes |
+| --- | --- | --- |
+| `title` | `meta`, item | required |
+| `feed_url`, `description`, `language`, `updated` | `meta` | optional |
+| `link`, `id` | `meta` | optional (see format requirements below) |
+| `guid`, `link` | item | optional (see format requirements below) |
+| `date`, `updated`, `summary`, `content` (HTML), `author` | item | optional |
+| `categories` | item | array of strings |
+| `enclosure` | item | `{ url, type?, length? }` |
+
+- Dates are epoch ms.
+- RSS needs `meta.link`; Atom needs `meta.id` or `meta.link`; Atom/JSON items need `guid`
+  or `link`.
+- XML is escaped and characters illegal in XML 1.0 are dropped.
+- An optional third argument `{ skip_invalid = true }` skips items whose `title` is missing
+  (these raise by default) and also drops empty or blank titles, which are accepted by
+  default; other item errors still raise.
+
+```lua
+print(lur.feed.rss(
+  { title = "Blog", link = "https://example.com/" },
+  { { title = "Hello", link = "https://example.com/1", date = lur.time.now_ms() } }
+))
+```
+
+#### `lur.log`
+
+`info`/`warn`/`error(msg)` write `<level>: <msg>\n` to stderr (stdout is the data channel).
+
+#### `lur.stdin`
+
+`read()` drains all bytes, `read(n)` reads up to `n` (`nil` at EOF), `lines()` iterates
+newline-stripped lines.
+
+#### `lur.stdout`
+
+`write(bytes)`, `flush()`. Raw bytes, no implicit newline.
+
+#### `lur.args`
+
+`positional` (1-indexed array) and `flags` (`--name value`/`--name=value` → `"value"`,
+bare `--flag` → `true`). Read-only, like every `lur.*` table; copy into a local table to
+modify.
+
+### Validation (`lur.validate`)
+
+Validate and convert untrusted input (query strings, JSON bodies) with small composable
+schemas. Pure compute, no policy, same in one-shot and serve mode. The result is always a
+new table; the input is never modified.
+
+#### Entry points
+
+| Call | Returns | On failure |
+| --- | --- | --- |
+| `parse(schema, value)` | converted value | raises `err` |
+| `try(schema, value)` | `true, converted` or `false, err` | returns the same `err` |
+
+#### Schemas
+
+`opts` is always optional.
+
+| Schema | Options | Accepts |
+| --- | --- | --- |
+| `str{ … }` | `pattern?`, `min_len?`, `max_len?`, `default?` | strings only (numbers are not coerced); `pattern` is a Lua pattern as in `string.find`, unanchored; lengths count characters |
+| `int{ … }` | `min?`, `max?`, `default?`, `clamp?` | a number with an integral value, or a string that is strictly `-?%d+`; \|n\| must be <= 2^53 |
+| `number{ … }` | `min?`, `max?`, `default?`, `clamp?` | finite numbers only; strings must be decimal floats |
+| `bool{ … }` | `default?` | a boolean, or the strings `"true"` / `"false"` |
+| `one_of{ … }` | the allowed values | strict equality over strings / numbers / booleans |
+| `list(item, opts?)` | `min_items?`, `max_items?` | an array whose items match `item` |
+| `object(fields, opts?)` | `strict?` | a table whose fields match `fields` |
+| `optional(schema)` | | `schema`, or an absent value |
+| `function(value) → value` | | a plain function is a schema anywhere one is accepted; raising rejects (the message, minus its position, becomes the issue message) |
+
+- `clamp = true` clamps into `[min, max]` instead of failing.
+- Unknown `object` keys are dropped; `strict = true` makes them issues.
+- Bad arguments (unknown option, `min > max`) raise `lur.validate.<fn>: …`.
+- Schemas nest at most 64 levels.
+
+#### Missing values and defaults
+
+- Values are required unless wrapped in `optional(...)` or given a `default` (which fills
+  a missing value as-is).
+- For `int`/`number`/`bool`, `""` counts as missing, so `?limit=` falls back to the default.
+- `optional(x)` only waives "required": an inner `default` still fills.
+- A `lur.null` (JSON `null`) given for an object field or the root counts as absent:
+  `optional` yields `nil`, `default` fills, and a required value reports `is required`.
+  Function validators still receive the raw `lur.null`, and `null` list items are not
+  absent (they fail normally).
+- `default` values are returned as given, not checked against `min`/`max`/`pattern`.
+- A function validator's result is used as is, so returning (or mutating) its input table
+  aliases it — the input is not deep-copied there.
+
+#### Errors
+
+On failure `err` is a table:
+
+```lua
+{ kind = "validation", message = "…", issues = { { path = "a.b[2].c", message = "…" }, … } }
+```
+
+- All issues are collected; paths read `a.b[2].c`, the root is `""`.
+- At most 100 issues are kept, then `truncated = true`.
+- `tostring(err)` is `message`, an uncaught one prints that message, and it is catchable
+  with `pcall`.
+- Raised inside a `lur.async` task it reaches the combinator's caller as a plain string
+  (its message), not a table; use `try` there.
+
+#### Examples
 
 ```lua
 local v = lur.validate
@@ -292,42 +503,69 @@ local q = v.parse(v.object({
   q = v.str({ min_len = 1 }),
   limit = v.int({ min = 1, max = 100, default = 20 }),
 }), { q = "luau", limit = "5" })           -- { q = "luau", limit = 5 }
-local ok, err = v.try(v.int({ max = 10 }), "11")  -- false, err.issues[1].message == "must be <= 10"
+print(q.q, q.limit)
 ```
-- **`lur.log`** — `info`/`warn`/`error(msg)` write `<level>: <msg>\n` to stderr (stdout is
-  the data channel).
-- **`lur.stdin`** — `read()` drains all bytes, `read(n)` reads up to `n` (`nil` at EOF),
-  `lines()` iterates newline-stripped lines.
-- **`lur.stdout`** — `write(bytes)`, `flush()`. Raw bytes, no implicit newline.
-- **`lur.args`** — `positional` (1-indexed array) and `flags` (`--name value`/
-  `--name=value` → `"value"`, bare `--flag` → `true`)). Read-only, like every
-  `lur.*` table; copy into a local table to modify.
+
+```lua
+local v = lur.validate
+local ok, err = v.try(v.int({ max = 10 }), "11")
+print(ok, err.issues[1].message)           -- false   must be <= 10
+```
 
 ### Capabilities (policy-gated)
 
-- **`lur.fs`** — `read(path) → bytes`, `write(path, bytes)`. Paths are canonicalized
-  before the allowlist check, defeating `..` and symlink escapes, and files are opened
-  confined to the granted root, so a symlink swapped in mid-call cannot escape either.
-- **`lur.http`** — `request(method, url, opts?)` plus `get`/`post`/`put`/`patch`/
-  `delete`/`head(url, opts?)`. `opts`: `headers`, `query`, `body` **or** `json` **or** `form`
-  (flat table of string/number/boolean, url-encoded with sorted keys; `Content-Type` set
-  unless `headers` has one), `timeout` (ms), `cache`. `res.json({ null = "drop" })` as in `lur.json.decode`. Returns `{ status, body, headers, headers_all, json(), text(), html() }`; the helpers are
-  closures called with a dot, like `json()` (`res.text()`). `text()` decodes `body`
-  by a BOM, then the `Content-Type` charset, then `<meta charset>` in the first 1 KiB, then
-  UTF-8 (an unknown header charset falls back to the `<meta>`/UTF-8 steps; invalid bytes
-  become U+FFFD), the `lur.charset` rules, and
-  `html()` is `lur.html.parse(res.text())`. Every request and
-  redirect hop is checked against the allowlist and the private-IP (SSRF) guard; TLS is
-  always verified; the body is capped by `--max-http-body`. Proxy environment variables
-  (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) are ignored.
-  `cache = { ttl_ms = 60000, vary? }` (GET only; in memory, no `--db`) stores 2xx responses
-  and adds `res.cached`; requests with `Authorization`/`Cookie` bypass it unless named in
-  `vary`, and the policy check runs before the lookup. `lur.http.cache_clear()` drops all
-  entries and returns the count. The cache is bounded by `--http-cache-max-entries` and
-  `--http-cache-max-bytes`: an insert over either cap evicts expired entries, then the least
-  recently used; a single response larger than the byte cap is simply not cached.
-- **`lur.env`** — `lur.env(name) → string | nil`; `nil` for both denied and unset, so it
-  is not an oracle.
+#### `lur.fs`
+
+`read(path) → bytes`, `write(path, bytes)`.
+
+- Paths are canonicalized before the allowlist check, defeating `..` and symlink escapes.
+- Files are opened confined to the granted root, so a symlink swapped in mid-call cannot
+  escape either.
+
+#### `lur.http`
+
+`request(method, url, opts?)` plus `get`/`post`/`put`/`patch`/`delete`/`head(url, opts?)`.
+
+| `opts` | Type | Meaning |
+| --- | --- | --- |
+| `headers` | table | request headers |
+| `query` | table | query parameters |
+| `body` / `json` / `form` | one of | raw body, JSON-encoded value, or a flat table of string/number/boolean (url-encoded with sorted keys; `Content-Type` set unless `headers` has one) |
+| `timeout` | ms | per-request timeout; no default of its own (the global `--timeout` still applies) |
+| `cache` | table | see [Caching](#caching) |
+
+Returns `{ status, body, headers, headers_all, json(), text(), html() }`. The helpers are
+closures: call them with a dot, e.g. `res.text()`, not `res:text()`.
+
+| Helper | Behaviour |
+| --- | --- |
+| `res.json(opts?)` | decodes `body`; `opts` as in `lur.json.decode` |
+| `res.text()` | decodes `body` with the `lur.charset` rules: a BOM, then the `Content-Type` charset, then `<meta charset>` in the first 1 KiB, then UTF-8 (an unknown header charset falls back to the `<meta>`/UTF-8 steps; invalid bytes become U+FFFD) |
+| `res.html()` | `lur.html.parse(res.text())` |
+
+Guards:
+
+- Every request and redirect hop is checked against the allowlist and the private-IP
+  (SSRF) guard.
+- TLS is always verified; the body is capped by `--max-http-body`.
+- Proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) are ignored.
+
+##### Caching
+
+`cache = { ttl_ms = 60000, vary? }`
+
+- GET only; in memory, no `--db`. Stores 2xx responses and adds `res.cached`.
+- Requests with `Authorization`/`Cookie` bypass it unless named in `vary`, and the policy
+  check runs before the lookup.
+- `lur.http.cache_clear()` drops all entries and returns the count.
+- The cache is bounded by `--http-cache-max-entries` and `--http-cache-max-bytes`: an
+  insert over either cap evicts expired entries, then the least recently used; a single
+  response larger than the byte cap is simply not cached.
+
+#### `lur.env`
+
+`lur.env(name) → string | nil` (`lur.env` is itself the function). `nil` for both denied
+and unset, so it is not an oracle.
 
 ### Storage (requires `--db`)
 
@@ -335,30 +573,26 @@ local ok, err = v.try(v.int({ max = 10 }), "11")  -- false, err.issues[1].messag
 backend at first use. There is no SQL-portability layer — placeholders and types are
 native to the backend.
 
-- **`lur.db`** — `exec(sql, ...params) → { rows_affected, last_insert_id }`,
-  `query(sql, ...params) → rows` (tables keyed by column), and `tx(fn)`, which runs
-  `fn(tx)` on a pinned connection, committing on return and rolling back on error.
-  Placeholders: `?` on SQLite, `$1, $2, …` on Postgres. JSON-encode tables before binding.
-- **`lur.kv`** — `get(key) → bytes | nil`, `set(key, bytes)`, `delete(key)`, plus atomic
-  `add(key, value) → bool` (set-if-absent), `cas(key, expected, new) → bool` (`nil`
-  expected = must be absent, `nil` new = delete), `incr`/`decr(key, n?)` (integer
-  counters, step 1; `get` returns them as decimal strings), and `update(key, fn)`
-  (read-modify-write; return `nil` to delete). Expiry: pass `{ ttl_ms = n }` (positive
-  milliseconds) as the last argument of `set`/`add`/`cas`/`update`/`incr`/`decr`; expired
-  keys read as absent. `set` without `ttl_ms` clears the expiry, `cas`/`update` keep it,
-  `incr`/`decr` set it only when the key has none (fixed window; `renew_ttl = true`
-  resets it every call). `expire(key, ms) → bool`; `ttl(key) → ms, exists`.
-- **SQLite contention** — write transactions use `BEGIN IMMEDIATE`; a 5 s `busy_timeout`
-  plus up to 5 jittered attempts on single-statement writes, lock acquisition, and open
-  absorb "database is locked".
+#### `lur.db`
+
+| Call | Returns | Notes |
+| --- | --- | --- |
+| `exec(sql, ...params)` | `{ rows_affected, last_insert_id }` | |
+| `query(sql, ...params)` | rows (tables keyed by column) | |
+| `tx(fn)` | | runs `fn(tx)` on a pinned connection, committing on return and rolling back on error |
+
+- Placeholders: `?` on SQLite, `$1, $2, …` on Postgres. JSON-encode tables before binding.
+- **`last_insert_id` is SQLite-only** — always `0` on Postgres; use
+  `INSERT … RETURNING id` via `db.query`.
 - **Postgres row types** — only `int2`/`int4`/`int8` (integer), `float4`/`float8`
   (number), and `text`/`varchar`/`bpchar`/`name`/`bytea` (string) map to Lua. Anything
   else (`numeric`, `timestamptz`, `jsonb`, `uuid`, `bool`, arrays, …) raises
   `lur.db: unsupported column type '<T>' in column '<name>'; CAST it to text (e.g.
   <name>::text)`.
-- **`last_insert_id` is SQLite-only** — always `0` on Postgres; use
-  `INSERT … RETURNING id` via `db.query`.
 - **TLS** — append `?sslmode=require` (or another `sslmode`) to the Postgres URL.
+- **SQLite contention** — write transactions use `BEGIN IMMEDIATE`; a 5 s `busy_timeout`
+  plus up to 5 jittered attempts on single-statement writes, lock acquisition, and open
+  absorb "database is locked".
 - **`db.tx` / `kv.update` can fail** — on Postgres they run at `SERIALIZABLE` and may
   raise a serialization conflict with a stable, locale-independent message containing
   `SQLSTATE 40001`; on SQLite they may raise once busy retries run out. `lur` does
@@ -370,102 +604,215 @@ native to the backend.
   end)
   ```
 
-Postgres integration tests need a local Postgres: `docker compose up -d`.
+#### `lur.kv`
+
+| Call | Returns | Notes |
+| --- | --- | --- |
+| `get(key)` | bytes or `nil` | counters come back as decimal strings |
+| `set(key, bytes)` | | |
+| `delete(key)` | | |
+| `add(key, value)` | bool | atomic set-if-absent |
+| `cas(key, expected, new)` | bool | atomic; `nil` expected = must be absent, `nil` new = delete |
+| `incr` / `decr(key, n?)` | | atomic integer counters, step 1 |
+| `update(key, fn)` | | atomic read-modify-write; return `nil` to delete |
+| `expire(key, ms)` | bool | |
+| `ttl(key)` | `ms, exists` | |
+
+Expiry: pass `{ ttl_ms = n }` (positive milliseconds) as the last argument of
+`set`/`add`/`cas`/`update`/`incr`/`decr`; expired keys read as absent.
+
+| Call | Effect on an existing expiry |
+| --- | --- |
+| `set` without `ttl_ms` | clears it |
+| `cas` / `update` | keep it |
+| `incr` / `decr` | set it only when the key has none (fixed window); `renew_ttl = true` resets it every call |
 
 ### Concurrency
 
-- **`lur.async`** — `sleep(ms)`, and combinators over arrays of zero-arg functions:
-  `all` (fail-fast), `race` (first to settle), `any` (first to succeed), `settled` (never
-  raises → `{ ok, value | err }`). `map(list, fn, opts?)` applies `fn(item, index)` to
-  every array element concurrently and returns results in input order; `opts.limit`
-  (integer ≥ 1) caps that call's in-flight tasks, `opts.drop_errors` omits failed items
-  instead of failing fast. Lua runs one step at a time; tasks interleave only at I/O
-  awaits. `--max-concurrency` caps in-flight tasks.
-- **`lur.state`** — process-wide state shared across the VM pool, primitives only:
-  `get(key)`, `set(key, value)` (`nil` deletes), `incr`/`decr(key, n?)` (atomic; integer
-  step, default 1), `add(key, value) → bool` (set-if-absent), `cas(key, expected, new) →
-  bool` (`nil` = absent), and `update(key, fn)` (optimistic CAS retry; `fn` runs
-  unlocked). Writes (`set`/`add`/`cas`/`update`/`incr`/`decr`) take `{ ttl_ms = n,
-  evictable = bool }` last, with `lur.kv`'s expiry rules (`set`/`add` clear it,
-  `cas`/`update`/`incr`/`decr` keep it, `incr`/`decr` set it only when absent unless
-  `renew_ttl = true`); `ttl(key) → ms, exists`. `fetch(key, { ttl_ms, stale_ms? }, fn) →
-  value, "hit"|"miss"|"stale"` runs `fn` on a miss (async, unlocked, not retried) and stores
-  the value as evictable; if `fn` raises and a value within `stale_ms` of expiry exists, that
-  value comes back as `"stale"`. `nil` from `fn` is not cached. `--state-max-entries` /
-  `--state-max-bytes` (default unlimited) drop only `evictable` entries, expired first, then
-  least recently used; a write that cannot fit raises. A stale value is invisible to
-  everything but `fetch`.
+#### `lur.async`
+
+`sleep(ms)`, and combinators over arrays of zero-arg functions:
+
+| Call | Behaviour |
+| --- | --- |
+| `all(fns)` | fail-fast |
+| `race(fns)` | first to settle |
+| `any(fns)` | first to succeed |
+| `settled(fns)` | never raises → `{ ok, value \| err }` |
+| `map(list, fn, opts?)` | applies `fn(item, index)` to every array element concurrently; results in input order |
+
+- `map` options: `opts.limit` (integer ≥ 1) caps that call's in-flight tasks;
+  `opts.drop_errors` omits failed items instead of failing fast.
+- Lua runs one step at a time; tasks interleave only at I/O awaits.
+- `--max-concurrency` caps in-flight tasks.
+
+```lua
+local r = lur.async.map({ 1, 2, 3 }, function(n) lur.async.sleep(10); return n * 2 end,
+  { limit = 2 })
+print(table.concat(r, ","))
+```
+
+#### `lur.state`
+
+Process-wide state shared across the VM pool, primitives only.
+
+| Call | Returns | Notes |
+| --- | --- | --- |
+| `get(key)` | value | |
+| `set(key, value)` | | `nil` deletes |
+| `incr` / `decr(key, n?)` | | atomic; integer step, default 1 |
+| `add(key, value)` | bool | set-if-absent |
+| `cas(key, expected, new)` | bool | `nil` = absent |
+| `update(key, fn)` | | optimistic CAS retry; `fn` runs unlocked |
+| `ttl(key)` | `ms, exists` | |
+| `fetch(key, { ttl_ms, stale_ms? }, fn)` | `value, "hit"\|"miss"\|"stale"` | see below |
+
+- Writes (`set`/`add`/`cas`/`update`/`incr`/`decr`) take `{ ttl_ms = n, evictable = bool }`
+  last, with the same expiry rules as the [`lur.kv` expiry table](#lurkv) except that `add`
+  also clears an existing expiry and `evictable` is state-only.
+- `fetch` runs `fn` on a miss (async, unlocked, not retried) and stores the value as
+  evictable. If `fn` raises and a value within `stale_ms` of expiry exists, that value
+  comes back as `"stale"`. `nil` from `fn` is not cached.
+- `--state-max-entries` / `--state-max-bytes` (default unlimited) drop only `evictable`
+  entries, expired first, then least recently used; a write that cannot fit raises.
+- A stale value is invisible to everything but `fetch`.
 
 ### Server mode (`lur serve`)
 
-Handlers are registered once at load time.
+Handlers are registered once at load time. On `SIGTERM`/`SIGINT`, in-flight requests and
+cron runs drain within `--shutdown-grace`.
 
-- **`lur.serve.http(method, path, handler)`** — `method` is `"GET"`…/`"ANY"`. `:name`
-  path segments (e.g. `/users/:id`) bind into `req.params`; a trailing `:name?` is optional
-  (`/feed/:tag?` matches `/feed` and `/feed/lua`, absent = `nil`; it may not share a
-  static/param shape with another route of the same method, e.g. `/feed`). The most specific route wins regardless of order (more static segments, then a
-  concrete method over `ANY`).
-  `handler(req)` returns `{ status?, headers?, body? }` (`status` defaults to `200`, must
-  be in `100..=599`; `body` defaults to empty). `headers` maps a name to a string or an
-  array of strings (repeated header, e.g. two `Set-Cookie`). No `Content-Type` is
-  inferred. An invalid name/value (including CR/LF), or `Content-Length` /
+#### Routing: `lur.serve.http(method, path, handler)`
+
+`method` is `"GET"`…/`"ANY"`.
+
+- **Path params**: `:name` segments (e.g. `/users/:id`) bind into `req.params`. A trailing
+  `:name?` is optional (`/feed/:tag?` matches `/feed` and `/feed/lua`, absent = `nil`); it
+  may not share a static/param shape with another route of the same method, e.g. `/feed`.
+- **Precedence**: the most specific route wins regardless of order (more static segments,
+  then a concrete method over `ANY`).
+- **Response**: `handler(req)` returns a table:
+
+  | Field | Default | Notes |
+  | --- | --- | --- |
+  | `status` | `200` | must be in `100..=599` |
+  | `headers` | none | a name maps to a string or an array of strings (repeated header, e.g. two `Set-Cookie`) |
+  | `body` | empty | |
+
+- No `Content-Type` is inferred.
+- An invalid header name/value (including CR/LF), or `Content-Length` /
   `Transfer-Encoding`, is a **500**.
-- **`lur.serve.cron(spec, handler, opts?)`** — 6-field cron (`sec min hour dom mon dow`).
-  `opts`: `name`, `overlap` (default `false` = skip a tick while the previous run is
-  going), `timeout` (ms).
-- **`lur.serve.abort(status, message, data?)`** — ends the handler at once with an HTTP
-  error. `status` must be an integer in `400..=599` (`abort(200, …)` is an argument error),
-  `message` a string, `data` any JSON-encodable value. Uncaught, the client gets that
-  status with `Content-Type: application/json` and `{"error": message, "data": data}`
-  (`data` omitted when `nil`); not-encodable `data` is an ordinary error (a 500). It raises
-  a table `{ kind = "abort", status, message, data }` that `pcall` can catch; side effects
-  made before the abort (db writes, …) are **not** rolled back. Only valid inside an HTTP
-  handler: in a cron job or one-shot script it is an ordinary runtime error. Raised inside
-  a `lur.async` task, `pcall` around the combinator sees a string, not the table (use it
-  in the handler itself).
 
-`req` has `method`, `path`, `origin` and `url` (`scheme://host` and the full URL, from `Host`
-and `X-Forwarded-Proto`; `nil` without a valid `Host`; client-controlled, so for links only),
-`params`, `query` (last value per key), `query_all` (all
-values), `headers` (lowercased), `cookies` (parsed `Cookie`; empty table if absent),
-`body` (raw bytes), `json()`, `form()` and `form_all()`. `read(n)` streams large bodies in
-chunks; after that, `body`/`json()`/`form()`/`form_all()`/`valid_body` raise.
+#### `lur.serve.cron(spec, handler, opts?)`
 
-`req.form()` parses an `application/x-www-form-urlencoded` body (the media type is matched
-case-insensitively, parameters such as `; charset=utf-8` are ignored) into `{key = last
-value}`; `req.form_all()` returns `{key = {values...}}`, like `query` / `query_all`. Decoding
-is the query-string decoding: `+` is a space, `%XX` is decoded, a malformed `%` stays
-literal, a key without `=` has value `""`, an empty body gives `{}`; `;` is not a
-separator and `%00` yields a NUL byte. The body is first read as lossy UTF-8, so invalid
-bytes in it become U+FFFD (bytes produced by `%XX` escapes are kept raw). Any other content type
-(or none) raises an ordinary error naming it, so branch on `req.headers["content-type"]`
-first if you accept several. Multipart is not supported. `--max-body` applies as usual.
+6-field cron (`sec min hour dom mon dow`).
 
-`req.valid_body(schema, opts?)` validates the body like `valid_query`, picking the decoder
-from `Content-Type`: only `application/json` and `*+json` types count as JSON (so
-`text/json` is a 415) and decode as `req.json()`; urlencoded forms are validated with `list(...)` fields of an `object` schema fed from
-`form_all`. Anything else, including a missing type and `multipart/*`, aborts with **415**
-`unsupported content type`. A body that is not valid JSON aborts with **400**
-`invalid JSON body` (always 400, regardless of `fail_status`); so does an empty JSON body,
-unless the schema accepts `nil` (`v.optional(...)`), in which case it returns `nil`.
-A JSON `null` (top level or as an object field) counts as absent, as in `lur.validate`:
-`optional` gives `nil`, `default` fills, a required value reports `is required`.
-The 415 carries `data = { content_type }` (no `data` when the header is missing). With
-several `Content-Type` headers the last one wins, as for `req.headers`.
-Validation failures abort with `opts.fail_status` (default 400) and `data = issues`.
+| `opts` | Default | Meaning |
+| --- | --- | --- |
+| `name` | `cron[<spec>]` | job name, shown in logs |
+| `overlap` | `false` | `false` skips a tick while the previous run is going |
+| `timeout` | `--timeout` | ms; overrides the global per-event timeout |
 
-`req.valid_query(schema, opts?)` and `req.valid_params(schema, opts?)` run
-`lur.validate.parse` over `req.query` / `req.params` and return the converted value (a
-fresh table). On failure they abort with `opts.fail_status` (integer `400..=599`, default
-`400`; checked at call time) and `message = "validation failed"`, `data = issues`:
-`{"error":"validation failed","data":[{"path":"limit","message":"must be <= 100"}]}`.
-Use `fail_status = 404` for path params. For an `object` schema, `list(...)` fields in
-`valid_query` read every value (`query_all`) and other fields the last one (`query`).
-Anything that is not a validation failure (a bad schema argument, a timeout) propagates
-unchanged. A bare `lur.validate.parse` that fails inside a handler stays a **500** on
-purpose: use `req.valid_*` for client input.
+#### `lur.serve.abort(status, message, data?)`
+
+Ends the handler at once with an HTTP error.
+
+- `status` must be an integer in `400..=599` (`abort(200, …)` is an argument error),
+  `message` a string, `data` any JSON-encodable value.
+- Uncaught, the client gets that status with `Content-Type: application/json` and
+  `{"error": message, "data": data}` (`data` omitted when `nil`); not-encodable `data` is
+  an ordinary error (a 500).
+- It raises a table `{ kind = "abort", status, message, data }` that `pcall` can catch;
+  side effects made before the abort (db writes, …) are **not** rolled back.
+- Only valid inside an HTTP handler: in a cron job or one-shot script it is an ordinary
+  runtime error.
+- Raised inside a `lur.async` task, `pcall` around the combinator sees a string, not the
+  table (use it in the handler itself).
+
+#### The `req` object
+
+| Field | Meaning |
+| --- | --- |
+| `method`, `path` | request method and path |
+| `origin`, `url` | `scheme://host` and the full URL, from `Host` and `X-Forwarded-Proto`; `nil` without a valid `Host`; client-controlled, so for links only |
+| `params` | path params |
+| `query` | last value per key |
+| `query_all` | all values |
+| `headers` | lowercased names |
+| `cookies` | parsed `Cookie`; empty table if absent |
+| `body` | raw bytes |
+| `json()` | decoded JSON body |
+| `form()`, `form_all()` | urlencoded body, see [Forms](#forms) |
+| `read(n)` | streams large bodies in chunks; after that, `body`/`json()`/`form()`/`form_all()`/`valid_body` raise |
+| `valid_query`, `valid_params`, `valid_body` | see [Validation helpers](#validation-helpers) |
+
+##### Forms
+
+`req.form()` parses an `application/x-www-form-urlencoded` body into `{key = last value}`;
+`req.form_all()` returns `{key = {values...}}`, like `query` / `query_all`.
+
+- The media type is matched case-insensitively; parameters such as `; charset=utf-8` are
+  ignored.
+- Decoding is the query-string decoding: `+` is a space, `%XX` is decoded, a malformed `%`
+  stays literal, a key without `=` has value `""`, an empty body gives `{}`; `;` is not a
+  separator and `%00` yields a NUL byte.
+- The body is first read as lossy UTF-8, so invalid bytes in it become U+FFFD (bytes
+  produced by `%XX` escapes are kept raw).
+- Any other content type (or none) raises an ordinary error naming it, so branch on
+  `req.headers["content-type"]` first if you accept several.
+- Multipart is not supported. `--max-body` applies as usual.
+
+##### Validation helpers
+
+`req.valid_query(schema, opts?)`, `req.valid_params(schema, opts?)` and
+`req.valid_body(schema, opts?)` run [`lur.validate`](#validation-lurvalidate) over client
+input and return the converted value (a fresh table, except `valid_body` may return
+`nil`; see below).
+
+| Helper | Reads |
+| --- | --- |
+| `req.valid_query` | `req.query` (and `req.query_all` for `list(...)` fields) |
+| `req.valid_params` | `req.params` |
+| `req.valid_body` | the request body, decoded by `Content-Type` |
+
+- `opts.fail_status` is an integer `400..=599`, default `400`, checked at call time. On a
+  validation failure they abort with that status, `message = "validation failed"` and
+  `data = issues`:
+  `{"error":"validation failed","data":[{"path":"limit","message":"must be <= 100"}]}`.
+- Use `fail_status = 404` for path params.
+- For an `object` schema, `list(...)` fields in `valid_query` read every value
+  (`query_all`) and other fields the last one (`query`).
+- Anything that is not a validation failure (a bad schema argument, a timeout) propagates
+  unchanged.
+- A bare `lur.validate.parse` that fails inside a handler stays a **500** on purpose: use
+  `req.valid_*` for client input.
+
+`valid_body` picks the decoder from `Content-Type`:
+
+- Only `application/json` and `*+json` types count as JSON (so `text/json` is a 415) and
+  decode as `req.json()`.
+- Urlencoded forms are validated with `list(...)` fields of an `object` schema fed from
+  `form_all`.
+- With several `Content-Type` headers the last one wins, as for `req.headers`.
+- A JSON `null` (top level or as an object field) counts as absent, as in
+  [Missing values and defaults](#missing-values-and-defaults).
+
+| Case | Status | Message | Notes |
+| --- | --- | --- | --- |
+| Any other content type, including a missing type and `multipart/*` | **415** | `unsupported content type` | `data = { content_type }` (no `data` when the header is missing) |
+| Body is not valid JSON | **400** | `invalid JSON body` | always 400, regardless of `fail_status` |
+| Empty JSON body | **400** | `invalid JSON body` | always 400, unless the schema accepts `nil` (`v.optional(...)`), in which case it returns `nil` |
+| Validation failure | `opts.fail_status` (default 400) | `validation failed` | `data = issues` |
+
+#### Server examples
 
 ```lua
+lur.serve.http("GET", "/users/:id", function(req)
+  local v = lur.validate
+  local p = req.valid_params(v.object({ id = v.int({ min = 1 }) }), { fail_status = 404 })
+  return { body = "user " .. p.id }
+end)
+
 lur.serve.http("GET", "/users", function(req)
   local v = lur.validate
   local q = req.valid_query(v.object({
@@ -492,9 +839,9 @@ lur.serve.http("POST", "/echo", function(req)
     body = lur.json.encode(data),
   }
 end)
-```
 
-On `SIGTERM`/`SIGINT`, in-flight requests and cron runs drain within `--shutdown-grace`.
+lur.serve.cron("0 * * * * *", function() lur.log.info("tick") end, { name = "minutely" })
+```
 
 ### Diagnostics
 
@@ -513,6 +860,7 @@ cargo nextest run        # tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all
 cargo bench --bench runtime
+docker compose up -d     # Postgres for tests/pg.rs (skipped locally if down)
 ```
 
 CI runs lint, tests, coverage (Codecov), and a benchmark report on every push and PR.
