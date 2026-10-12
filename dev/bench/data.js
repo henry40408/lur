@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791815241522,
+  "lastUpdate": 1791815782334,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -5117,6 +5117,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1394564,
             "range": "± 30122",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "26d7aec3de64f4b24def4b18a48aef8e1511abfa",
+          "message": "fix(docs): wrap wide tables, use display width, keep bars in quoted tables (#166)\n\n* fix(docs): wrap wide tables, use display width for CJK, keep blockquote bar on tables\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* fix(docs): read terminal width via TIOCGWINSZ and measure cells with unicode-width\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T22:32:09+08:00",
+          "tree_id": "5e2a01a7fd3ad1de0cd492a82bb4ede026dbb2c4",
+          "url": "https://github.com/henry40408/lur/commit/26d7aec3de64f4b24def4b18a48aef8e1511abfa"
+        },
+        "date": 1791815781739,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 359993,
+            "range": "± 5226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5540,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 188016,
+            "range": "± 1043",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 19610272,
+            "range": "± 124364",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3313331,
+            "range": "± 35670",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1884746,
+            "range": "± 27416",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 2047001,
+            "range": "± 13256",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2184607,
+            "range": "± 56906",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1450107,
+            "range": "± 50218",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1531945,
+            "range": "± 54964",
             "unit": "ns/iter"
           }
         ]
