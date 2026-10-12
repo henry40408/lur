@@ -1124,7 +1124,8 @@ pub(crate) fn list_field_names(schema: &Value) -> Option<Vec<String>> {
     )
 }
 
-pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
+/// `factory` is the VM's [`raise::factory`].
+pub fn install(lua: &Lua, lur: &Table, factory: &Function) -> Result<(), RunError> {
     let validate = lua.create_table().map_err(RunError::Init)?;
     install_constructors(lua, &validate)?;
 
@@ -1163,8 +1164,7 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     validate
         .set("try", run("lur.validate.try").map_err(RunError::Init)?)
         .map_err(RunError::Init)?;
-    let factory = raise::factory(lua).map_err(RunError::Init)?;
-    let parse = raise::raising(&factory, run("lur.validate.parse").map_err(RunError::Init)?)
+    let parse = raise::raising(factory, run("lur.validate.parse").map_err(RunError::Init)?)
         .map_err(RunError::Init)?;
     validate.set("parse", parse).map_err(RunError::Init)?;
 

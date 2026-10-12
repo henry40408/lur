@@ -8,6 +8,12 @@
 //! `limit`), refilled as items finish. A long list therefore never parks
 //! thousands of futures on the global semaphore (quadratic in list length),
 //! and the first error returns immediately regardless of list length.
+//!
+//! Error tables (`lur.validate`, `lur.serve.abort`) raised in a task reach
+//! the combinator flattened to a string; [`fail`] recovers the table
+//! ([`raise::recover`]) and `all`/`race`/`map` re-raise it through a
+//! [`raise::raising`] wrapper, so `pcall` around the combinator sees the
+//! table. Nothing extra runs while tasks succeed.
 
 use std::future::Future;
 use std::ops::ControlFlow;
@@ -19,8 +25,32 @@ use futures_util::stream::FuturesUnordered;
 use mlua::{Function, Lua, Table, Value};
 use tokio::sync::Semaphore;
 
-use super::argcheck;
+use super::{argcheck, raise};
 use crate::runtime::RunError;
+
+/// A task's failure: the error table it raised (recovered), or any other error.
+enum Failure {
+    Table(Table),
+    Other(mlua::Error),
+}
+
+/// Classify a task error; call it right after the task fails (see
+/// [`raise::recover`]).
+fn fail(lua: &Lua, e: mlua::Error) -> Failure {
+    match raise::recover(lua, &e) {
+        Some(t) => Failure::Table(t),
+        None => Failure::Other(e),
+    }
+}
+
+/// What a wrapped combinator's inner function returns: `(true, value)`,
+/// `(false, error_table)` for the wrapper to raise, or a plain `Err`.
+fn outcome(failure: Failure) -> mlua::Result<(bool, Value)> {
+    match failure {
+        Failure::Table(t) => Ok((false, Value::Table(t))),
+        Failure::Other(e) => Err(e),
+    }
+}
 
 /// Elements of a dense array table, or `None` when it has non-sequence keys.
 fn array_items(t: &Table) -> mlua::Result<Option<Vec<Value>>> {
@@ -97,7 +127,13 @@ async fn run_task(f: Function, sem: Option<Arc<Semaphore>>) -> mlua::Result<Valu
 }
 
 /// `max_concurrency` caps concurrently running combinator tasks per VM.
-pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result<(), RunError> {
+/// `factory` is the VM's [`raise::factory`].
+pub fn install(
+    lua: &Lua,
+    lur: &Table,
+    factory: &Function,
+    max_concurrency: Option<usize>,
+) -> Result<(), RunError> {
     // Zero would park every task until the timeout; clamp for library callers
     // (the CLI rejects it earlier).
     let max_concurrency = max_concurrency.map(|n| n.max(1));
@@ -134,21 +170,22 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
                             slots[i] = v;
                             ControlFlow::Continue(())
                         }
-                        Err(e) => ControlFlow::Break(e),
+                        Err(e) => ControlFlow::Break(fail(&lua, e)),
                     },
                 )
                 .await;
-                if let Some(e) = failed {
-                    return Err(e);
+                if let Some(f) = failed {
+                    return outcome(f);
                 }
                 let arr = lua.create_table()?;
                 for (i, v) in slots.into_iter().enumerate() {
                     arr.set(i + 1, v)?;
                 }
-                Ok(arr)
+                Ok((true, Value::Table(arr)))
             }
         })
         .map_err(RunError::Init)?;
+    let all = raise::raising(factory, all).map_err(RunError::Init)?;
     async_tbl.set("all", all).map_err(RunError::Init)?;
 
     // settled: never raises; { ok = true, value } / { ok = false, err } per task.
@@ -158,13 +195,14 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
             let sem = sem_settled.clone();
             async move {
                 let funcs = task_list(&tasks)?;
-                let mut slots: Vec<Option<Result<Value, String>>> = vec![None; funcs.len()];
+                let mut slots: Vec<Option<Result<Value, Failure>>> =
+                    std::iter::repeat_with(|| None).take(funcs.len()).collect();
                 drive(
                     funcs,
                     cap,
                     |_, f| run_task(f, sem.clone()),
                     |i, result| {
-                        slots[i] = Some(result.map_err(|e| e.to_string()));
+                        slots[i] = Some(result.map_err(|e| fail(&lua, e)));
                         ControlFlow::<()>::Continue(())
                     },
                 )
@@ -177,9 +215,13 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
                             entry.set("ok", true)?;
                             entry.set("value", value)?;
                         }
-                        Err(e) => {
+                        Err(Failure::Table(t)) => {
                             entry.set("ok", false)?;
-                            entry.set("err", e)?;
+                            entry.set("err", t)?;
+                        }
+                        Err(Failure::Other(e)) => {
+                            entry.set("ok", false)?;
+                            entry.set("err", e.to_string())?;
                         }
                     }
                     arr.set(i + 1, entry)?;
@@ -193,7 +235,7 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
     // race: the first task to settle wins, success or failure.
     let sem_race = sem.clone();
     let race = lua
-        .create_async_function(move |_, tasks: Table| {
+        .create_async_function(move |lua, tasks: Table| {
             let sem = sem_race.clone();
             async move {
                 let funcs = task_list(&tasks)?;
@@ -204,19 +246,23 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
                     funcs,
                     cap,
                     |_, f| run_task(f, sem.clone()),
-                    |_, result| ControlFlow::Break(result),
+                    |_, result| ControlFlow::Break(result.map_err(|e| fail(&lua, e))),
                 )
                 .await;
-                first.expect("a non-empty race settles")
+                match first.expect("a non-empty race settles") {
+                    Ok(v) => Ok((true, v)),
+                    Err(f) => outcome(f),
+                }
             }
         })
         .map_err(RunError::Init)?;
+    let race = raise::raising(factory, race).map_err(RunError::Init)?;
     async_tbl.set("race", race).map_err(RunError::Init)?;
 
     // any: the first success wins; raises an aggregate error if all fail.
     let sem_any = sem.clone();
     let any = lua
-        .create_async_function(move |_, tasks: Table| {
+        .create_async_function(move |lua, tasks: Table| {
             let sem = sem_any.clone();
             async move {
                 let funcs = task_list(&tasks)?;
@@ -231,6 +277,8 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
                     |_, result| match result {
                         Ok(value) => ControlFlow::Break(value),
                         Err(e) => {
+                            // Aggregated as text; still empty the slot.
+                            raise::recover(&lua, &e);
                             errors.push(e.to_string());
                             ControlFlow::Continue(())
                         }
@@ -315,22 +363,26 @@ pub fn install(lua: &Lua, lur: &Table, max_concurrency: Option<usize>) -> Result
                             slots[i] = Some(v);
                             ControlFlow::Continue(())
                         }
-                        Err(e) if !drop_errors => ControlFlow::Break(e),
-                        Err(_) => ControlFlow::Continue(()),
+                        Err(e) if !drop_errors => ControlFlow::Break(fail(&lua, e)),
+                        Err(e) => {
+                            raise::recover(&lua, &e);
+                            ControlFlow::Continue(())
+                        }
                     },
                 )
                 .await;
-                if let Some(e) = failed {
-                    return Err(e);
+                if let Some(f) = failed {
+                    return outcome(f);
                 }
                 let arr = lua.create_table()?;
                 for (n, v) in slots.into_iter().flatten().enumerate() {
                     arr.set(n + 1, v)?;
                 }
-                Ok(arr)
+                Ok((true, Value::Table(arr)))
             }
         })
         .map_err(RunError::Init)?;
+    let map = raise::raising(factory, map).map_err(RunError::Init)?;
     async_tbl.set("map", map).map_err(RunError::Init)?;
 
     lur.set("async", async_tbl).map_err(RunError::Init)?;

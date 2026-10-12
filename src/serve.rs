@@ -26,6 +26,7 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 use tokio_util::task::TaskTracker;
 use tracing::{error, info, warn};
 
+use crate::capabilities::raise;
 use crate::capabilities::serve::{AbortSlot, PendingAbort, Registry};
 use crate::runtime::{Deadline, RunError, RuntimeConfig, build_lua};
 
@@ -531,19 +532,6 @@ fn abort_response(a: PendingAbort) -> Response {
     }
 }
 
-/// Whether `e` is the error an `abort` with `message` raised. The table error
-/// reaches here flattened to its `__tostring` (the message), possibly followed
-/// by a traceback.
-fn is_abort_error(e: &mlua::Error, message: &str) -> bool {
-    match e {
-        mlua::Error::RuntimeError(s) => s == message || s.starts_with(&format!("{message}\n")),
-        mlua::Error::CallbackError { cause, .. } | mlua::Error::WithContext { cause, .. } => {
-            is_abort_error(cause, message)
-        }
-        _ => false,
-    }
-}
-
 /// Run `handler` in a fresh environment under the two-layer timeout:
 /// the deadline interrupt stops CPU-bound code, `tokio::time::timeout` drops
 /// code parked on async I/O.
@@ -560,6 +548,8 @@ async fn call_handler(
         abort.in_request = in_request;
         abort.pending = None;
     }
+    // ...and any error table a previous run left for `lur.async` to recover.
+    raise::reset(&vm.lua);
     handler
         .set_environment(fresh_env(&vm.lua).map_err(CallError::Lua)?)
         .map_err(CallError::Lua)?;
@@ -588,7 +578,7 @@ async fn call_handler(
             if matches!(at, Some(at) if Instant::now() >= at) {
                 Err(CallError::TimedOut)
             } else if let Some(p) = pending
-                && is_abort_error(&e, &p.message)
+                && raise::is_flattened(&e, &p.message)
             {
                 Err(CallError::Aborted(p))
             } else {

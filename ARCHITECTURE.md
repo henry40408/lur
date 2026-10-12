@@ -41,7 +41,7 @@ One binary, two modes, one shared core:
 | `src/capabilities/storage/` | Backend seam: `Backend`/`Transaction` enums (`Sqlite`/`Postgres`), lazy `Shared` handle, `ExecResult`; `sqlite.rs` and `postgres.rs` own all backend-specific SQL, binding, row mapping, transactions, and kv. |
 | `src/capabilities/db.rs` | `lur.db` (`exec`/`query`/`tx`) over `storage::Backend`; hands `storage::Shared` to `kv`. |
 | `src/capabilities/validate.rs` | `lur.validate`: schema nodes (opaque userdata), `parse`/`try`, issue collection; pure compute. |
-| `src/capabilities/raise.rs` | The one way to raise a *table* as a Lua error (`raising`), and give it a locked `__tostring` metatable (`error_meta`). |
+| `src/capabilities/raise.rs` | The one way to raise a *table* as a Lua error (`raising`), give it a locked `__tostring` metatable (`error_meta`), and recover it after a `lur.async` task flattened it (`recover`). |
 | `src/capabilities/kv.rs` | `lur.kv` over the backend's kv methods; owns the `IN_KV_UPDATE` reentrancy guard. |
 
 ## Shared core: `build_lua`
@@ -280,7 +280,9 @@ stopping at the first.
 Raising a table: a Rust callback's `Err` reaches Lua as userdata, so
 [`capabilities/raise.rs`](src/capabilities/raise.rs) splits it: a Rust function returns
 `(ok, value | error_table)` and a tiny Lua wrapper (made from one compiled factory chunk)
-does `error(tbl, 0)`. `pcall` therefore sees the real table, whose metatable
+does `error(tbl, 0)`. The factory is compiled once per process and loaded once per VM by
+`capabilities::install`, which hands it to every capability that raises tables.
+`pcall` therefore sees the real table, whose metatable
 (`error_meta`) is read-only with `__metatable = false`, so scripts cannot rewrite it for a
 pooled VM. Uncaught, the error's `__tostring` (its `message`) is what the CLI prints.
 `lur.serve.abort` reuses `raising`/`error_meta` (below).
@@ -327,16 +329,24 @@ is never held across an await. Decode errors map to `abort(400, "invalid JSON bo
 (memory errors propagate); an empty JSON body is handed to `try` as `nil` and, if that
 fails, answered with the same 400 rather than the validation message.
 
-Known limitation: raised inside a `lur.async` task, the table is a string to the combinator's
-caller (as for validation errors), so a `pcall` around the combinator cannot read `.status`.
-Uncaught, the slot still matches by message, so the response is still the abort.
+### Error tables across `lur.async` tasks
 
-Known limitation: a table error that crosses Rust loses its table-ness. `lur.async` runs
-tasks via `call_async`, where mlua stringifies the error value, so a validation error raised
-inside a task reaches the combinator's caller as a string (its `__tostring` message).
-Preserving it needs an `xpcall` trampoline around every task, which measured +24–49% on
-`vm_cold_start`/`async_map`/`async.all`, so it was dropped; `try` returns the table without
-raising and works inside tasks.
+`lur.async` runs each task in its own thread via `call_async`. When the thread fails, mlua
+renders the error value with `luaL_tolstring` plus a traceback and keeps only that text
+(`Error::RuntimeError`), so the combinator never sees the table. The rendering does call the
+table's `__tostring`, and for error tables that is `error_meta`'s Rust function: besides
+returning `message`, it records `(table, message)` in the VM's `raise::Flattened` slot
+(`lua` app data). Right after a task fails (synchronously, in `drive`'s `on_result`, before
+any other Lua runs) the combinator calls `raise::recover`, which *takes* the slot and returns
+the table if the error text is that `message` (alone or followed by a traceback).
+`all`/`race`/`map` are `raising` wrappers, so a recovered table is re-raised with
+`error(tbl, 0)` and `pcall` around the combinator gets the same table (`.status`, `.issues`);
+`settled` puts it in `err`; `any` still aggregates failures as text. Other errors, including
+plain script tables without `error_meta`, pass through as before. Nesting works because the
+re-raise is flattened (and recorded) again by the outer task. Nothing runs while tasks
+succeed; the cost is one Lua wrapper frame per `all`/`race`/`map` call and a slot reset per
+run (`Runtime::guarded`, `call_handler`), so a table never outlives its run on a pooled VM.
+The `AbortSlot` match above still decides the HTTP response for an uncaught abort.
 
 ## Async core
 
@@ -344,7 +354,8 @@ raising and works inside tasks.
 combinators `all`/`race`/`any`/`settled` over arrays of zero-arg functions. `--max-concurrency`
 is an `Arc<Semaphore>`; each task takes an owned permit before running. Lua still runs one step
 at a time — tasks interleave only at I/O awaits; `race`/`any` drop (cancel) the remaining
-futures on settlement.
+futures on settlement. Error tables raised in a task keep their identity (see "Error tables
+across `lur.async` tasks").
 
 Every combinator goes through one `drive` helper: a `FuturesUnordered` holding at most a
 *window* of futures (`--max-concurrency`, and for `map` also `opts.limit`), refilled as items

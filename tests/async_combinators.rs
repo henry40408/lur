@@ -356,3 +356,119 @@ fn map_rejects_bad_arguments() {
         );
     }
 }
+
+// Error tables (`lur.validate`, `lur.serve.abort`) raised in a task reach the
+// combinator's caller as the same table.
+
+/// `bad()` raises a validation error table; `kind(e)` is its kind or the type.
+const TABLE_ERR_PRELUDE: &str = "local v = lur.validate\n\
+     local function bad(s) return v.parse(v.int(), s or 'x') end\n\
+     local function kind(e) return type(e) == 'table' and e.kind or type(e) end\n";
+
+fn run_table_err(src: &str) {
+    run_ok(&format!("{TABLE_ERR_PRELUDE}{src}"));
+}
+
+#[test]
+fn validation_error_table_survives_all_race_map() {
+    run_table_err(
+        "local ok, e = pcall(lur.async.all, { function() return 1 end, function() return bad() end })\n\
+         assert(not ok and kind(e) == 'validation', kind(e))\n\
+         assert(e.issues[1].path == '' and tostring(e) == 'validation failed: must be an integer (got \"x\")', tostring(e))\n\
+         ok, e = pcall(lur.async.race, { function() return bad() end, function() lur.async.sleep(50) return 1 end })\n\
+         assert(not ok and kind(e) == 'validation', 'race: ' .. kind(e))\n\
+         ok, e = pcall(lur.async.map, { '1', 'y' }, function(s) return bad(s) end)\n\
+         assert(not ok and kind(e) == 'validation', 'map: ' .. kind(e))\n\
+         assert(e.issues[1].message == 'must be an integer (got \"y\")', e.issues[1].message)\n\
+         -- after a yield inside the task too\n\
+         ok, e = pcall(lur.async.all, { function() lur.async.sleep(5) return bad() end })\n\
+         assert(not ok and kind(e) == 'validation', 'after sleep: ' .. kind(e))",
+    );
+}
+
+#[test]
+fn settled_puts_the_error_table_in_err() {
+    run_table_err(
+        "local r = lur.async.settled({\n\
+         \tfunction() return bad() end,\n\
+         \tfunction() error('boom') end,\n\
+         \tfunction() return 3 end,\n\
+         })\n\
+         assert(r[1].ok == false and kind(r[1].err) == 'validation', kind(r[1].err))\n\
+         assert(r[2].ok == false and type(r[2].err) == 'string' and r[2].err:find('boom'))\n\
+         assert(r[3].ok and r[3].value == 3)",
+    );
+}
+
+#[test]
+fn any_still_aggregates_failures_as_text() {
+    run_table_err(
+        "assert(lur.async.any({ function() return bad() end, function() return 2 end }) == 2)\n\
+         local ok, e = pcall(lur.async.any, { function() return bad() end, function() return bad('z') end })\n\
+         assert(not ok and type(e) ~= 'table')\n\
+         local s = tostring(e)\n\
+         assert(s:find('all 2 tasks failed', 1, true) and s:find('(got \"z\")', 1, true), s)",
+    );
+}
+
+#[test]
+fn error_table_survives_nested_combinators() {
+    run_table_err(
+        "local ok, e = pcall(lur.async.map, { 1, 2 }, function(i)\n\
+         \treturn lur.async.race({ function()\n\
+         \t\treturn lur.async.all({ function() lur.async.sleep(i) if i == 2 then bad('n') end return i end })\n\
+         \tend })\n\
+         end)\n\
+         assert(not ok and kind(e) == 'validation', kind(e))\n\
+         assert(e.issues[1].message == 'must be an integer (got \"n\")')\n\
+         local r = lur.async.settled({ function() return lur.async.all({ function() return bad() end }) end })\n\
+         assert(kind(r[1].err) == 'validation')",
+    );
+}
+
+#[test]
+fn caught_then_reraised_table_survives() {
+    run_table_err(
+        "local ok, e = pcall(lur.async.all, { function()\n\
+         \tlocal ok, err = pcall(bad)\n\
+         \tlur.async.sleep(5)\n\
+         \terror(err)\n\
+         end, function() local _ = pcall(bad, 'other') return 1 end })\n\
+         assert(not ok and kind(e) == 'validation', kind(e))\n\
+         assert(e.issues[1].message == 'must be an integer (got \"x\")', e.issues[1].message)",
+    );
+}
+
+#[test]
+fn non_table_errors_are_unchanged() {
+    run_table_err(
+        "local ok, e = pcall(lur.async.all, { function() error('plain') end })\n\
+         assert(not ok and typeof(e) == 'error' and tostring(e):find('plain'), typeof(e))\n\
+         -- a plain table without lur's error metatable still arrives flattened\n\
+         ok, e = pcall(lur.async.all, { function() error({ code = 1 }) end })\n\
+         assert(not ok and typeof(e) == 'error', typeof(e))\n\
+         -- a task that rendered an error table, then raised a string\n\
+         ok, e = pcall(lur.async.all, { function()\n\
+         \tlocal _, err = pcall(bad)\n\
+         \terror('other: ' .. tostring(err))\n\
+         end })\n\
+         assert(not ok and typeof(e) == 'error' and tostring(e):find('other: validation failed', 1, true))\n\
+         -- a recorded table is handed back at most once: a dropped map error\n\
+         -- does not turn a later string error with the same text into a table\n\
+         local r = lur.async.map({ 'x' }, function(s) return bad(s) end, { drop_errors = true })\n\
+         assert(#r == 0)\n\
+         ok, e = pcall(lur.async.all, { function() error('validation failed: must be an integer (got \"x\")', 0) end })\n\
+         assert(not ok and typeof(e) == 'error', typeof(e))",
+    );
+}
+
+#[test]
+fn uncaught_error_table_from_a_task_reports_its_message() {
+    let msg = run_err(&format!(
+        "{TABLE_ERR_PRELUDE}lur.async.all({{ function() return bad() end }})"
+    ));
+    assert!(
+        msg.contains("validation failed: must be an integer (got \"x\")"),
+        "{msg}"
+    );
+}

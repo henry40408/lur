@@ -157,24 +157,47 @@ fn abort_does_not_leak_across_requests_on_one_vm() {
 }
 
 #[test]
-fn abort_inside_async_task_ends_as_an_error_not_a_table() {
+fn abort_inside_async_task_reaches_the_caller_as_the_table() {
     let s = serve(
         "lur.serve.http('GET', '/a', function()\n\
-         \tlocal ok, e = pcall(lur.async.all, { function() lur.serve.abort(400, 'in task') end })\n\
-         \treturn { body = type(e) .. ':' .. tostring(e) }\n\
+         \tlocal ok, e = pcall(lur.async.all, { function() lur.serve.abort(409, 'in task', { n = 1 }) end })\n\
+         \treturn { body = type(e) .. ':' .. e.kind .. ':' .. e.status .. ':' .. e.message .. ':' .. e.data.n }\n\
          end)\n\
          lur.serve.http('GET', '/raw', function()\n\
-         \tlur.async.all({ function() lur.serve.abort(400, 'in task') end })\n\
+         \tlur.async.all({ function() lur.async.sleep(1) lur.serve.abort(422, 'in task') end })\n\
+         end)\n\
+         lur.serve.http('GET', '/nested', function()\n\
+         \tlur.async.map({ 1, 2 }, function(i)\n\
+         \t\treturn lur.async.race({ function()\n\
+         \t\t\treturn lur.async.all({ function() if i == 2 then lur.serve.abort(404, 'deep') end return i end })\n\
+         \t\tend })\n\
+         \tend)\n\
+         end)\n\
+         lur.serve.http('GET', '/settled', function()\n\
+         \tlocal r = lur.async.settled({ function() lur.serve.abort(403, 'no') end })\n\
+         \treturn { body = r[1].err.kind .. ':' .. r[1].err.status }\n\
+         end)\n\
+         lur.serve.http('GET', '/rethrow', function()\n\
+         \tlocal ok, e = pcall(lur.async.all, { function() lur.serve.abort(401, 'who') end })\n\
+         \terror(e)\n\
          end)",
     );
-    // Known limitation: the combinator's caller does not get the table.
     let r = get(&s, "/a", "");
-    assert!(body(&r).contains("in task"), "{}", body(&r));
-    assert!(!body(&r).starts_with("table:"), "{}", body(&r));
-    // Uncaught, the stash still identifies it by message, so it stays a 400.
+    assert_eq!(r.status, 200);
+    assert_eq!(body(&r), "table:abort:409:in task:1");
+    // Uncaught, it is still the abort's response.
     let r = get(&s, "/raw", "");
-    assert_eq!(r.status, 400);
+    assert_eq!(r.status, 422);
     assert_eq!(body(&r), r#"{"error":"in task"}"#);
+    let r = get(&s, "/nested", "");
+    assert_eq!(r.status, 404);
+    assert_eq!(body(&r), r#"{"error":"deep"}"#);
+    let r = get(&s, "/settled", "");
+    assert_eq!(body(&r), "abort:403");
+    // Caught and re-raised (as the table), it is honored too.
+    assert_eq!(get(&s, "/rethrow", "").status, 401);
+    // The pooled VM serves the next request normally.
+    assert_eq!(get(&s, "/a", "").status, 200);
 }
 
 #[test]
