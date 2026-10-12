@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791817291201,
+  "lastUpdate": 1791817783957,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -5285,6 +5285,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1393101,
             "range": "± 18174",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6d803b32946413da8af2d19dbb409a6d3f95516e",
+          "message": "fix(docs): re-open bold/emphasis after the quote prefix on continuation lines (#168)\n\nThe prefix's RESET cancelled an inline style open across a soft or hard\nbreak inside a blockquote, so the continued text lost its style.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T23:05:49+08:00",
+          "tree_id": "9575f615f2f4980e32ee6ce5b064cff336ee2873",
+          "url": "https://github.com/henry40408/lur/commit/6d803b32946413da8af2d19dbb409a6d3f95516e"
+        },
+        "date": 1791817782871,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 398351,
+            "range": "± 2462",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 6116,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 183979,
+            "range": "± 1576",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 21360855,
+            "range": "± 379936",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3650836,
+            "range": "± 27756",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1932841,
+            "range": "± 13993",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1986723,
+            "range": "± 25161",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2223719,
+            "range": "± 44708",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1280874,
+            "range": "± 22379",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1372144,
+            "range": "± 19995",
             "unit": "ns/iter"
           }
         ]
