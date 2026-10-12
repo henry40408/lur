@@ -300,7 +300,8 @@ local ok, err = v.try(v.int({ max = 10 }), "11")  -- false, err.issues[1].messag
   `lines()` iterates newline-stripped lines.
 - **`lur.stdout`** — `write(bytes)`, `flush()`. Raw bytes, no implicit newline.
 - **`lur.args`** — `positional` (1-indexed array) and `flags` (`--name value`/
-  `--name=value` → `"value"`, bare `--flag` → `true`).
+  `--name=value` → `"value"`, bare `--flag` → `true`)). Read-only, like every
+  `lur.*` table; copy into a local table to modify.
 
 ### Capabilities (policy-gated)
 

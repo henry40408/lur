@@ -1,5 +1,6 @@
 //! The flat `lur.*` capability table. [`install`] must run before
-//! `sandbox(true)` freezes the globals; it also freezes every nested table.
+//! `sandbox(true)` freezes the globals; it also freezes each direct child of
+//! `lur` (deeper tables are frozen by the capability that creates them).
 
 pub(crate) mod argcheck;
 pub mod args;
