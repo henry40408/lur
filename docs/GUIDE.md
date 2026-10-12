@@ -280,6 +280,28 @@ assert(lur.state.add("once", "world") == false)
 assert(lur.state.get("once") == "hello")
 ```
 
+Writes take `{ ttl_ms = n, evictable = bool }` as the last argument, with the same
+expiry rules as `lur.kv` (`set`/`add` clear it, `cas`/`update`/`incr`/`decr` keep it,
+`incr` sets it only when absent unless `renew_ttl = true`); `ttl(key) → ms, exists`.
+`fetch(key, { ttl_ms, stale_ms? }, fn) → value, "hit" | "miss" | "stale"` is a cache: `fn`
+runs on a miss (it may await I/O; it is not retried), its value is stored as evictable, and
+if `fn` raises while a value within `stale_ms` of expiry exists, that value is returned
+as `"stale"` instead. Only `evictable` entries are dropped when `--state-max-entries` /
+`--state-max-bytes` is reached; a write that cannot fit raises.
+
+```lua
+local calls = 0
+local function load() calls = calls + 1; return "page" end
+local v, status = lur.state.fetch("page", { ttl_ms = 60000 }, load)
+assert(v == "page" and status == "miss")
+v, status = lur.state.fetch("page", { ttl_ms = 60000 }, load)
+assert(v == "page" and status == "hit" and calls == 1)
+
+lur.state.incr("window", 1, { ttl_ms = 60000 })  -- fixed-window counter
+local ms, exists = lur.state.ttl("window")
+assert(exists and ms > 0)
+```
+
 ## Capabilities (policy-gated)
 
 ### lur.fs

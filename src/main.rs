@@ -86,6 +86,14 @@ struct CommonFlags {
     #[arg(long, value_name = "SIZE", default_value_t = DEFAULT_HTTP_CACHE_MAX_BYTES, value_parser = parse_size)]
     http_cache_max_bytes: usize,
 
+    /// Max lur.state entries; only `evictable` ones are dropped for room, else the write raises (0 = unlimited).
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    state_max_entries: usize,
+
+    /// Max total size of lur.state (e.g. `64m`; 0 = unlimited).
+    #[arg(long, value_name = "SIZE", default_value_t = 0, value_parser = parse_size)]
+    state_max_bytes: usize,
+
     /// Alias for `--loose`: full fs, env, and network access, private IPs included.
     #[arg(short = 'A', long = "allow-all")]
     allow_all: bool,
@@ -292,7 +300,12 @@ fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig,
         db_path: flags.db.clone(),
         pool_size: 1,
         per_event_timeout: None,
-        state: std::sync::Arc::default(),
+        state: Arc::new(lur::capabilities::state::StateStore::with_limits(
+            lur::capabilities::state::Limits {
+                max_entries: flags.state_max_entries,
+                max_bytes: flags.state_max_bytes,
+            },
+        )),
         http_cache: Arc::new(HttpCache::with_limits(
             flags.http_cache_max_entries,
             flags.http_cache_max_bytes,

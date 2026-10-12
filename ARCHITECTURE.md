@@ -250,6 +250,15 @@ never reuses a version a reader might hold (prevents ABA) and deleted keys leave
 behind (an absent key is version 0). `update` is an optimistic CAS loop whose user function
 runs with no host lock held; conflicts retry.
 
+Entries carry an optional expiry (`Instant`, lazily filtered plus a once-a-minute sweep on
+write) and an `evictable` flag. Only evictable entries are in the recency index
+(`order: tick → key`), so `--state-max-entries`/`--state-max-bytes` can never drop a counter
+or a lock: a write that does not fit after dropping expired and then least-recently-used
+evictable entries raises and changes nothing. An entry past `expires` but inside `stale_until`
+is *stale*: it reads as absent (version 0) everywhere except `fetch`, which falls back to it
+when its loader raises. `fetch` is the one async function here; like `update`, its function
+runs with no lock held, but unlike `update` it is never retried (it has side effects).
+
 ## Async core
 
 [`capabilities/async_ops.rs`](src/capabilities/async_ops.rs): `lur.async.sleep` and
