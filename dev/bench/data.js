@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791810452978,
+  "lastUpdate": 1791814793258,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4949,6 +4949,90 @@ window.BENCHMARK_DATA = {
             "name": "state_fetch_concurrent_miss_x16",
             "value": 2165610,
             "range": "± 40915",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5d4f0732dfef4bcf6ac3cbc2a935fbab322913fa",
+          "message": "refactor(state): track single-flight leaders with a resume depth instead of per-task ids (#164)\n\n* refactor(state): track parked fetch leaders by coroutine resume depth\n\nReplace the per-task POLLING/TaskGroup tracking from #163 with\ncoroutine.resume/wrap replacements that count Lua-level resume depth per\nVM. A flight records the depth it started at; when the resume at depth d\nreturns, for any reason, the VM's flights at depth >= d hand off. This\nalso fixes the cases #163 left waiting: a leader parked inside a\nstill-running sibling task, and one whose coroutine moved between\nsibling tasks.\n\nThe replacements are Luau's lcorolib functions redone over the C API\n(state/resume.rs, the crate's only unsafe), so errors, luaL_where\nprefixes, tracebacks and debug.info match the builtins; tests/coroutine.rs\ncompares both. A caller waiting on a leader of its own VM collects\ngarbage once a second, so a leader killed by a memory error in mlua's\npoll loop hands off. async_ops.rs returns to its pre-#163 state.\n\nBenchmarks (6 interleaved rounds vs main): coroutine_resume_10k +1.5%,\ncoroutine_wrap_generator_10k +4.4%, vm_cold_start -0.6%, async_* -2%\nto -3%, state_fetch_* within noise.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n* docs(state): record both benchmark runs and the dead-leader cases\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* test(state): pin the Luau and mlua-sys versions resume.rs was checked against\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T22:16:01+08:00",
+          "tree_id": "2cb39f34c02013823128468645a0a2b9a5b4b187",
+          "url": "https://github.com/henry40408/lur/commit/5d4f0732dfef4bcf6ac3cbc2a935fbab322913fa"
+        },
+        "date": 1791814792232,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 396884,
+            "range": "± 9693",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 6053,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 186518,
+            "range": "± 751",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 19519328,
+            "range": "± 171112",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3451899,
+            "range": "± 20828",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1850962,
+            "range": "± 34740",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1942302,
+            "range": "± 20598",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2203803,
+            "range": "± 56738",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1227825,
+            "range": "± 21720",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1375376,
+            "range": "± 18928",
             "unit": "ns/iter"
           }
         ]
