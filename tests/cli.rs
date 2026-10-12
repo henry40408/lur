@@ -328,7 +328,7 @@ fn max_concurrency_zero_is_rejected() {
         .arg(fixture("ok.lua"))
         .assert()
         .failure()
-        .stderr(predicate::str::contains("--max-concurrency"));
+        .stderr(predicate::str::contains("must be at least 1"));
 }
 
 #[test]

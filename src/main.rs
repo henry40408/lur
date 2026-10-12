@@ -222,7 +222,7 @@ fn parse_max_concurrency(s: &str) -> Result<usize, String> {
     match s.parse::<usize>() {
         Ok(0) => Err("must be at least 1".to_owned()),
         Ok(n) => Ok(n),
-        Err(e) => Err(format!("invalid number '{s}': {e}")),
+        Err(e) => Err(format!("invalid number: {e}")),
     }
 }
 
