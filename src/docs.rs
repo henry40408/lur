@@ -311,6 +311,84 @@ pub fn terminal_width() -> Option<usize> {
     Some(cols.unwrap_or(80))
 }
 
+/// Open container while rendering: blockquotes and lists nest in any order, and
+/// the line prefix is the composition of the whole stack.
+#[derive(Clone, Copy, PartialEq)]
+enum Ctx {
+    Quote,
+    List,
+}
+
+/// Line prefix for a block inside a blockquote: `margin`, then one bar per
+/// quote and two spaces per list, outermost first. Entries before `from` are
+/// skipped (already on the line); `bullet` swaps the innermost list's indent
+/// for the `- ` marker.
+fn compose_prefix(stack: &[Ctx], from: usize, margin: usize, color: bool, bullet: bool) -> String {
+    let mut s = String::new();
+    if from == 0 {
+        s.push_str(&" ".repeat(margin));
+    }
+    for (i, c) in stack.iter().enumerate().skip(from) {
+        match c {
+            Ctx::Quote => {
+                if color {
+                    s.push_str(DIM);
+                }
+                s.push('\u{2502}');
+                if color {
+                    s.push_str(RESET);
+                }
+                s.push(' ');
+            }
+            Ctx::List if bullet && i + 1 == stack.len() => s.push_str("- "),
+            Ctx::List => s.push_str("  "),
+        }
+    }
+    s
+}
+
+/// Terminal width of [`compose_prefix`] output.
+fn prefix_cols(stack: &[Ctx], margin: usize) -> usize {
+    margin + 2 * stack.len()
+}
+
+/// Bar-only line separating two blocks of the same quote.
+fn quote_separator(stack: &[Ctx], margin: usize, color: bool) -> String {
+    let mut s = compose_prefix(stack, 0, margin, color, false);
+    s.truncate(s.trim_end_matches(' ').len());
+    s.push('\n');
+    s
+}
+
+/// Where an item marker was just written: `(out.len(), index of its list)`.
+type OpenMarker = Option<(usize, usize)>;
+
+/// Start a block inside a blockquote: finish the previous line, add a bar-only
+/// separator unless this is the container's first block, then write the prefix
+/// (just the part after the marker when the block shares the marker's line).
+fn start_quote_block(
+    out: &mut String,
+    stack: &[Ctx],
+    margin: usize,
+    color: bool,
+    first: bool,
+    open: OpenMarker,
+) {
+    if let Some((len, idx)) = open
+        && len == out.len()
+    {
+        out.push_str(&compose_prefix(stack, idx + 1, margin, color, false));
+        return;
+    }
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if !first {
+        out.push_str(&quote_separator(stack, margin, color));
+    }
+    out.push_str(&compose_prefix(stack, 0, margin, color, false));
+}
+
 /// Glamour-style terminal rendering. Without `color`, the structure (heading
 /// `#` prefixes, `│ ` code frame, indentation) stays but no escapes are emitted.
 pub fn render(markdown: &str, color: bool) -> String {
@@ -325,8 +403,19 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
     let mut list_depth: usize = 0;
     let mut margin: usize = 0; // left indent of the current section's body
     let mut in_code = false;
-    let mut in_blockquote = false;
     let mut heading_level: usize = 0; // 0 = not in a heading
+
+    // Open blockquotes and lists, outermost first. Outside any quote the
+    // original list-only layout rules apply; inside one, every block is
+    // prefixed with the composed stack.
+    let mut stack: Vec<Ctx> = Vec::new();
+    let mut quotes: usize = 0;
+    // No block written yet in the innermost quote/item (no separator needed).
+    let mut first = true;
+    let mut open: OpenMarker = None;
+    let mut code_fresh = false; // next code line is the block's first
+    let mut para_end: usize = usize::MAX; // out.len() right after a paragraph
+    let mut prev_loose = false; // the last finished item ended with a paragraph
 
     // Table state: finished rows, the row being built, and the output buffer
     // parked while a cell collects its text.
@@ -338,19 +427,21 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
         match ev {
             Event::Start(Tag::Table(_)) => {
                 rows.clear();
-                if in_blockquote {
-                    // The bar was pushed at the quote start; the table repeats
-                    // it on every line, so drop the lone one here.
-                    let bar = format!("{}{}\u{2502}{} ", " ".repeat(margin), st(DIM), st(RESET));
-                    if let Some(stripped) = out.strip_suffix(&bar) {
-                        out.truncate(stripped.len());
+                if quotes > 0 {
+                    start_quote_block(&mut out, &stack, margin, color, first, open);
+                    // render_table writes the prefix on every line itself.
+                    let p = compose_prefix(&stack, 0, margin, color, false);
+                    if out.ends_with(&p) {
+                        out.truncate(out.len() - p.len());
                     }
-                }
-                if !out.is_empty() && !out.ends_with('\n') {
-                    out.push('\n');
-                }
-                if !in_blockquote && list_depth == 0 && !out.ends_with("\n\n") {
-                    out.push('\n');
+                    first = false;
+                } else {
+                    if !out.is_empty() && !out.ends_with('\n') {
+                        out.push('\n');
+                    }
+                    if list_depth == 0 && !out.ends_with("\n\n") {
+                        out.push('\n');
+                    }
                 }
             }
             Event::Start(Tag::TableCell) => parked = std::mem::take(&mut out),
@@ -360,9 +451,11 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
             }
             Event::End(TagEnd::TableHead | TagEnd::TableRow) => rows.push(std::mem::take(&mut row)),
             Event::End(TagEnd::Table) => {
-                let (prefix, prefix_width) = if in_blockquote {
-                    let bar = format!("{}{}\u{2502}{} ", " ".repeat(margin), st(DIM), st(RESET));
-                    (bar, margin + 2)
+                let (prefix, prefix_width) = if quotes > 0 {
+                    (
+                        compose_prefix(&stack, 0, margin, color, false),
+                        prefix_cols(&stack, margin),
+                    )
                 } else {
                     let indent = margin + list_depth * 2;
                     (" ".repeat(indent), indent)
@@ -374,8 +467,13 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
                 let lvl = level as usize;
                 heading_level = lvl;
                 margin = (lvl.saturating_sub(1)) * 2;
-                out.push('\n');
-                out.push_str(&" ".repeat(margin));
+                if quotes > 0 {
+                    start_quote_block(&mut out, &stack, margin, color, first, open);
+                    first = false;
+                } else {
+                    out.push('\n');
+                    out.push_str(&" ".repeat(margin));
+                }
                 if lvl == 1 {
                     out.push_str(st(H1));
                     out.push(' '); // bar padding
@@ -394,40 +492,73 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
                 heading_level = 0;
             }
             Event::Start(Tag::Paragraph) => {
-                if !in_blockquote && !out.ends_with("- ") {
+                if quotes > 0 {
+                    start_quote_block(&mut out, &stack, margin, color, first, open);
+                    first = false;
+                } else if !out.ends_with("- ") {
                     out.push_str(&" ".repeat(margin));
                 }
             }
             Event::Start(Tag::Strong | Tag::Emphasis) => out.push_str(st(BOLD)),
             Event::End(TagEnd::Strong | TagEnd::Emphasis) => out.push_str(st(RESET)),
             Event::Start(Tag::List(_)) => {
-                if list_depth == 0 && !out.is_empty() && !out.ends_with("\n\n") {
+                if quotes > 0 {
+                    let marker = open.is_some_and(|(len, _)| len == out.len());
+                    if !marker {
+                        if !out.is_empty() && !out.ends_with('\n') {
+                            out.push('\n');
+                        }
+                        if !first && stack.last() == Some(&Ctx::Quote) {
+                            out.push_str(&quote_separator(&stack, margin, color));
+                        }
+                    }
+                } else if list_depth == 0 && !out.is_empty() && !out.ends_with("\n\n") {
                     if !out.ends_with('\n') {
                         out.push('\n');
                     }
                     out.push('\n');
                 }
+                stack.push(Ctx::List);
                 list_depth += 1;
+                first = true;
             }
             Event::End(TagEnd::List(_)) => {
+                stack.pop();
                 list_depth = list_depth.saturating_sub(1);
-                if list_depth == 0 {
+                if quotes == 0 && list_depth == 0 {
                     out.push('\n');
                 }
+                first = false;
             }
             Event::Start(Tag::Item) => {
-                out.push_str(&" ".repeat(margin + (list_depth.saturating_sub(1)) * 2));
-                out.push_str("- ");
+                if quotes > 0 {
+                    if !out.is_empty() && !out.ends_with('\n') {
+                        out.push('\n');
+                    }
+                    if prev_loose && !first {
+                        out.push_str(&quote_separator(&stack, margin, color));
+                    }
+                    out.push_str(&compose_prefix(&stack, 0, margin, color, true));
+                } else {
+                    out.push_str(&" ".repeat(margin + (list_depth.saturating_sub(1)) * 2));
+                    out.push_str("- ");
+                }
+                open = Some((out.len(), stack.len() - 1));
+                first = true;
             }
             Event::Start(Tag::BlockQuote(_)) => {
-                in_blockquote = true;
-                out.push_str(&" ".repeat(margin));
-                out.push_str(st(DIM));
-                out.push('\u{2502}');
-                out.push_str(st(RESET));
-                out.push(' ');
+                stack.push(Ctx::Quote);
+                quotes += 1;
+                first = true;
             }
-            Event::Start(Tag::CodeBlock(_)) => in_code = true,
+            Event::Start(Tag::CodeBlock(_)) => {
+                in_code = true;
+                if quotes > 0 {
+                    start_quote_block(&mut out, &stack, margin, color, first, open);
+                    first = false;
+                    code_fresh = true;
+                }
+            }
             Event::End(TagEnd::CodeBlock) => {
                 in_code = false;
                 out.push('\n');
@@ -441,8 +572,16 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
                 if in_code {
                     for line in text.split_inclusive('\n') {
                         let body = line.strip_suffix('\n').unwrap_or(line);
-                        out.push('\n');
-                        out.push_str(&" ".repeat(margin));
+                        if quotes > 0 {
+                            if !code_fresh {
+                                out.push('\n');
+                                out.push_str(&compose_prefix(&stack, 0, margin, color, false));
+                            }
+                            code_fresh = false;
+                        } else {
+                            out.push('\n');
+                            out.push_str(&" ".repeat(margin));
+                        }
                         out.push_str(st(DIM));
                         out.push('\u{2502}');
                         out.push_str(st(RESET));
@@ -453,16 +592,45 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
                     out.push_str(&text);
                 }
             }
-            Event::End(TagEnd::Paragraph | TagEnd::Item) => out.push('\n'),
-            Event::End(TagEnd::BlockQuote(_)) => {
-                in_blockquote = false;
+            Event::End(TagEnd::Paragraph) => {
                 out.push('\n');
+                para_end = out.len();
+            }
+            Event::End(TagEnd::Item) => {
+                // An item that ended with a paragraph is loose: the next item
+                // gets a blank (bar-only, in a quote) line before it.
+                prev_loose = out.len() == para_end;
+                if !out.ends_with('\n') || quotes == 0 {
+                    out.push('\n');
+                }
+                open = None;
+                first = false;
+            }
+            Event::End(TagEnd::BlockQuote(_)) => {
+                stack.pop();
+                quotes = quotes.saturating_sub(1);
+                if quotes == 0 {
+                    out.push('\n');
+                }
+                first = false;
             }
             Event::SoftBreak | Event::HardBreak => {
                 out.push('\n');
-                out.push_str(&" ".repeat(margin + list_depth * 2));
+                if quotes > 0 {
+                    out.push_str(&compose_prefix(&stack, 0, margin, color, false));
+                } else {
+                    out.push_str(&" ".repeat(margin + list_depth * 2));
+                }
             }
-            Event::Rule => out.push_str("\n---\n"),
+            Event::Rule => {
+                if quotes > 0 {
+                    start_quote_block(&mut out, &stack, margin, color, first, open);
+                    first = false;
+                    out.push_str("---\n");
+                } else {
+                    out.push_str("\n---\n");
+                }
+            }
             _ => {}
         }
     }
@@ -653,7 +821,7 @@ mod table_tests {
         let table: Vec<&str> = out
             .lines()
             .filter(|l| !l.contains("note"))
-            .filter(|l| !l.trim().is_empty())
+            .filter(|l| !l.trim().is_empty() && *l != "\u{2502}")
             .collect();
         assert_eq!(table.len(), 4, "{out:?}");
         for l in &table {
@@ -665,6 +833,103 @@ mod table_tests {
         let wide = "> | k | v |\n> | --- | --- |\n> | a | one two three four five six seven eight nine ten |\n";
         for l in render_width(wide, false, Some(30)).lines() {
             assert!(visible_len(l) <= 30, "{l:?}");
+        }
+    }
+
+    fn lines(md: &str, width: Option<usize>) -> Vec<String> {
+        render_width(md, false, width)
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn nested_quote_table_carries_one_bar_per_level() {
+        let md = "> > | k | v |\n> > | - | - |\n> > | a | b |\n";
+        assert_eq!(
+            lines(md, None),
+            ["│ │ k  v", "│ │ ────", "│ │ a  b"],
+            "{md:?}"
+        );
+    }
+
+    #[test]
+    fn list_in_quote_with_table_and_paragraph() {
+        let md = "> - item\n>\n>   | k | v |\n>   | - | - |\n>   | a | b |\n>\n> after\n";
+        assert_eq!(
+            lines(md, None),
+            [
+                "│ - item",
+                "│",
+                "│   k  v",
+                "│   ────",
+                "│   a  b",
+                "│",
+                "│ after"
+            ]
+        );
+    }
+
+    #[test]
+    fn paragraph_after_table_in_quote_keeps_bar() {
+        let md = "> | k | v |\n> | - | - |\n> | a | b |\n>\n> after\n";
+        assert_eq!(
+            lines(md, None),
+            ["│ k  v", "│ ────", "│ a  b", "│", "│ after"]
+        );
+    }
+
+    #[test]
+    fn multi_line_paragraph_in_quote_keeps_bar() {
+        let md = "> one\n> two\n>\n> three\n> four\n";
+        assert_eq!(
+            lines(md, None),
+            ["│ one", "│ two", "│", "│ three", "│ four"]
+        );
+    }
+
+    #[test]
+    fn code_fence_in_quote_keeps_bar() {
+        let md = "> before\n>\n> ```lua\n> local x = 1\n> local y = 2\n> ```\n>\n> after\n";
+        assert_eq!(
+            lines(md, None),
+            [
+                "│ before",
+                "│",
+                "│ │ local x = 1",
+                "│ │ local y = 2",
+                "│",
+                "│ after"
+            ]
+        );
+    }
+
+    #[test]
+    fn quote_inside_list_item() {
+        let md = "- item\n\n  > quoted\n  > more\n\n  tail\n- next\n";
+        let out = lines(md, None);
+        assert_eq!(out[0], "- item", "{out:?}");
+        assert!(out.contains(&"  │ quoted".to_owned()), "{out:?}");
+        assert!(out.contains(&"  │ more".to_owned()), "{out:?}");
+        assert!(out.iter().any(|l| l.ends_with("- next")), "{out:?}");
+        // A quote directly after the marker shares its line.
+        let md = "- > quoted\n  > more\n";
+        assert_eq!(lines(md, None), ["- │ quoted", "  │ more"]);
+    }
+
+    #[test]
+    fn loose_list_in_quote_keeps_bars_between_items() {
+        let md = "> - one\n>\n> - two\n>\n> after\n";
+        assert_eq!(lines(md, None), ["│ - one", "│", "│ - two", "│", "│ after"]);
+    }
+
+    #[test]
+    fn narrow_width_wraps_inside_nested_quote() {
+        let md = "> > | k | v |\n> > | - | - |\n> > | a | one two three four five six seven eight nine ten |\n";
+        let out = lines(md, Some(24));
+        assert!(out.len() > 4, "{out:?}");
+        for l in &out {
+            assert!(l.starts_with("│ │ ") && visible_len(l) <= 24, "{l:?}");
         }
     }
 }
