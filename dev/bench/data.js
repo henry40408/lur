@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791784635286,
+  "lastUpdate": 1791784878345,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4673,6 +4673,54 @@ window.BENCHMARK_DATA = {
             "name": "async_map_20k_limit_64",
             "value": 15853039,
             "range": "± 331399",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0d85e7c21c12ee222d37b9d5efabcbae6354eed3",
+          "message": "docs(readme): restructure the Lua API reference (#159)\n\n* docs(readme): restructure the Lua API reference\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* docs(readme): apply review fixes to the Lua API reference\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* docs(readme): place Validation after Data & I/O\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T13:58:47+08:00",
+          "tree_id": "f97e37cfe4482ae8a016f63edf833069aedafee2",
+          "url": "https://github.com/henry40408/lur/commit/0d85e7c21c12ee222d37b9d5efabcbae6354eed3"
+        },
+        "date": 1791784877890,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 404539,
+            "range": "± 10360",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5868,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 181470,
+            "range": "± 1005",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 21295806,
+            "range": "± 266807",
             "unit": "ns/iter"
           }
         ]
