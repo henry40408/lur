@@ -182,7 +182,8 @@ allowlists are additive (config ∪ flags). `~` in config paths expands to `$HOM
 ## Lua API
 
 Everything lives under the `lur` global. Failures, including policy denials, raise a
-Lua error (catch with `pcall`). Every `lur.*` table is read-only.
+Lua error (catch with `pcall`); the exception is `lur.env`, which returns `nil` for denied
+and unset alike. Every `lur.*` table is read-only.
 
 Sections: [Data & I/O](#data--io) · [Validation](#validation-lurvalidate) ·
 [Capabilities](#capabilities-policy-gated) · [Storage](#storage-requires---db) ·
@@ -644,7 +645,7 @@ Expiry: pass `{ ttl_ms = n }` (positive milliseconds) as the last argument of
 - `map` options: `opts.limit` (integer ≥ 1) caps that call's in-flight tasks;
   `opts.drop_errors` omits failed items instead of failing fast.
 - Lua runs one step at a time; tasks interleave only at I/O awaits.
-- `--max-concurrency` caps in-flight tasks.
+- `--max-concurrency` caps in-flight tasks per VM.
 
 ```lua
 local r = lur.async.map({ 1, 2, 3 }, function(n) lur.async.sleep(10); return n * 2 end,
@@ -660,19 +661,21 @@ Process-wide state shared across the VM pool, primitives only.
 | --- | --- | --- |
 | `get(key)` | value | |
 | `set(key, value)` | | `nil` deletes |
-| `incr` / `decr(key, n?)` | | atomic; integer step, default 1 |
+| `incr` / `decr(key, n?)` | new integer | atomic; integer step, default 1 |
 | `add(key, value)` | bool | set-if-absent |
 | `cas(key, expected, new)` | bool | `nil` = absent |
-| `update(key, fn)` | | optimistic CAS retry; `fn` runs unlocked |
+| `update(key, fn)` | new value | optimistic CAS retry: `fn` runs unlocked and may run more than once if it loses a race |
 | `ttl(key)` | `ms, exists` | |
 | `fetch(key, { ttl_ms, stale_ms? }, fn)` | `value, "hit"\|"miss"\|"stale"` | see below |
 
 - Writes (`set`/`add`/`cas`/`update`/`incr`/`decr`) take `{ ttl_ms = n, evictable = bool }`
-  last, with the same expiry rules as the [`lur.kv` expiry table](#lurkv) except that `add`
-  also clears an existing expiry and `evictable` is state-only.
+  last, with the same expiry rules as the [`lur.kv` expiry table](#lurkv). `evictable` is
+  state-only: `set`/`add` without `evictable = true` make the entry non-evictable, while
+  `cas`/`update`/`incr`/`decr` keep its current setting.
 - `fetch` runs `fn` on a miss (async, unlocked, not retried) and stores the value as
   evictable. If `fn` raises and a value within `stale_ms` of expiry exists, that value
-  comes back as `"stale"`. `nil` from `fn` is not cached.
+  comes back as `"stale"`. `nil` from `fn` is not cached, and a value that does not fit
+  under the caps is still returned (`"miss"`) but silently left uncached.
 - `--state-max-entries` / `--state-max-bytes` (default unlimited) drop only `evictable`
   entries, expired first, then least recently used; a write that cannot fit raises.
 - A stale value is invisible to everything but `fetch`.
@@ -689,8 +692,9 @@ cron runs drain within `--shutdown-grace`.
 - **Path params**: `:name` segments (e.g. `/users/:id`) bind into `req.params`. A trailing
   `:name?` is optional (`/feed/:tag?` matches `/feed` and `/feed/lua`, absent = `nil`); it
   may not share a static/param shape with another route of the same method, e.g. `/feed`.
-- **Precedence**: the most specific route wins regardless of order (more static segments,
-  then a concrete method over `ANY`).
+- **Precedence**: the most specific route wins regardless of order: at the first segment
+  where two routes differ a static segment beats a param; then a concrete method beats
+  `ANY`.
 - **Response**: `handler(req)` returns a table:
 
   | Field | Default | Notes |
