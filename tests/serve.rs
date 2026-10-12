@@ -651,3 +651,40 @@ fn lur_subtables_cannot_be_tampered_across_requests() {
     let r = s.dispatch("GET", "/check", b"").unwrap();
     assert_eq!(String::from_utf8(r.body).unwrap(), r#"{"a":1}false"#);
 }
+
+#[test]
+fn lur_tree_is_deeply_frozen_inside_a_serve_handler() {
+    // In serve mode `lur.serve` has a real registry and may expose extra nested
+    // tables; every table reachable from `lur` (and its metatables) must be frozen.
+    let s = serve(
+        "lur.serve.http('GET', '/t', function()\n\
+         \tlocal seen, writable, n = {}, {}, 0\n\
+         \tlocal function walk(t, path)\n\
+         \t\tif seen[t] then return end\n\
+         \t\tseen[t] = true\n\
+         \t\tn = n + 1\n\
+         \t\tlocal ok = pcall(rawset, t, '__lur_probe', 1)\n\
+         \t\tif ok then\n\
+         \t\t\trawset(t, '__lur_probe', nil)\n\
+         \t\t\ttable.insert(writable, path .. ' (rawset)')\n\
+         \t\tend\n\
+         \t\tif not table.isfrozen(t) then table.insert(writable, path .. ' (not frozen)') end\n\
+         \t\tlocal mt = getmetatable(t)\n\
+         \t\tif type(mt) == 'table' then walk(mt, path .. '<mt>') end\n\
+         \t\tfor k, v in pairs(t) do\n\
+         \t\t\tif type(v) == 'table' then walk(v, path .. '.' .. tostring(k)) end\n\
+         \t\tend\n\
+         \tend\n\
+         \twalk(lur, 'lur')\n\
+         \tassert(n > 10, 'walked too few tables')\n\
+         \ttable.sort(writable)\n\
+         \treturn { body = table.concat(writable, ',') }\n\
+         end)",
+    );
+    let resp = s.dispatch("GET", "/t", b"").expect("dispatch ok");
+    assert_eq!(
+        String::from_utf8(resp.body).unwrap(),
+        "",
+        "writable tables reachable from `lur` in serve mode"
+    );
+}
