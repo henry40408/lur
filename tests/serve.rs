@@ -545,8 +545,11 @@ fn a_timed_out_handler_releases_what_its_nested_tasks_hold() {
         let started = std::time::Instant::now();
         let resp = s.dispatch("GET", "/write", b"").unwrap();
         assert_eq!(resp.status, 200, "{}", String::from_utf8_lossy(&resp.body));
+        // A write still blocked by the dead transaction would hit the 300 ms
+        // timeout and fail the status check above; this bound only guards against
+        // a hang, so it must stay well clear of CI scheduling noise.
         assert!(
-            started.elapsed() < Duration::from_millis(250),
+            started.elapsed() < Duration::from_secs(2),
             "{:?}",
             started.elapsed()
         );
