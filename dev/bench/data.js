@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791790718820,
+  "lastUpdate": 1791793444672,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -4817,6 +4817,66 @@ window.BENCHMARK_DATA = {
             "name": "async_map_20k_limit_64",
             "value": 21191251,
             "range": "± 198920",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b89c59b61f5c7d2be72af0cbbbb0b7f4352637fe",
+          "message": "feat(async): preserve validation and abort error tables across lur.async tasks (#162)\n\n* feat(async): preserve error tables across lur.async task boundaries\n\nA table error (lur.validate, lur.serve.abort) raised inside a lur.async\ntask used to reach the combinator's caller as a string: mlua renders a\nfailed thread's error value with luaL_tolstring and keeps only the text.\nThat rendering calls the table's __tostring, which is error_meta's Rust\nfunction, so it now records the table in a per-VM slot. Right after a\ntask fails, the combinator takes it back (matched by message) and\nall/race/map re-raise it through a raising wrapper; settled returns it\nin `err`. Nothing extra runs per task on success; the slot is reset per\nrun (Runtime::guarded, call_handler) for pool isolation.\n\nOne raise factory is now loaded per VM and shared by validate, serve and\nasync. Adds an async_all_small_x1000 bench for per-call overhead.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n* test(async): pin per-run reset and newline match boundary\n\nReset the recovered-error slot at the end of every run too, so a\nrendered error table does not stay alive on an idle pooled VM.\n\nAdd pool-isolation tests (one-shot Runtime and a pool-size-1 server)\nthat fail if the reset is removed, and a test that an uncaught \"xy\"\nis not mistaken for a caught abort \"x\". Document that the match is the\nmessage alone or followed by a newline. Add async_race_small_x1000.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n* perf(async): return one value from wrapped combinators\n\nall/race/map's inner functions returned (true, value) for the raising\nwrapper; that second return value cost ~700 instructions per call.\nThey now return the value alone and signal failure by returning a\nprivate per-VM sentinel table carrying the error table, which the\nwrapper empties and raises (raise::raising_hot + raise::Sentinel).\n\n100k lur.async.all / race calls vs main (instructions, cycles):\nall  +3.8% / +3.0% -> +2.6% / +1.6%\nrace +4.9% / +4.2% -> +3.9% / +2.2%\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n* docs: error tables survive lur.async tasks\n\nREADME.md and docs/GUIDE.md said a validation or abort error raised in a\nlur.async task reached the combinator's caller as a string. pcall around\nall/race/map now gets the original table and settled's err holds it;\nany still joins failures as text, and a script's own error({...}) table\nand plain errors are unchanged. GUIDE gains a runnable example.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n* docs(decisions): record the race wrapper overhead\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-12T16:20:55+08:00",
+          "tree_id": "3a860f4b5589e994ecabc3a1acfda70c99dfdcb1",
+          "url": "https://github.com/henry40408/lur/commit/b89c59b61f5c7d2be72af0cbbbb0b7f4352637fe"
+        },
+        "date": 1791793443679,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 348995,
+            "range": "± 4111",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5649,
+            "range": "± 38",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 392486,
+            "range": "± 2498",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 21843789,
+            "range": "± 398382",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3469451,
+            "range": "± 14416",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1959269,
+            "range": "± 14173",
             "unit": "ns/iter"
           }
         ]
