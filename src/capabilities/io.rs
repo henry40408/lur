@@ -75,6 +75,7 @@ fn install_stdin(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 
 /// Read up to `n` bytes, across short reads, until `n` or EOF. The buffer
 /// grows with the data actually read, so a huge `n` never pre-allocates.
+/// The data lives on the Rust heap, outside the Lua memory limit.
 fn read_up_to(r: &mut impl Read, n: usize) -> std::io::Result<Vec<u8>> {
     let mut buf = Vec::new();
     r.take(n as u64).read_to_end(&mut buf)?;
@@ -163,9 +164,10 @@ mod tests {
 
     #[test]
     fn huge_n_does_not_preallocate() {
-        // 1 << 40 bytes would abort if allocated up front.
+        // Allocating `usize::MAX` bytes up front panics with a capacity
+        // overflow, so a regression to pre-allocation fails fast here.
         let mut r = Cursor::new(b"abc".to_vec());
-        assert_eq!(read_up_to(&mut r, 1usize << 40).unwrap(), b"abc");
+        assert_eq!(read_up_to(&mut r, usize::MAX).unwrap(), b"abc");
         assert_eq!(
             read_up_to(&mut Cursor::new(Vec::new()), usize::MAX).unwrap(),
             b""
