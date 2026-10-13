@@ -11,7 +11,13 @@ version = 2
 # Deny crates with a known security advisory (RUSTSEC) or that have been yanked.
 # `ignore` holds advisory IDs we've reviewed and consciously accept.
 yanked = "deny"
-ignore = []
+ignore = [
+    # ammonia 4.2.1: only affects callers that allow `style` and use
+    # `filter_style_properties`; neither is used in sanitize.rs. Fix 4.2.3 is
+    # inside the 168h cooldown until 2026-10-18 06:27 UTC. Remove when upgraded.
+    # Tracked in https://github.com/henry40408/lur/issues/171
+    "RUSTSEC-2021-0157",
+]
 
 [licenses]
 version = 2
