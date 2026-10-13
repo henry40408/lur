@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791858675093,
+  "lastUpdate": 1791915124502,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -5537,6 +5537,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1379474,
             "range": "± 16310",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "84eeca68fcfb45a82db2f5bd74450ccc566996bf",
+          "message": "chore(deny): temporarily ignore RUSTSEC-2021-0158 (#175)\n\nammonia 4.2.1 is only exposed when SVG animateMotion, animateTransform or\nanimateColor are allowed; sanitize.rs uses the default Builder, which\nallows none of them. The fix (4.2.3) is inside the 168h cooldown until\n2026-10-18 06:27 UTC. Tracked in #174.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-14T02:08:19+08:00",
+          "tree_id": "da3101017445c1b929a7b97438800bd47f5da7e8",
+          "url": "https://github.com/henry40408/lur/commit/84eeca68fcfb45a82db2f5bd74450ccc566996bf"
+        },
+        "date": 1791915124078,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 391655,
+            "range": "± 15950",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5959,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 185492,
+            "range": "± 2161",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 19116863,
+            "range": "± 285776",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3493953,
+            "range": "± 12299",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1833004,
+            "range": "± 27914",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1932309,
+            "range": "± 22784",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2124551,
+            "range": "± 64218",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1262240,
+            "range": "± 11754",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1383673,
+            "range": "± 37809",
             "unit": "ns/iter"
           }
         ]
