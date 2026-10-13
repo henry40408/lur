@@ -17,6 +17,12 @@ ignore = [
     # inside the 168h cooldown until 2026-10-18 06:27 UTC. Remove when upgraded.
     # Tracked in https://github.com/henry40408/lur/issues/171
     "RUSTSEC-2021-0157",
+    # ammonia 4.2.1: only affects callers that allow SVG `animateMotion`,
+    # `animateTransform` or `animateColor`; sanitize.rs uses the default
+    # `Builder`, which allows none of them. Same 4.2.3 fix, same cooldown
+    # until 2026-10-18 06:27 UTC. Remove when upgraded.
+    # Tracked in https://github.com/henry40408/lur/issues/174
+    "RUSTSEC-2021-0158",
 ]
 
 [licenses]
