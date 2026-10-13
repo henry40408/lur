@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791819558581,
+  "lastUpdate": 1791858675093,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -5453,6 +5453,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1389504,
             "range": "± 11386",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c9e2cb18776f486ad9c33579d41f71b4b21b032a",
+          "message": "chore(deny): temporarily ignore RUSTSEC-2021-0157 (#172)\n\nammonia 4.2.1 is not exposed (no style attr / filter_style_properties).\nFix 4.2.3 is inside the 168h cooldown until 2026-10-18 06:27 UTC.\nTracked in #171.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-13T10:27:30+08:00",
+          "tree_id": "a070516b91c17176da5495390d5c8f7213daef3e",
+          "url": "https://github.com/henry40408/lur/commit/c9e2cb18776f486ad9c33579d41f71b4b21b032a"
+        },
+        "date": 1791858674207,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 392950,
+            "range": "± 7617",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 6068,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 184177,
+            "range": "± 1311",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 19521335,
+            "range": "± 211806",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3434324,
+            "range": "± 207574",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1869518,
+            "range": "± 22030",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 2015087,
+            "range": "± 6949",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2205606,
+            "range": "± 69761",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1299356,
+            "range": "± 8883",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1379474,
+            "range": "± 16310",
             "unit": "ns/iter"
           }
         ]
