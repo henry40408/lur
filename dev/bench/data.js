@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791992344349,
+  "lastUpdate": 1792000357131,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -5957,6 +5957,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1381151,
             "range": "± 12246",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "050d75a81c1e4428e4d7730a9a5144cf91692d58",
+          "message": "feat(text): add lur.text.replacer with first/longest matching (#180)\n\nMany-to-many literal replacement over a byte trie (Go strings.NewReplacer\nsemantics; opts.match = \"longest\" for longest-first). opts.key shares one\nmatcher across the pool via Weak refs; --replacer-max-bytes caps live size\n(per VM unkeyed, per process keyed). replace caps output at the VM memory\nlimit and polls the deadline.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-15T01:49:14+08:00",
+          "tree_id": "a784ee788f594d4fea32c03e95f4d19e84a179b9",
+          "url": "https://github.com/henry40408/lur/commit/050d75a81c1e4428e4d7730a9a5144cf91692d58"
+        },
+        "date": 1792000356099,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 184315,
+            "range": "± 6465",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3328,
+            "range": "± 72",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 270062,
+            "range": "± 7270",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 14257615,
+            "range": "± 187831",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 2235100,
+            "range": "± 77765",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1296262,
+            "range": "± 36598",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1303381,
+            "range": "± 34261",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2139050,
+            "range": "± 32871",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1108765,
+            "range": "± 16911",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1407050,
+            "range": "± 80774",
             "unit": "ns/iter"
           }
         ]
