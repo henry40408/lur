@@ -23,6 +23,12 @@ ignore = [
     # until 2026-10-18 06:27 UTC. Remove when upgraded.
     # Tracked in https://github.com/henry40408/lur/issues/174
     "RUSTSEC-2021-0158",
+    # rustls 0.23.45: `Debug` impls for client session values expose TLS
+    # secrets, which only matters if those values are logged; lur never
+    # formats them. Fix 0.23.46 is inside the 168h cooldown until
+    # 2026-10-21 09:54 UTC. Remove when upgraded.
+    # Tracked in https://github.com/henry40408/lur/issues/177
+    "RUSTSEC-2026-0346",
 ]
 
 [licenses]
