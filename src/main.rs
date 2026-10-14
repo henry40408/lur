@@ -8,6 +8,7 @@ use clap::Parser;
 use lur::capabilities::http::{
     DEFAULT_HTTP_CACHE_MAX_BYTES, DEFAULT_HTTP_CACHE_MAX_ENTRIES, HttpCache,
 };
+use lur::capabilities::text::{DEFAULT_REPLACER_MAX_BYTES, ReplacerStore};
 use lur::config::{Config, Profile, expand_tilde};
 use lur::policy::Policy;
 use lur::runtime::{
@@ -85,6 +86,10 @@ struct CommonFlags {
     /// Max total size of cached lur.http responses (e.g. `64m`; 0 = unlimited).
     #[arg(long, value_name = "SIZE", default_value_t = DEFAULT_HTTP_CACHE_MAX_BYTES, value_parser = parse_size)]
     http_cache_max_bytes: usize,
+
+    /// Max live size of lur.text replacers: per VM for unkeyed ones, per process for `opts.key` ones (e.g. `64m`; 0 = unlimited).
+    #[arg(long, value_name = "SIZE", default_value_t = DEFAULT_REPLACER_MAX_BYTES, value_parser = parse_size)]
+    replacer_max_bytes: usize,
 
     /// Max lur.state entries; only `evictable` ones are dropped for room, else the write raises (0 = unlimited).
     #[arg(long, value_name = "N", default_value_t = 0)]
@@ -320,6 +325,7 @@ fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig,
             flags.http_cache_max_entries,
             flags.http_cache_max_bytes,
         )),
+        replacers: Arc::new(ReplacerStore::with_limit(flags.replacer_max_bytes)),
         shutdown_grace: Duration::from_millis(DEFAULT_SHUTDOWN_GRACE_MS),
         max_concurrency: flags.max_concurrency,
         chunk_name: None,

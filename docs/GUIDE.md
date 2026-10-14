@@ -226,6 +226,33 @@ assert(lur.charset.decode('<meta charset="big5">' .. big5):find("你好", 1, tru
 assert(lur.charset.encode("你好", "big5") == big5)        -- unmappable chars become &#N;
 ```
 
+### lur.text
+
+`lur.text.replacer(pairs, opts?)` replaces many literals in one pass. `pairs` is an array of
+`{ old, new }`, so any dictionary format works once your script has parsed it.
+
+| Call | Returns |
+| --- | --- |
+| `replacer(pairs, opts?)` | replacer |
+| `replacer:replace(s)` | string |
+
+- `match = "first"` (default): among the `old` strings matching at a position, the one
+  listed first wins (Go's `strings.NewReplacer`). `match = "longest"`: the longest wins.
+- Matches never overlap and replaced text is not rescanned; unmatched bytes pass through.
+- `key = "name"` shares one matcher across the pool (later `pairs` are ignored; a different
+  `#pairs` or `match` raises). Build a big dictionary once per process this way.
+- `--replacer-max-bytes` (default `64m`, `0` unlimited) caps live size; over it raises.
+
+```lua
+local r = lur.text.replacer({ { "a", "1" }, { "ab", "2" } })
+assert(r:replace("abab") == "1b1b")                         -- "a" is listed first
+
+local s2t = lur.text.replacer(
+  { { "头发", "頭髮" }, { "发", "發" }, { "头", "頭" } },
+  { match = "longest", key = "s2t" })
+assert(s2t:replace("头发发") == "頭髮發")
+```
+
 ### lur.html
 
 Parse HTML and query it with CSS selectors; sanitize untrusted markup.

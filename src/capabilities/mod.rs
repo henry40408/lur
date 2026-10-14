@@ -24,6 +24,7 @@ pub(crate) mod raise;
 pub mod serve;
 pub mod state;
 mod storage;
+pub mod text;
 pub mod time;
 pub mod url;
 pub mod validate;
@@ -72,6 +73,7 @@ pub fn install(
     args::install(lua, &lur, &config.args)?;
     serve::install(lua, &lur, &factory, serve_registry)?;
     state::install(lua, &lur, config.state.clone())?;
+    text::install(lua, &lur, config.replacers.clone(), config.memory_limit)?;
 
     freeze_children(&lur);
     lua.globals().set("lur", lur).map_err(RunError::Init)?;
