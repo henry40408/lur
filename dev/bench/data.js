@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791991154218,
+  "lastUpdate": 1791992344349,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -5873,6 +5873,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1518128,
             "range": "± 22349",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a65bbd5c3092c1a0115cc916ae340b869716fb50",
+          "message": "docs: unify shared CLAUDE.md wording (#179)\n\n* docs: align CLAUDE.md test selection, version and release notes\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* docs: tighten CLAUDE.md wording after review\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-14T23:32:39+08:00",
+          "tree_id": "0121a9d463c02833545d0a15e635c7ad35cfcfc6",
+          "url": "https://github.com/henry40408/lur/commit/a65bbd5c3092c1a0115cc916ae340b869716fb50"
+        },
+        "date": 1791992343603,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 397406,
+            "range": "± 6374",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 6000,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 183981,
+            "range": "± 2381",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 21153348,
+            "range": "± 110949",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3501617,
+            "range": "± 93918",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1899441,
+            "range": "± 24585",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 2019786,
+            "range": "± 15735",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2163012,
+            "range": "± 61620",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1371661,
+            "range": "± 24755",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1381151,
+            "range": "± 12246",
             "unit": "ns/iter"
           }
         ]
