@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791915124502,
+  "lastUpdate": 1791946188101,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -5621,6 +5621,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1383673,
             "range": "± 37809",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eaa0432c01bdb9d95eff4c91c6779042f9afc73b",
+          "message": "fix(io): bound lur.stdin.read(n) allocation to data actually read (#173)\n\n* fix(io): bound stdin.read(n) allocation to data actually read\n\nread_up_to pre-allocated n bytes via buf.resize(n, 0), so a large n\nsuch as lur.stdin.read(1e15) could abort the process with OOM. Read\nthrough Read::take(n).read_to_end instead, which grows incrementally\nand retries on Interrupted. Semantics are unchanged.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* test(io): drop 1<<40 assertion that thrashes memory on regression\n\nThe usize::MAX case already fails fast with a capacity overflow if\nread_up_to ever pre-allocates again. The 1 << 40 case instead exhausts\nmemory for about a minute before being killed, which can take down a CI\nrunner. Also note that read data lives outside the Lua memory limit.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-14T10:46:02+08:00",
+          "tree_id": "a3b3b3df0a5ec6c1fd7e3939392baf51d40fc299",
+          "url": "https://github.com/henry40408/lur/commit/eaa0432c01bdb9d95eff4c91c6779042f9afc73b"
+        },
+        "date": 1791946187337,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 290985,
+            "range": "± 4202",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4311,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 371994,
+            "range": "± 1246",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 18956975,
+            "range": "± 186154",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 2857762,
+            "range": "± 50410",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1682853,
+            "range": "± 7080",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1685192,
+            "range": "± 112785",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2112753,
+            "range": "± 26661",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1455145,
+            "range": "± 10325",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1845842,
+            "range": "± 14153",
             "unit": "ns/iter"
           }
         ]
