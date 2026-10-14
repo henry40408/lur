@@ -10,7 +10,7 @@ API) and [ARCHITECTURE.md](ARCHITECTURE.md) (modules, lifecycles, invariants) ar
 ```sh
 cargo nextest run                              # all tests (NOT cargo test)
 cargo nextest run --test serve_http            # one integration test file
-cargo nextest run -E 'test(routing)'           # tests matching a name
+cargo nextest run -E 'test(route)'             # tests matching a name
 cargo clippy --all-targets -- -D warnings      # lint gate
 cargo fmt --all                                # required before committing
 cargo bench --bench runtime                    # before/after for perf changes
@@ -18,7 +18,8 @@ cargo deny check                               # advisories/licenses/bans/source
 docker compose up -d                           # Postgres for tests/pg.rs (skipped locally if down)
 ```
 
-CI blocks on fmt, clippy, nextest, and `cargo deny`; coverage and benchmarks are informational.
+CI blocks on fmt, clippy, nextest, and `cargo deny`; the Codecov upload and
+benchmark alerts are informational, but a failing test or bench still fails its job.
 
 ## Invariants (see ARCHITECTURE.md for why)
 
@@ -44,6 +45,7 @@ Violating these compiles but breaks the sandbox or the pool.
 
 - Edition 2024; toolchain pinned in `rust-toolchain.toml`. No `rust-version` is declared —
   don't add one on a toolchain bump.
+- GitHub Actions are pinned by commit SHA with the tag as a trailing comment.
 - Integration tests: one file per surface under `tests/`; unit tests inline.
 - Design rationale, rejected alternatives, and known limitations live in
   [docs/decisions.md](docs/decisions.md); update it when making a non-obvious design call.
