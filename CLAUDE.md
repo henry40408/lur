@@ -9,7 +9,7 @@ API) and [ARCHITECTURE.md](ARCHITECTURE.md) (modules, lifecycles, invariants) ar
 
 ```sh
 cargo nextest run                              # all tests (NOT cargo test)
-cargo nextest run unmatched_route             # tests whose name contains a substring
+cargo nextest run unmatched_route              # tests whose name contains a substring
 cargo nextest run --test serve_http            # one integration test file
 cargo nextest run -E 'test(route)'             # tests matching a filterset
 cargo clippy --all-targets -- -D warnings      # lint gate
