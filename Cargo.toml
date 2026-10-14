@@ -120,3 +120,7 @@ verbose_file_reads = "warn"
 debug_assert_with_mut_call = "warn"
 fallible_impl_from = "warn"
 trait_duplication_in_bounds = "warn"
+
+[[bench]]
+name = "tsv_parse"
+harness = false
