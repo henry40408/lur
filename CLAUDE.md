@@ -9,8 +9,9 @@ API) and [ARCHITECTURE.md](ARCHITECTURE.md) (modules, lifecycles, invariants) ar
 
 ```sh
 cargo nextest run                              # all tests (NOT cargo test)
+cargo nextest run unmatched_route             # tests whose name contains a substring
 cargo nextest run --test serve_http            # one integration test file
-cargo nextest run -E 'test(route)'             # tests matching a name
+cargo nextest run -E 'test(route)'             # tests matching a filterset
 cargo clippy --all-targets -- -D warnings      # lint gate
 cargo fmt --all                                # required before committing
 cargo bench --bench runtime                    # before/after for perf changes
@@ -45,11 +46,16 @@ Violating these compiles but breaks the sandbox or the pool.
 
 - Edition 2024; toolchain pinned in `rust-toolchain.toml`. No `rust-version` is declared —
   don't add one on a toolchain bump.
+- Version string: `build.rs` bakes in `GIT_VERSION` (env var, unless blank or `dev`), else
+  `git describe --tags --always --dirty`, else `dev`. Docker builds pass it as a build arg
+  because `.dockerignore` excludes `.git`.
+- Releases use `gh release create --generate-notes`; never edit the manifest `version` or add a
+  `CHANGELOG.md`.
 - GitHub Actions are pinned by commit SHA with the tag as a trailing comment.
 - Integration tests: one file per surface under `tests/`; unit tests inline.
 - Design rationale, rejected alternatives, and known limitations live in
   [docs/decisions.md](docs/decisions.md); update it when making a non-obvious design call.
 - Docs ship with the change: a user-visible behaviour or `lur.*` API change updates, in the
-  same PR, [README.md](README.md) (reference) and [docs/GUIDE.md](docs/GUIDE.md) (examples;
+  same change, [README.md](README.md) (reference) and [docs/GUIDE.md](docs/GUIDE.md) (examples;
   every `lua` block is a test in `tests/guide.rs`). A change to an invariant, module or
   lifecycle updates [ARCHITECTURE.md](ARCHITECTURE.md).
