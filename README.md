@@ -133,6 +133,7 @@ lur docs                               # print the embedded usage guide
 | `--max-http-body` | SIZE | `16m` | Cap on a buffered `lur.http` response body. |
 | `--http-cache-max-entries` | N | `1024` | Cap on cached `lur.http` responses; least recently used are evicted; `0` = unlimited. |
 | `--http-cache-max-bytes` | SIZE | `64m` | Cap on the total size of cached `lur.http` responses; `0` = unlimited. |
+| `--replacer-max-bytes` | SIZE | `64m` | Cap on live `lur.text.replacer` size: per VM for unkeyed replacers, per process for `opts.key` ones; over it the call raises; `0` = unlimited. |
 | `--state-max-entries` | N | `0` | Cap on `lur.state` entries; only `evictable` ones are dropped for room, otherwise the write raises; `0` = unlimited. |
 | `--state-max-bytes` | SIZE | `0` | Cap on the total size of `lur.state`; same rule; `0` = unlimited. |
 | `--max-concurrency` | N (>= 1) | unbounded | Cap on in-flight `lur.async.*` tasks per VM. |
@@ -202,6 +203,7 @@ Sections: [Data & I/O](#data--io) · [Validation](#validation-lurvalidate) ·
 | [`lur.time`](#lurtime) | clocks, parsing and formatting |
 | [`lur.url`](#lururl) | URL parse / join / query strings |
 | [`lur.charset`](#lurcharset) | non-UTF-8 text |
+| [`lur.text`](#lurtext) | many-to-many literal replacement |
 | [`lur.html`](#lurhtml) | HTML parse, CSS selectors, sanitize |
 | [`lur.xml`](#lurxml) | XML parse, slash-path selection |
 | [`lur.feed`](#lurfeed) | RSS / Atom / JSON Feed output |
@@ -325,6 +327,29 @@ For non-UTF-8 pages (Big5, GBK, Shift_JIS, … via `encoding_rs`, WHATWG labels)
 - Precedence: BOM, then `hint`, then a `<meta charset>` in the first 1 KiB, then UTF-8.
 - Invalid bytes become U+FFFD; an unknown label raises.
 - `encode` writes unmappable characters as `&#NNN;` and refuses UTF-16.
+
+#### `lur.text`
+
+| Call | Returns |
+| --- | --- |
+| `replacer(pairs, opts?)` | replacer |
+| `replacer:replace(s)` | string |
+
+- `pairs` is an array of `{ old, new }` strings. It is not tied to any dictionary format;
+  parse your own file into pairs.
+- One left-to-right pass over `s`: matches never overlap and replaced text is not
+  rescanned. Unmatched bytes (invalid UTF-8 included) pass through unchanged.
+- `opts.match`: `"first"` (default, Go `strings.NewReplacer`) picks the pair listed first
+  among those matching at a position; `"longest"` picks the longest `old`. A repeated `old`
+  keeps its first pair. An empty `old` inserts `new` between *bytes* (it splits multi-byte characters;
+  under `"longest"` only where nothing longer matches).
+- `opts.key`: replacers built with the same key share one matcher across the pool; later
+  `pairs` are ignored, and a different `#pairs` or `match` raises. Without a key each VM
+  builds its own, released by GC.
+- Size is capped by `--replacer-max-bytes`; over it the call raises (nothing is evicted).
+  `replace` raises rather than build output past the VM `--memory` cap or run past the deadline.
+- Keep request-specific pairs out of a shared key: which `pairs` define a key can depend on
+  garbage-collection timing.
 
 #### `lur.html`
 

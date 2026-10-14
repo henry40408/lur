@@ -95,7 +95,7 @@ happening:
 [`capabilities::install`](src/capabilities/mod.rs) fills the flat `lur` table in fixed order:
 
 ```
-null · log · json · base64 · crypto · cookie · time · url · charset · html · xml · feed · validate · io · fs · http · env · db · kv · async · args · serve · state
+null · log · json · base64 · crypto · cookie · time · url · charset · html · xml · feed · validate · io · fs · http · env · db · kv · async · args · serve · state · text
 ```
 
 `fs`/`http`/`env` get an `Arc<Policy>`; `db` gets the `--db` target and passes the shared
@@ -230,6 +230,14 @@ awaited, bounded by `--shutdown-grace`. Stragglers are aborted when the runtime 
   unlimited): a `BTreeMap<tick, key>` recency index gives LRU order, a hit re-stamps the
   entry, and an insert over either cap drops expired entries and then pops the oldest; a
   single entry larger than the byte cap is not stored. Sizes count body + headers + key.
+- **`lur.text.replacer`** (`capabilities/text.rs`): an immutable byte trie (`Arc<Matcher>`),
+  one per `replacer` call. `match` only changes which candidate on the walk wins (lowest
+  pair index vs deepest), so both modes share one structure. `ReplacerStore` (in
+  `RuntimeConfig`, shared by the pool) keeps `Weak` handles by `opts.key`; the matcher
+  lives while some VM holds a userdata. Each matcher charges its estimated size to a
+  counter (per VM in app data, or the store's for keyed) and releases it on drop; over
+  `--replacer-max-bytes` it runs a GC and, if still over, raises. No shared mutable state
+  is reachable from a script besides this keyed registry.
 - **Invariants:** kv counters are integers; `kv.get` returns bytes; `db.tx`/`kv.update` are
   write transactions; integer steps (`kv.incr`/`decr`, `state.incr`/`decr`) reject fractions.
 
