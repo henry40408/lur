@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792000357131,
+  "lastUpdate": 1792029257838,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -6041,6 +6041,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1407050,
             "range": "± 80774",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3e8e326a246f20cde84b31453ee42d3f3a529860",
+          "message": "docs: dissolve decisions.md into module docs and ARCHITECTURE (#181)",
+          "timestamp": "2026-10-15T09:50:52+08:00",
+          "tree_id": "477544e305b62b88a8ac01aee1730e6deb920616",
+          "url": "https://github.com/henry40408/lur/commit/3e8e326a246f20cde84b31453ee42d3f3a529860"
+        },
+        "date": 1792029257489,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 299394,
+            "range": "± 3013",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4295,
+            "range": "± 150",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 417512,
+            "range": "± 52691",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 16080276,
+            "range": "± 291678",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 2573996,
+            "range": "± 12926",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1502992,
+            "range": "± 18372",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1645423,
+            "range": "± 39681",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2183361,
+            "range": "± 32459",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1096048,
+            "range": "± 8960",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1185977,
+            "range": "± 38991",
             "unit": "ns/iter"
           }
         ]
