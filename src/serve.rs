@@ -4,18 +4,18 @@
 //!
 //! ## Design notes
 //!
-//! **Server responses**: no `Content-Type` inference ("explicit over magic"); an invalid
-//! header fails the whole response (500) instead of being dropped.
-//!
-//! **Optional route params (`:name?`)** are trailing-only, so one request maps to exactly one
-//! prefix and `req.params` is a plain table (absent = `nil`). Overlap with another route of
-//! the same method (`/x/:p?` vs `/x`) is a load error rather than a silent specificity
-//! tiebreak. Mid-path optionals and regex params were rejected as ambiguity for no real use.
-//!
-//! **`req.origin` / `req.url`** are built from `Host` and `X-Forwarded-Proto` (`http` unless
-//! the latter is `https`); `nil` when `Host` is missing or not a bare `host[:port]` / `[ipv6][:port]` (first `Host` header wins; `X-Forwarded-Proto` uses its first comma-separated value). Both are
-//! client-controlled, so they are for building links only. A `--public-url` flag was
-//! deferred: add it if feeds behind a proxy need a pinned origin.
+//! - **Responses**: no `Content-Type` inference ("explicit over magic"); an invalid header
+//!   fails the whole response (500) instead of being dropped.
+//! - **Optional route params (`:name?`)** are trailing-only, so one request maps to exactly
+//!   one prefix and `req.params` is a plain table (absent = `nil`). Overlap with another
+//!   route of the same method (`/x/:p?` vs `/x`) is a load error, not a silent specificity
+//!   tiebreak. Mid-path optionals and regex params were rejected as ambiguity for no real
+//!   use.
+//! - **`req.origin` / `req.url`** come from `Host` and `X-Forwarded-Proto` (`http` unless
+//!   the latter is `https`; its first comma-separated value is used). They are `nil` when
+//!   `Host` is missing or not a bare `host[:port]` / `[ipv6][:port]` (the first `Host`
+//!   header wins). Both are client-controlled, so they are for building links only. A
+//!   `--public-url` flag was deferred: add it if feeds behind a proxy need a pinned origin.
 
 use std::convert::Infallible;
 use std::future::Future;

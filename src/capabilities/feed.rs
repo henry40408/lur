@@ -4,19 +4,17 @@
 //!
 //! ## Design notes
 //!
-//! **`lur.feed`**: RSS/Atom are written with `quick-xml`'s `Writer` (closures guarantee
-//! balanced tags; text and attributes are escaped), not hand-built strings; we only strip
-//! characters XML 1.0 forbids. `rss`/`atom_syndication` were rejected: two typed models to
-//! map from Lua tables and less control over output. Escaped text instead of CDATA (no
-//! `]]>` edge case); `quick-xml`'s `Reader` is the intended base for a future `lur.xml`. No feed parsing
-//! (`lur.xml`), HTML sanitizing, or date formatting API yet — dates are epoch ms and the
-//! serializers format them. Atom/JSON items without `guid`/`link` raise instead of
-//! inventing an id.
-//!
-//! **`lur.feed` `skip_invalid`** skips an item only when `title` is `nil` (which raises by
-//! default) or empty/blank (which is accepted by default, so it also drops those); the one
-//! field scrapes routinely lack. Wrong types, bad dates and a
-//! missing `guid`/`link` still raise, so real bugs are not hidden; meta is never skipped.
+//! - RSS/Atom are written with `quick-xml`'s `Writer` (closures guarantee balanced tags; text
+//!   and attributes are escaped), not hand-built strings; only characters XML 1.0 forbids are
+//!   stripped. Rejected: `rss`/`atom_syndication` (two typed models to map from Lua tables,
+//!   less control over output). Text is escaped rather than CDATA (no `]]>` edge case).
+//! - Dates are epoch ms and the serializers format them; there is no date-format option.
+//!   Atom/JSON items without `guid`/`link` raise instead of inventing an id. Feed parsing is
+//!   `lur.xml`'s job and HTML sanitizing is `lur.html.sanitize`'s.
+//! - `skip_invalid` skips an item only when `title` is `nil` (which raises by default) or
+//!   empty/blank (accepted by default, so also dropped): the one field scrapes routinely
+//!   lack. Wrong types, bad dates and a missing `guid`/`link` still raise so real bugs are not
+//!   hidden; meta is never skipped.
 
 use std::borrow::Cow;
 

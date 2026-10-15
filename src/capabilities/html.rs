@@ -8,18 +8,18 @@
 //!
 //! ## Design notes
 //!
-//! **`lur.html`**: `scraper::Html` (and `dom_query`) are `!Send` because tendril uses
-//! non-atomic refcounts, while mlua's `send` mode needs `Send` userdata. A node stores the
-//! source text plus an `ego_tree::NodeId`; parsed trees live in an 8-slot per-thread LRU and
-//! are re-parsed on a miss. Parsing is deterministic, so ids stay valid; the cache only
-//! affects speed. Rejected: `unsafe impl Send` (denied by lint, unsound), eager conversion
-//! to Lua tables (loses `select` on sub-nodes; fragment re-parse drops `<td>`). Known cost:
-//! holding many live docs on one thread re-parses on access. Invalid UTF-8 input is replaced
-//! rather than rejected, since it is usually a raw HTTP body.
-//!
-//! **`node:text({ trim = true })`** is opt-in so existing output is unchanged; it trims
-//! Unicode whitespace at both ends only (inner whitespace is untouched). `lur.xml` nodes
-//! do not take it.
+//! - `scraper::Html` (and `dom_query`) are `!Send` because tendril uses non-atomic
+//!   refcounts, while mlua's `send` mode needs `Send` userdata. A node therefore stores the
+//!   source text plus an `ego_tree::NodeId`; parsed trees live in an 8-slot per-thread LRU
+//!   and are re-parsed on a miss. Parsing is deterministic, so ids stay valid and the cache
+//!   only affects speed. Known cost: holding many live docs on one thread re-parses on access.
+//! - Rejected: `unsafe impl Send` (denied by lint, unsound); eager conversion to Lua tables
+//!   (loses `select` on sub-nodes; fragment re-parse drops `<td>`).
+//! - Invalid UTF-8 input is replaced rather than rejected, since it is usually a raw HTTP
+//!   body.
+//! - `node:text({ trim = true })` is opt-in so existing output is unchanged; it trims Unicode
+//!   whitespace at both ends only (inner whitespace is untouched). `lur.xml` nodes do not
+//!   take it.
 
 use std::cell::RefCell;
 use std::rc::Rc;

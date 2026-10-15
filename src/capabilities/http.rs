@@ -5,56 +5,56 @@
 //!
 //! ## Design notes
 //!
-//! - **`lur.http` SSRF guard**:
-//!   - The private-address list is curated (loopback, private, link-local, unique-local,
-//!     CGNAT, cloud-metadata ranges, multicast, …), not the full IANA special-purpose
-//!     registry. IPv6 forms embedding an IPv4 address (mapped, compatible, NAT64, 6to4) are
-//!     judged by the embedded address; Teredo `2001::/32` is not unpacked.
-//!   - IP literals skip `SsrfResolver` (the connector dials them directly), so `url_allowed`
-//!     is their only private-address gate, for the first request and every redirect hop.
-//!     Hostnames are filtered by the resolver, which also pins the connection to the vetted IP.
-//!   - System proxy env vars (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) are ignored on
-//!     purpose: through a proxy the name is resolved remotely and bypasses the resolver.
-//!   - Allowlist rules match IPs by address, strictly: an IPv4 rule does not match its
-//!     IPv4-mapped IPv6 spelling, nor the reverse.
-//! - **`res.text()` / `res.html()`** are dot-called closures like `res.json()` (one calling
-//!   convention per response object). They share `charset::decode_bytes` with
-//!   `lur.charset.decode`, but an unknown `charset=` in the *server's* header falls back to
-//!   sniffing/UTF-8 rather than raising (unlike a script-supplied label to `decode`). The raw
-//!   `body` is unchanged; the helpers decode on each call, so they work on cache hits too.
-//! - **`opts.form`** is flat string/number/boolean only (nested tables raise: there is no
-//!   agreed encoding) with keys sorted, because Lua table order is unspecified and tests/
-//!   signatures need a stable body. A caller-set `Content-Type` is kept (unlike `json`, which
-//!   always adds its own), since some endpoints want a variant such as a charset suffix. Repeated keys
-//!   and multipart are not supported.
-//! - **`lur.http` `cache` is an in-memory map, not `lur.kv`.** A cache is disposable, so it
-//!   shouldn't demand a database: it works in one-shot and under `serve` with no `--db`. It
-//!   lives in `RuntimeConfig` (an `Arc` shared by the pool, like `lur.state`), not in a VM.
-//!   Costs: lost on restart, not shared between processes, useless across one-shot runs.
-//!   Rejected: kv-backed (needs `--db`, which users asked why a cache requires) and "kv when
-//!   `--db` is set, memory otherwise" (the same script would have different persistence per
-//!   environment). A persistent store can be added later as an explicit opt-in, not an
+//! **SSRF guard**
+//! - The private-address list is curated (loopback, private, link-local, unique-local, CGNAT,
+//!   cloud-metadata ranges, multicast, …), not the full IANA special-purpose registry. IPv6
+//!   forms embedding an IPv4 address (mapped, compatible, NAT64, 6to4) are judged by the
+//!   embedded address; Teredo `2001::/32` is not unpacked.
+//! - IP literals skip `SsrfResolver` (the connector dials them directly), so `url_allowed` is
+//!   their only private-address gate, for the first request and every redirect hop. Hostnames
+//!   go through the resolver, which also pins the connection to the vetted IP.
+//! - `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` are ignored on purpose: a proxy resolves the name
+//!   remotely and bypasses the resolver.
+//! - Allowlist rules match IPs by address: an IPv4 rule does not match its IPv4-mapped IPv6
+//!   spelling, nor the reverse.
+//!
+//! **Helpers**
+//! - `res.text()`/`res.html()` are dot-called closures like `res.json()`. They share
+//!   `charset::decode_bytes` with `lur.charset.decode`, but an unknown `charset=` in the
+//!   *server's* header falls back to sniffing/UTF-8 instead of raising (a script-supplied
+//!   label raises). `body` stays raw; decoding runs per call, so cache hits work too.
+//! - `opts.form`: flat string/number/boolean only (nested tables raise: no agreed encoding),
+//!   keys sorted for a stable body (Lua table order is unspecified). A caller-set
+//!   `Content-Type` is kept (unlike `json`, which always sets its own) so a charset suffix
+//!   works. Not supported: repeated keys, multipart.
+//!
+//! **`opts.cache`** (in-memory [`HttpCache`], not `lur.kv`)
+//! - Decision: a cache is disposable, so it must not demand a database: it works in one-shot
+//!   and under `serve` with no `--db`. It lives in `RuntimeConfig` (an `Arc` shared by the
+//!   pool, like `lur.state`), not in a VM. Costs: lost on restart, not shared between
+//!   processes, useless across one-shot runs. `cache` is a table so the unit is explicit and
+//!   `vary` has a place.
+//! - Rejected: kv-backed (needs `--db`, which users asked why a cache requires); "kv when
+//!   `--db` is set, memory otherwise" (the same script would persist differently per
+//!   environment). A persistent store may come later as an explicit opt-in, never as an
 //!   environment-dependent fallback.
-//!   `cache` is a table (`{ ttl_ms }`) so the unit is explicit and `vary` has a place. The
-//!   allowlist/SSRF check runs before the lookup so a cached body never outlives the policy that
-//!   allowed it. Requests with `Authorization`/`Cookie`/`Proxy-Authorization` bypass the cache
-//!   unless the header is listed in `vary`, and responses that set a cookie aren't stored: the
-//!   cache is shared by every request, so a credentialed response must not be served to someone
+//! - Safety: the allowlist/SSRF check runs before the lookup, so a cached body never outlives
+//!   the policy that allowed it. Requests with `Authorization`/`Cookie`/`Proxy-Authorization`
+//!   bypass the cache unless listed in `vary`, and responses that set a cookie are not stored:
+//!   the cache is shared by every request, so a credentialed response must not reach someone
 //!   else.
-//!   **Size is bounded by operator config, not a Lua API.** The first version had no cap (the
-//!   script owned capacity), but a public service caching attacker-influenced URLs with a long
-//!   `ttl_ms` could grow the process without limit, and the VM `--memory` limit does not cover
-//!   Rust-side buffers. So `--http-cache-max-entries` (default 1024) and
-//!   `--http-cache-max-bytes` (default `64m`) cap the cache; `0` = unlimited. An insert over a
-//!   cap drops expired entries first (free), then evicts least recently used. A single response
-//!   larger than the byte cap is not cached rather than flushing everything for one entry.
-//!   Sizes are approximate (body + headers + key, not allocator overhead). Worst case is the
-//!   entry cap times `--max-http-body`, further bounded by the byte cap. LRU is a `BTreeMap`
-//!   recency index (no new dependency). Not done: per-call limits (`opts.cache` stays
-//!   `{ ttl_ms, vary }`; capacity is the operator's decision), and the flags are CLI-only like
-//!   `--max-http-body` because the config file holds only policy grants.
-//!   Not done: serve-stale-on-error, stampede protection (N concurrent misses fetch N times),
-//!   honoring `Cache-Control`/`ETag`, per-key invalidation.
+//! - Size is bounded by operator config, not a Lua API: a public service caching
+//!   attacker-influenced URLs with a long `ttl_ms` would otherwise grow without limit, and
+//!   `--memory` does not cover Rust-side buffers. `--http-cache-max-entries` (default 1024) and
+//!   `--http-cache-max-bytes` (default `64m`), `0` = unlimited; CLI-only like
+//!   `--max-http-body` because the config file holds only policy grants. Over a cap, an insert
+//!   drops expired entries first, then evicts least recently used; a single response larger
+//!   than the byte cap is not cached rather than flushing everything for one entry. Sizes are
+//!   approximate (body + headers + key, not allocator overhead); worst case is the entry cap times `--max-http-body`,
+//!   further bounded by the byte cap.
+//! - Not done: per-call limits (`opts.cache` stays `{ ttl_ms, vary }`; capacity is the
+//!   operator's call), serve-stale-on-error, stampede protection (N concurrent misses fetch N
+//!   times), honoring `Cache-Control`/`ETag`, per-key invalidation.
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};

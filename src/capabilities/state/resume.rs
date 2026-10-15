@@ -29,26 +29,30 @@
 //!
 //! ## Design notes
 //!
-//!   Consequence: a script-level scheduler that resumes a coroutine, gets the pending sentinel
-//!   and forwards it with its own `coroutine.yield` (so the host call completes later) loses
-//!   single-flight for that key: the leader is removed at the resume, a concurrent caller
-//!   loads too (a duplicate load, never a deadlock; the leader's late `finish` finds no flight
-//!   and only stores, CAS on version 0). Forwarding the sentinel is undocumented mlua
-//!   behaviour, so this is accepted. The replacements are Luau's own `lcorolib.cpp` functions
-//!   (`coresumey`/`auxresume`/`auxwrapy`) redone over the public C API in `state/resume.rs`,
-//!   the crate's only `unsafe` (it is `deny`ed elsewhere): error messages and values,
-//!   `luaL_where` prefixes, `debug.info` names and tracebacks match the builtins
-//!   (`tests/coroutine.rs` compares both). Rejected: a Lua wrapper around the builtins (resume
-//!   micro-benchmarks +112-127%, VM cold start +21%, an extra frame in tracebacks and
-//!   `debug.info`); an mlua Rust function (errors become `mlua::Error` userdata, so error
-//!   values and identity change); per-task tracking (the first design: each `lur.async` task
-//!   got per-VM numbers pushed on a thread-local stack around every poll, and a flight
-//!   recorded the stack it started under; it cost +3-6% on combinator micro-benchmarks, and
-//!   with no timeout still waited forever on a leader parked inside a still-running sibling
-//!   task or whose coroutine moved between sibling tasks). Cost of the replacement,
-//!   interleaved medians of 6 rounds vs the builtins (main), two independent runs:
-//!   `coroutine_resume_10k` +1.5 to +4.8%, `coroutine_wrap_generator_10k` +4.4 to +6.1%,
-//!   `vm_cold_start` -0.6 to +2.7%, `async_*` -2.8 to +0.8%, `state_fetch_*` -0.2/+2.6%
+//! `tests/coroutine.rs` compares error messages, values and tracebacks with the builtins.
+//! Why a leader must hand off at all: ARCHITECTURE.md, "`lur.state`" → "Why `lur.state` is
+//! shaped this way".
+//!
+//! - **Accepted limit.** A script-level scheduler that resumes a coroutine, gets the
+//!   pending sentinel and forwards it with its own `coroutine.yield` (so the host call
+//!   completes later) loses single-flight for that key: the leader is removed at the
+//!   resume and a concurrent caller loads too. That is a duplicate load, never a deadlock;
+//!   the leader's late `finish` finds no flight and only stores (CAS on version 0).
+//!   Forwarding the sentinel is undocumented mlua behaviour, so this is accepted. Any
+//!   return of the resume counts, so nothing depends on mlua's hidden `Lua::poll_pending()`.
+//! - **Rejected.** A Lua wrapper around the builtins: resume micro-benchmarks +112-127%,
+//!   VM cold start +21%, and an extra frame in tracebacks and `debug.info`. An mlua Rust
+//!   function: errors become `mlua::Error` userdata, so error values and identity change.
+//!   Per-task tracking (the first design: each `lur.async` task got per-VM numbers pushed
+//!   on a thread-local stack around every poll, and a flight recorded the stack it started
+//!   under): +3-6% on combinator micro-benchmarks, and with no timeout it still waited
+//!   forever on a leader parked inside a still-running sibling task or whose coroutine
+//!   moved between sibling tasks.
+//! - **Cost of the replacement**, interleaved medians of 6 rounds against the builtins
+//!   (main), two independent runs: `coroutine_resume_10k` +1.5 to +4.8%,
+//!   `coroutine_wrap_generator_10k` +4.4 to +6.1%, `vm_cold_start` -0.6 to +2.7%,
+//!   `async_*` -2.8 to +0.8%, `state_fetch_*` -0.2/+2.6% (noise: the hit path did not
+//!   change).
 
 #![allow(unsafe_code)]
 

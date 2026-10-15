@@ -4,16 +4,16 @@
 //!
 //! ## Design notes
 //!
-//! **`lur.time`**: integer milliseconds everywhere. Formatting was first left to
-//! `os.date("!…")`, but that only knows local time and UTC, and feeds need RFC 2822 with
-//! offsets and scraped sites need `Asia/Taipei`-style zones, so `format*`/`parse` take an
-//! optional `tz` (IANA via `chrono-tz`, or a fixed offset). `parse` without a format is
-//! deliberately a short fixed list (no guessing `dd/mm` vs `mm/dd`: ambiguous input needs an
-//! explicit `fmt`). DST gap raises; overlap picks the earlier instant.
-//!
-//! **`lur.time.try_parse`** returns `nil` for unparseable text and for `nil` text (a missing
-//! scraped node), but still raises on a bad `fmt`/`tz`: those are script bugs, not data. A well-formed `fmt`
-//! that can never yield a timestamp (`"%H:%M"`) just returns `nil`, as `parse` would raise.
+//! - Integer milliseconds everywhere. `os.date("!…")` knows only local time and UTC, but feeds
+//!   need RFC 2822 with offsets and scraped sites need `Asia/Taipei`-style zones, so
+//!   `format*`/`parse` take an optional `tz` (IANA via `chrono-tz`, or a fixed offset).
+//! - `parse` without a format accepts a short fixed list on purpose (no guessing `dd/mm` vs
+//!   `mm/dd`: ambiguous input needs an explicit `fmt`). A DST gap raises; an overlap picks the
+//!   earlier instant.
+//! - `try_parse` returns `nil` for unparseable text and for `nil` text (a missing scraped
+//!   node), but still raises on a bad `fmt`/`tz`: those are script bugs, not data. A
+//!   well-formed `fmt` that can never yield a timestamp (`"%H:%M"`) returns `nil`, where
+//!   `parse` would raise.
 
 mod zoned;
 

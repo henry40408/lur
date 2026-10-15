@@ -10,17 +10,17 @@
 //!
 //! ## Design notes
 //!
-//! **`lur.xml`**: unlike `lur.html`, the tree is owned data (an arena of elements behind an
-//! `Arc`), so a node is just a handle plus an index: `Send`, no re-parsing, no cache. Selection
-//! is a small slash-path grammar rather than CSS or full `XPath`: feeds need `a/b`, `//a`, `*`
-//! and little else, and CSS would force a second selector engine over this tree. Names are
-//! matched as written without namespace resolution (`dc:creator`); scripts that need a
-//! different prefix mapping are rare and the workaround is one extra `if`. Structure errors
-//! raise (a half-parsed feed is worse than none) while unknown entities are kept literally,
-//! because real feeds use `&nbsp;` undeclared. `DOCTYPE` is dropped, so custom entities never
-//! expand (no billion-laughs). Parsing and traversal are iterative, so nesting depth cannot
-//! overflow the stack. Not done: namespaces, `XPath` predicates, streaming, serialization back
-//! to XML.
+//! - Unlike `lur.html`, the tree is owned data (an arena of elements behind an `Arc`), so a
+//!   node is a handle plus an index: `Send`, no re-parsing, no cache. Parsing and traversal
+//!   are iterative, so nesting depth cannot overflow the stack.
+//! - Selection is a small slash-path grammar rather than CSS or full `XPath`: feeds need
+//!   `a/b`, `//a`, `*` and little else, and CSS would force a second selector engine over this
+//!   tree. Names match as written without namespace resolution (`dc:creator`); a different
+//!   prefix mapping is rare and the workaround is one extra `if`.
+//! - Structure errors raise (a half-parsed feed is worse than none), but unknown entities are
+//!   kept literally because real feeds use `&nbsp;` undeclared. `DOCTYPE` is dropped, so
+//!   custom entities never expand (no billion-laughs).
+//! - Not done: namespaces, `XPath` predicates, streaming, serialization back to XML.
 
 use std::sync::Arc;
 
