@@ -1,5 +1,40 @@
 //! `lur.kv` — string keys, raw-byte values in the backend's internal `lur_kv`
 //! table. Atomic ops rely on the backend's own atomicity.
+//!
+//! ## Design notes
+//!
+//! **Value model and expiry**
+//! - The value model is defined at the seam (opaque bytes vs integer counter). Don't
+//!   harmonize it by changing the SQLite schema; a future SQLite→Postgres migration should
+//!   read through one `Backend` and write through the other, not copy tables.
+//! - Expiry is a per-key absolute `expires_at`, not a TTL the database enforces. `now` comes
+//!   from Rust so both backends agree and a skewed Postgres clock cannot change results;
+//!   every op filters on it (lazy expiry) and deletion is housekeeping (on open, then hourly
+//!   on writes), the same "TTL lags, filter on read" shape as Postgres/DynamoDB.
+//! - The unit is `ttl_ms` because Redis `EX` is seconds and a bare `60` would silently mean
+//!   60 ms; `ttl_ms <= 0` raises rather than meaning "now" or "never".
+//!
+//! **TTL semantics follow Redis where it has an answer**
+//! - `set` without `ttl_ms` clears the expiry (like `SET`; `KEEPTTL` is opt-in there).
+//! - `incr` keeps the expiry, as Redis `INCR` does. Its `ttl_ms` applies only if the key has
+//!   no expiry (Redis `EXPIRE NX`), folded into the same statement because the usual
+//!   `INCR`-then-`EXPIRE` pair leaks a counter that never expires if the second call is lost.
+//!   So a rate limit is a fixed window (opened by the first hit, not extended by later ones);
+//!   `renew_ttl = true` is the idle-timeout variant.
+//! - `cas`/`update` keep the existing expiry. Redis has no equivalent, but clearing it would
+//!   turn a rate-limit window or a session with an absolute lifetime into a permanent key.
+//! - Rejected: always-refresh as the `incr` default (a client that keeps retrying is never
+//!   released), a separate `window_ms`/`nx` knob, and a `kv.hit` rate-limit helper for now
+//!   (the `incr` form reads better; revisit).
+//! - Sharp edge: forgetting `ttl_ms` on `incr` leaves a counter that never resets until a
+//!   later `incr` supplies one (it is added then, so old counters heal).
+//!
+//! **`kv.ttl` returns `ms, exists`** rather than one three-state value: `nil, false` absent,
+//! `nil, true` no expiry, `ms, true` expiring. One-value callers get a number or `nil` (safe
+//! in arithmetic); Redis's `-1`/`-2` would make `ttl < 1000` true for a missing key.
+//!
+//! **Limit**: a `lur.db` write inside a `kv.update` transform blocks on the lock; on Postgres
+//! it hangs unless `--timeout` is set.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

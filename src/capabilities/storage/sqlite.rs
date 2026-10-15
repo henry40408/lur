@@ -1,4 +1,9 @@
 //! `SQLite` storage backend: pool, SQL, `?` binding, row→Lua mapping, busy retry.
+//!
+//! ## Design notes
+//!
+//! - **SQLite retry** wraps only lock acquisition and single statements; re-running a
+//!   transaction body was rejected (duplicated side effects).
 
 use std::future::Future;
 use std::path::Path;

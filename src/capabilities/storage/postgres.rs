@@ -2,6 +2,16 @@
 //! types only), and the `kind`-discriminated kv schema. No retry layer: single
 //! statements block rather than fail busy, and `SERIALIZABLE` APIs are
 //! documented as fallible.
+//!
+//! ## Design notes
+//!
+//! - **Postgres non-core column types raise** instead of being stringified: sqlx returns the
+//!   binary wire format with no generic to-text, and text forms like `timestamptz` depend on
+//!   server `TimeZone`/`DateStyle`. Users cast (`col::text`). Lua strings bind as `text` if
+//!   valid UTF-8, else `bytea`; mismatched target columns need an explicit `$1::bytea` cast.
+//! - **Postgres `db.tx`/`kv.update` use `SERIALIZABLE`** because the database may be shared
+//!   with non-lur writers; an advisory lock only serializes cooperating writers. Hence they're
+//!   fallible and never auto-retried (the body may have side effects).
 
 use std::str::FromStr;
 

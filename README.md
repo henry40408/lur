@@ -900,6 +900,23 @@ still returns `500`). Capability argument mistakes name the function, e.g.
 Output is colorized only on a terminal; a non-empty [`NO_COLOR`](https://no-color.org)
 disables it.
 
+## Limitations
+
+- **Numbers are f64.** Integers above 2^53 lose precision; store large IDs as text.
+- Sandbox: no OS-level hardening (landlock/seccomp). The SQLite `--db` path is opened
+  outside `lur.fs`'s confinement.
+- Allowlists: no subdomain wildcards, CIDR ranges, path globs, or env-name prefixes.
+- A `lur.db` write inside a `kv.update` transform blocks on the lock; on Postgres it hangs
+  unless `--timeout` is set.
+- Cron: UTC only (no timezone setting), in-memory schedule, no missed-run replay, no
+  `@every` interval syntax.
+- Not implemented: streaming response bodies / `lur.http` downloads, multipart bodies
+  (`req.valid_body` answers 415; no `req.multipart`), retries, cookie jar, proxies, a
+  TLS-verification opt-out, managed migrations, in-memory DB, named SQL params,
+  socket/queue trigger sources, `lur.serve.on_start`,
+  configurable SQLite `busy_timeout`, machine-readable (`--error-format=json`) diagnostics,
+  symmetric/asymmetric crypto and KDFs, signed cookies, `lur docs <section>`.
+
 ## Development
 
 ```sh

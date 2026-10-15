@@ -1,5 +1,14 @@
 //! `lur.html.sanitize` — strip scripts, event handlers and unsafe URLs from
 //! untrusted HTML with `ammonia`'s allowlist (not hand-rolled on purpose).
+//!
+//! ## Design notes
+//!
+//! **`lur.html.sanitize`**: delegated to `ammonia` rather than hand-rolled, since an
+//! allowlist sanitizer is security code where the long tail (mXSS, scheme tricks) is the whole
+//! job. Cost measured: +275 KB release (ammonia 4.1.4 shares `html5ever` 0.39 with `scraper`,
+//! so no second parser). Schemes are narrowed to `http`/`https`/`mailto` (ammonia's default
+//! also allows `ftp`, `tel`, `magnet`, …). Not done: custom tag/attribute allowlists and
+//! returning a node instead of a string.
 
 use std::collections::HashSet;
 

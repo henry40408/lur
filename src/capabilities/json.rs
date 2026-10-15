@@ -1,5 +1,13 @@
 //! `lur.json` — JSON encode/decode. The one place lur requires UTF-8
 //! (base64 binary first). `lur.null` ↔ JSON `null`; `nil` means absent.
+//!
+//! ## Design notes
+//!
+//! **`null = "drop"` removes array elements and compacts** rather than leaving holes: a Lua
+//! table with holes has an undefined `#`, so `{1, nil, 2}` would break `ipairs`/`#`. The
+//! catch is that indices shift; use the default `"keep"` when positions matter. A bare
+//! top-level `null` stays `lur.null` (no container to drop it from). Unknown values raise.
+//! Compaction can turn `[null]` into an empty table, which `lur.json.encode` writes as `{}`.
 
 use mlua::{Error, Lua, Table, Value};
 use serde_json::Value as Json;

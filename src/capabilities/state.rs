@@ -6,6 +6,31 @@
 //! `fetch` is single-flight per key: on a miss one caller (the *leader*) runs
 //! the loader while concurrent callers for the same key, on any VM, wait for
 //! its outcome (see [`Flight`]). Only Rust data ([`Shared`]) crosses VMs.
+//!
+//! ## Design notes
+//!
+//! The reasons for the API (no `lur.cache`, evictable-only eviction, `fetch` apart from
+//! `update`), the outcome table, the status and error-identity choices, and the Rejected
+//! alternatives are in ARCHITECTURE.md, "`lur.state`" → "Why `lur.state` is shaped this
+//! way". Code-local points:
+//!
+//! - The LRU is a small index in this file, not a core shared with `HttpCache`: the two
+//!   differ (non-evictable entries, stale windows, versions), and sharing would have
+//!   changed a hot path for no behavioural gain. The counters (`hits`/`misses`/`stale`/
+//!   `evictions`) are kept for a future `/metrics`.
+//! - The first loader to finish stores (normally the leader; an inline caller can beat
+//!   it), so the leader's `ttl_ms`/`stale_ms` win over its waiters' and a waiter's own
+//!   options never reach the store. A shared failure falls back to the window stored with
+//!   the old value. A leader's OOM is shared as plain text so waiters are not themselves
+//!   classified as OOM.
+//! - Gap, handled by `wait_same_vm`: a memory error inside mlua's poll loop kills a
+//!   leader's thread with its guard still on the stack. That is garbage, dropped only at a
+//!   GC, which a VM that only waits may never start. A caller waiting on a leader of its
+//!   own VM therefore runs a full GC every second (at most once a second per VM) until it
+//!   hands off, which also happens while a sibling waits on a slow live leader; accepted,
+//!   as same-VM waits are rare. A caller on another VM waits for that VM's GC, its
+//!   `end_run`, or its own timeout. A unit test leaks a guard into garbage, since the
+//!   memory error cannot be raised on demand.
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};

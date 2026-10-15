@@ -1,6 +1,20 @@
 //! `lur.feed` — serialize RSS 2.0, Atom 1.0 and JSON Feed 1.1 from plain tables.
 //! Dates are epoch milliseconds (as everywhere in `lur`). XML text is escaped and
 //! characters illegal in XML 1.0 are dropped, since scraped content often has them.
+//!
+//! ## Design notes
+//!
+//! - RSS/Atom are written with `quick-xml`'s `Writer` (closures guarantee balanced tags; text
+//!   and attributes are escaped), not hand-built strings; only characters XML 1.0 forbids are
+//!   stripped. Rejected: `rss`/`atom_syndication` (two typed models to map from Lua tables,
+//!   less control over output). Text is escaped rather than CDATA (no `]]>` edge case).
+//! - Dates are epoch ms and the serializers format them; there is no date-format option.
+//!   Atom/JSON items without `guid`/`link` raise instead of inventing an id. Feed parsing is
+//!   `lur.xml`'s job and HTML sanitizing is `lur.html.sanitize`'s.
+//! - `skip_invalid` skips an item only when `title` is `nil` (which raises by default) or
+//!   empty/blank (accepted by default, so also dropped): the one field scrapes routinely
+//!   lack. Wrong types, bad dates and a missing `guid`/`link` still raise so real bugs are not
+//!   hidden; meta is never skipped.
 
 use std::borrow::Cow;
 

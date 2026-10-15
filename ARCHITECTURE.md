@@ -1,7 +1,8 @@
 # Architecture
 
 For developers working *on* `lur`; for usage see the [README](README.md).
-Design rationale and known limitations: [docs/decisions.md](docs/decisions.md).
+Design rationale and known limitations sit next to what they explain: in the sections below
+and in the `//!` docs of the `src/` modules. User-facing limits are in the README.
 
 ## Overview
 
@@ -23,6 +24,14 @@ One binary, two modes, one shared core:
 ```
 
 `src/lib.rs` is the library; `main.rs` is a thin CLI on top.
+
+### Why Luau
+
+- **Luau, not PUC Lua 5.4.** Untrusted scripts are in the threat model, and Luau's
+  `sandbox(true)` (readonly globals, dangerous stdlib removed) is hardened at Roblox scale;
+  a hand-rolled 5.4 sandbox would make every bug a lur CVE. Costs: Lua 5.1 dialect (no
+  integer subtype, `goto`, `<close>`), smaller ecosystem. Revisit only if scripts become
+  semi-trusted-only *and* 5.4 semantics become a hard requirement.
 
 ## Module map
 
@@ -66,6 +75,24 @@ Both modes build VMs via [`runtime::build_lua`](src/runtime.rs). Order is load-b
    deadline it raises on *every* interrupt, so a `pcall` loop can't swallow it.
 5. **Memory cap last**, so construction allocations don't count against it.
 
+### Sandbox rationale
+
+- **Only `require` is a real escape** among the four stripped globals.
+  `loadstring`/`getfenv`/`setfenv` can't reach `io`/`os`; they are stripped for least surface
+  and to stop global bleed on pooled VMs. A policy-gated `require` via mlua's
+  `create_require_function` is the natural future replacement for dropping it.
+- **Every table under `lur` is frozen, not just `lur`**, because otherwise one request could
+  tamper with later ones on a pooled VM (e.g. forge `lur.validate.try`). The explicit
+  per-capability freeze costs ~+2% on `vm_cold_start`. Rejected: a generic recursive walk
+  (an mlua `pairs` Rust walk: +9%, from value-converting iteration, since every function
+  value becomes a registry ref; a Luau walk: +24%, chunk compile). A raw `lua_next` walk
+  would cost <1% but needs `unsafe`, which the crate denies.
+  - Tables returned by functions are covered only by the rule in step 2 (capabilities must
+    not keep mutable state in a lur-visible table), enforced in review.
+  - Nothing had to move out of lur-visible tables: no capability wrote into one after install
+    (state lives in Rust or closures).
+  - Behaviour change: scripts can no longer monkeypatch or extend `lur.*`; use a local table.
+
 ### Two-layer timeout
 
 - The **deadline interrupt** aborts CPU-bound Lua.
@@ -89,6 +116,27 @@ happening:
   signal, which the interrupt would otherwise abort.
 - After a run that timed out or ran out of memory, `runtime::reclaim` does a full GC as a
   backstop (the memory cap can also fail inside the poll loop). Only those endings pay for it.
+
+#### Rationale
+
+- **The deadline interrupt must keep raising.** Its error is an ordinary catchable Lua
+  error; a fire-once abort would be swallowed by `while true do pcall(...) end`. The one
+  exception is mlua's async poll loop (below); it still raises in every user frame.
+- **Why the poll loop is exempt.** The tokio timer and the deadline expire together; the timer
+  wakes the loop first, the interrupt raises in it, and the thread dies with the pending host
+  futures on its stack. Nothing drops them until a GC, which an idle pooled VM may not run for
+  a long time. Observed: a timed-out run on a reused VM left its `fetch` leader's flight in
+  place, so later callers of that key waited until their own timeouts. With the skip, every
+  other drop guard on a timed-out run (e.g. a cancelled `db.tx`) also runs promptly.
+- **What the tests pin.** A unit test pins the poll loop's chunk name, so an mlua bump that
+  renames it fails loudly. A serve test pins the skip itself: a timed-out handler's nested
+  `lur.async` task holding a `db.tx` must release the write lock at once; only it fails
+  without the skip. The other two rules (clearing the deadline, the backstop GC) are
+  belt-and-braces no test can catch: with the skip, mlua's terminate resume already starts in
+  the poll frame, and the memory cap failing inside that frame needs an allocation at exactly
+  that point, which cannot be forced. They cost nothing on a normal run.
+- **Rejected:** a GC after every run (hot-path cost); a GC loop alone (one collection only
+  frees one level of nested `lur.async` tasks).
 
 ## Capability layer
 
@@ -119,7 +167,8 @@ grants nothing; `loose()` grants everything. Enforced at each capability:
   resolver rejecting loopback/private/link-local IPs unless `--allow-private` (SSRF guard),
   caps redirects (10) and the buffered body (`--max-http-body`), and always verifies TLS.
   IP literals bypass the resolver, so `url_allowed` is their sole private-IP check; system
-  proxy env vars are ignored. See [docs/decisions.md](docs/decisions.md).
+  proxy env vars (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) are ignored on purpose: through a
+  proxy the name is resolved remotely and bypasses the resolver.
 - **`lur.env`** returns `nil` for both denied and unset, so it isn't an existence oracle.
 
 ## One-shot mode
@@ -146,6 +195,11 @@ Pool { available: Mutex<Vec<Vm>>, permits: Semaphore }
 `checkout()` acquires a permit, then pops a VM. The `CheckedOut` guard pushes the VM back on
 `Drop` *before* releasing the permit, so a woken waiter always finds a VM. Exclusive ownership
 per call is what makes the per-call env swap safe; pool size caps concurrent handlers.
+
+**Rationale.**
+
+- **`app.lua` top level runs once per pooled VM**, so it must be idempotent
+  (`CREATE TABLE IF NOT EXISTS`, etc.).
 
 ### Routing
 
@@ -186,6 +240,12 @@ returning a partial body.
 handler/cron env: reads fall through, writes are discarded after the call. Together with
 stripping `getfenv`/`setfenv`/`loadstring`, this prevents cross-request global bleed.
 
+**Rationale.**
+
+- **Upvalues persist across requests on a pooled VM** and can't be prevented (inherent to
+  closures). `fresh_env` only isolates globals. Rule: never stash request data in an
+  upvalue; use `lur.state`/`lur.kv`.
+
 ### Cron
 
 Each job runs a `cron_loop`: compute the next fire from the 6-field spec, sleep (or stop on
@@ -193,6 +253,10 @@ shutdown), run on a pooled VM. Single-flight by default (an `AtomicBool` skips a
 previous run is in flight; `overlap = true` allows concurrency). Missed ticks are never
 replayed. A per-job `timeout` overrides the per-event timeout. Errors and timeouts are logged
 with the job name, never propagated.
+
+**Known limitations.**
+
+- UTC only (no timezone setting), in-memory schedule, no `@every` interval syntax.
 
 ### Graceful shutdown
 
@@ -227,9 +291,10 @@ awaited, bounded by `--shutdown-grace`. Stragglers are aborted when the runtime 
   key is a SHA-256 of method, final URL and all request headers. Entries are `Arc`s with an
   `Instant` expiry; expired ones are dropped on lookup and swept at most once a minute on
   insert. Size is bounded by `--http-cache-max-entries` / `--http-cache-max-bytes` (`0` =
-  unlimited): a `BTreeMap<tick, key>` recency index gives LRU order, a hit re-stamps the
-  entry, and an insert over either cap drops expired entries and then pops the oldest; a
-  single entry larger than the byte cap is not stored. Sizes count body + headers + key.
+  unlimited): a `BTreeMap<tick, key>` recency index (no new dependency) gives LRU order, a
+  hit re-stamps the entry, and an insert over either cap drops expired entries (free) and
+  then pops the oldest; a single entry larger than the byte cap is not stored. Sizes count
+  body + headers + key, not allocator overhead.
 - **`lur.text.replacer`** (`capabilities/text.rs`): an immutable byte trie (`Arc<Matcher>`),
   one per `replacer` call. `match` only changes which candidate on the walk wins (lowest
   pair index vs deepest), so both modes share one structure. `ReplacerStore` (in
@@ -276,6 +341,16 @@ SQLite, `BEGIN ISOLATION LEVEL SERIALIZABLE` on Postgres). If the wall-clock tim
 future mid-body, dropping the `Transaction` queues a ROLLBACK on the connection before it
 returns to the pool, so it is never reused mid-transaction (on Postgres it would sit
 idle-in-transaction holding locks). Explicit commit/rollback consumes the transaction.
+
+**Rationale.**
+
+- **Cleanup relies on sqlx's rollback-on-drop**, via `Pool::begin_with` so the `BEGIN`
+  statement stays ours. Rejected: the earlier hand-rolled guard (`PinnedTx` + detached
+  ROLLBACK task), replaced once sqlx 0.9 gained `begin_with`; the cancel tests
+  (single-connection pool) pass on both backends. Also rejected: Postgres server-side
+  timeouts (Postgres-only, and would kill legitimately slow transforms).
+- `db.tx` closures hold `Weak` refs so cancellation drops the transaction immediately instead
+  of waiting for Luau GC.
 
 ### `lur.state`
 
@@ -350,6 +425,87 @@ Invariants:
   next GC, or `end_run`); a caller waiting on a leader of its own VM collects
   garbage every second (`wait_same_vm`, at most once a second per VM) until it hands off.
 
+#### Why `lur.state` is shaped this way
+
+- **No `lur.cache`: `state` gains TTL, an opt-in eviction cap and `fetch`.** A second
+  in-memory store next to `state` and `kv` makes users pick between three; the honest axis is
+  persistence (`kv` needs `--db`, `state` does not), so `state` is "`kv` in memory" with the
+  same `ttl_ms` rules.
+  - Eviction is the hazard (a counter or an `add`-as-lock silently dropped is a correctness
+    bug), so only `evictable = true` entries and everything `fetch` stores are ever dropped; a
+    write that cannot fit raises (`state is full`) and changes nothing. Caps default to
+    unlimited, so existing scripts are unaffected.
+  - `fetch` (Rails' name, not `get_or_set`: the rest of the API is short Redis-style verbs) is separate from
+    `update` because its function has side effects and cannot be retried. `stale_ms` keeps an
+    expired value only for the loader-failed fallback; every other operation sees it as absent.
+  - The LRU is a separate small index, not a core shared with `HttpCache`: they differ
+    (non-evictable entries, stale windows, versions) and sharing would have changed a hot path
+    for no behavioural gain. Counters (`hits`/`misses`/`stale`/`evictions`) are kept for a
+    future `/metrics`.
+  - Rejected: a separate `lur.cache`, named cache instances (handle lifetime across the VM
+    pool), a global LRU over every entry, negative caching of loader errors, `kv.fetch` for now
+    (needs `--db`, which a cache should not).
+
+- **`fetch` is single-flight per key, pool-wide, with no new API.** Without it, N concurrent
+  misses ran the loader N times (a stampede on the slow upstream the cache protects). What
+  waiters get depends on how the leader's run ends:
+
+  | Leader ends with | Waiters get | Loader runs again? |
+  | --- | --- | --- |
+  | a value (incl. `nil`, or one too big to cache) | the value, status `"hit"` | no |
+  | an error the loader raised (incl. its own `lur.http` timing out, OOM) | the stale value as `"stale"`, else the same error | no, and the failure is not remembered |
+  | no outcome: its own deadline/timeout, or its future dropped (client gone, lost a `race`, shutdown, cron skip) | nothing yet: one waiter becomes the new leader | yes, once |
+
+  - Waiters report `"hit"` ("your loader did not run"); a new `"shared"` status would break
+    scripts that branch on the three existing ones.
+  - `nil` is shared but not cached, so the next miss loads again. A non-primitive return is
+    raised to every waiter (the loader's verdict, so no stale fallback).
+  - Error identity is not kept across VMs: waiters get the same `mlua::Error` text, so a
+    `lur.validate`/`lur.serve.abort` error table raised in a loader arrives as a plain error
+    (a 500, not the abort's status). Known limitation.
+  - OOM in the loader counts as the loader failing (shared as plain text, so waiters are not
+    themselves classified as OOM).
+  - The first loader to finish stores (normally the leader; an inline caller can beat it), so
+    the leader's `ttl_ms`/`stale_ms` win. The stale fallback uses the window stored with the
+    old value.
+  - Re-entry runs inline instead of raising, because raising would have broken loaders that
+    worked.
+  - Replacing `coroutine.resume`/`wrap` exists because a run can fetch a key whose leader it
+    parked itself: waiting would wait on itself, forever without a timeout and, in serve, for
+    every later caller of the key (`end_run` never comes). It uses no hidden mlua API
+    (`Lua::poll_pending()`): any return of the resume counts.
+  - Accepted consequence: a script-level scheduler that resumes a coroutine and forwards the
+    pending sentinel with its own `coroutine.yield` loses single-flight for that key (the
+    leader is removed at the resume and a concurrent caller loads too: a duplicate load, never
+    a deadlock; the late `finish` only stores, CAS on version 0). Forwarding the sentinel is
+    undocumented mlua behaviour.
+  - The replacements are Luau's `lcorolib.cpp` functions (`coresumey`/`auxresume`/`auxwrapy`)
+    over the public C API in `state/resume.rs`, the crate's only `unsafe`; `tests/coroutine.rs`
+    compares error messages, `luaL_where` prefixes, `debug.info` names and tracebacks with the
+    builtins.
+  - Rejected: a Lua wrapper around the builtins (resume micro-benchmarks +112–127%, VM cold
+    start +21%, an extra frame in tracebacks and `debug.info`); an mlua Rust function (errors
+    become `mlua::Error` userdata, changing error values and identity); per-task tracking, the
+    first design (per-VM numbers on a thread-local stack around every poll: +3–6% on
+    combinator micro-benchmarks, and with no timeout it still waited forever on a leader
+    parked in a still-running sibling task or whose coroutine moved between sibling tasks).
+  - Cost vs the builtins (interleaved medians of 6 rounds, two runs): `coroutine_resume_10k`
+    +1.5 to +4.8%, `coroutine_wrap_generator_10k` +4.4 to +6.1%, `vm_cold_start` −0.6 to
+    +2.7%, `async_*` −2.8 to +0.8%, `state_fetch_*` −0.2/+2.6% (noise: the hit path did not
+    change).
+  - Gap: a memory error inside mlua's poll loop kills a leader's thread with its guard still on
+    the stack, dropped only at a GC a waiting-only VM may never start. A same-VM waiter
+    therefore runs a full GC every second (`wait_same_vm`) until it hands off, even while a
+    sibling waits on a slow live leader (accepted: same-VM waits are rare); another VM waits
+    for that VM's GC, its `end_run`, or its own timeout. A unit test leaks a guard into
+    garbage, since the memory error cannot be raised on demand.
+  - Rejected: a per-key `Mutex` held across the loader (a lock across an `await`, and a waiter
+    could not tell success from a dead leader); retrying on failure (the loader has side
+    effects and N waiters would retry N times: the stampede again); remembering failures
+    (negative caching, rejected for `fetch` before); a chain of `oneshot`s per waiter (`watch`
+    gives late subscribers the outcome and a close signal for free); passing Lua values
+    between VMs (unsound: a VM's values belong to its own state).
+
 ## Validation & structured errors
 
 [`capabilities/validate.rs`](src/capabilities/validate.rs) is installed after `feed` (pure
@@ -368,6 +524,43 @@ does `error(tbl, 0)`. The factory is compiled once per process and loaded once p
 (`error_meta`) is read-only with `__metatable = false`, so scripts cannot rewrite it for a
 pooled VM. Uncaught, the error's `__tostring` (its `message`) is what the CLI prints.
 `lur.serve.abort` reuses `raising`/`error_meta` (below).
+
+### Validation rationale
+
+- **A toolkit of functions, not a route DSL:** small composable schemas called *inside*
+  handler code (`parse`/`try`), Nitro/h3 style. It works the same in one-shot scripts, cron
+  jobs and handlers and needs no server hooks; `req.valid_*` and `lur.serve.abort` build on
+  it (below).
+- **Coercion is deliberately narrow** (inputs are mostly query-string text):
+  - `int`: a number with an integral value or a string strictly `-?%d+` (`1.5`, `1e3`,
+    `0x10`, `+1` and whitespace are rejected, not "helpfully" parsed). `number`: finite
+    decimal floats. `bool`: only `"true"`/`"false"`. `str` never coerces from a number.
+  - `""` is *missing* for `int`/`number`/`bool` (so `?limit=` takes the default; a blank form
+    field is not an input) but a valid `str`.
+  - Luau numbers are f64: integers beyond 2^53 are rejected rather than silently rounded;
+    keep larger ids as strings.
+- **Objects:** unknown keys are dropped (mass-assignment safe, result is always a fresh
+  table) unless `strict = true` makes them an error. All issues are collected
+  (`issues = { { path, message } }`, paths `a.b[2].c`, root `""`, capped at 100) so a client
+  fixes a form in one round trip; failure raises a table (`kind = "validation"`).
+- **No `date`/`uuid`/`email`/`url` builtins:** each has many defensible definitions; a plain
+  function validator (`function(v) ... return v end`, raising to reject) plus
+  `lur.time`/`lur.url` covers them without freezing one in the API.
+- **`pattern`** is a Lua pattern run by Luau's `string.find`, not a regex: no new dependency,
+  the matcher scripts already know; limits (no alternation, not implicitly anchored) are
+  documented.
+- **`lur.null`** is absent for object fields and the root (normalized in `check_object` / the
+  entry point, so `optional`/`default` see `nil` and a required field says "is required", not
+  a type error), but deliberately *not* for list items (dropping a `null` would change the
+  list); function validators see the raw value. This is what lets `req.valid_body` accept JSON
+  clients that send `{"x": null}`.
+- **Edge rules:** `optional` only waives "required" (an inner `default` still fills);
+  `default` values are not checked against `min`/`max`/`pattern`; a function validator's
+  returned table is not copied, so it may alias its input.
+- **Rejected:** raising a Rust error (scripts would get opaque userdata), a global `pcall`, a
+  regex crate. **Not done:** coercion defaults beyond the above, async schemas cached by name,
+  localized messages. Errors across `lur.async` tasks:
+  [below](#error-tables-across-lurasync-tasks).
 
 ### `lur.serve.abort` and `req.valid_*`
 
@@ -411,6 +604,47 @@ is never held across an await. Decode errors map to `abort(400, "invalid JSON bo
 (memory errors propagate); an empty JSON body is handed to `try` as `nil` and, if that
 fails, answered with the same 400 rather than the validation message.
 
+#### Rationale: abort and form bodies
+
+- **`abort` and `req.valid_*`** wire `lur.validate` into handlers as plain calls (h3
+  `createError` style), not route metadata.
+  - *Naming*: `abort`, not `error`, so a call site reads as "stop here" and a status can't be
+    mistaken for success; only `400..=599` is accepted (`abort(200, …)` is an argument error),
+    so it can't produce a success or redirect. `fail_status` (not `status`/`error_status`) is
+    the validation-failure status: default 400, `404` for path params.
+  - *Body*: `{"error": message, "data": data}` JSON, `data` omitted when `nil`: one fixed
+    machine-readable shape; a handler that wants another returns a normal response.
+  - *No rollback*: there is no transaction around a handler, and pretending otherwise would
+    be worse than saying so.
+  - *Bare `lur.validate.parse`* failing uncaught stays a **500** on purpose: it signals a bug
+    (or an unchecked assumption) in the script, while client input goes through `req.valid_*`.
+  - *Async*: an uncaught abort inside a `lur.async` task is honored, nested combinators
+    included. Since error tables survive `lur.async`, `pcall` around a combinator also sees
+    `.status`; the slot stays the source of truth for the uncaught response.
+  - *Rejected*: an `xpcall` trampoline per handler/task (+24% async cost, see
+    [Error tables across `lur.async` tasks](#error-tables-across-lurasync-tasks)); encoding
+    the status in the error string (spoofable by any `error("...")`, visible in logs).
+    Not done: custom error renderers.
+  - *Message-match limit*: matching is by message (`error("xy")` does not match an abort
+    `"x"`), so a script that catches an abort and re-raises a string with the identical
+    message is treated as that abort (status the script chose earlier, body the earlier
+    abort's), and a later plain `error()` with a swallowed abort's text in the same run
+    returns that abort's `data`. Script-only.
+- **Form bodies and `req.valid_body`:**
+  - `req.form()`/`req.form_all()` raise on a non-urlencoded Content-Type instead of returning
+    `{}`: the caller is deciding how to read the body, and silently yielding nothing for a
+    JSON post hides the bug.
+  - `valid_body` dispatches (JSON / urlencoded / 415) because that is where a 4xx rather than
+    a 500 is right, reusing the query decoder and list feeding so `valid_query` and
+    `valid_body` cannot drift (`+` is a space, bad `%` stays literal). Multipart is
+    unsupported (415).
+  - Malformed JSON is always 400 `invalid JSON body`, independent of `fail_status` (for schema
+    issues, e.g. 422). An empty JSON body is invalid unless the schema accepts `nil` (decided
+    by running `try` on `nil`, not by sniffing the schema): `v.optional(...)` bodies work,
+    everything else gets a 400 instead of "expected object, got nil".
+  - Content-Type is read from `req.headers` at call time; a script that rewrites that table
+    changes only its own request's dispatch.
+
 ### Error tables across `lur.async` tasks
 
 `lur.async` runs each task in its own thread via `call_async`. When the thread fails, mlua
@@ -436,6 +670,22 @@ start and end of every run (`Runtime::guarded`, `call_handler`), so a table neve
 run, nor stays alive on an idle pooled VM.
 The `AbortSlot` match above still decides the HTTP response for an uncaught abort.
 
+**Rationale.**
+
+- **Cost.** Nothing per task on success; one Lua wrapper frame per `all`/`race`/`map` call.
+  Returning `(true, value)` instead of one value plus a private sentinel (`raising_hot`)
+  measured ~700 extra instructions per `all` call (~+4% on `async_all_small`, vs ~+2.5%);
+  `async_race_small` is ~+5% (about 0.8 µs per call, the wrapper frame being a larger share
+  of a cheap call).
+- **Rejected:** an `xpcall` trampoline around every task (+24–49% on `vm_cold_start`,
+  `async_map` and `async.all`, budget 5%); recording the table at raise time (wrong after a
+  task catches one error and later re-raises it while another task raised in between).
+- **Accepted limits** (beyond those above): only `error_meta` tables are recovered, so a
+  script's own `error({...})` in a task still arrives as text (a plain table has no hook); a
+  string error raised in the same run that begins with the text of an error table rendered
+  earlier and not yet consumed comes back as that table (script-only; same match as the abort
+  slot).
+
 ## Async core
 
 [`capabilities/async_ops.rs`](src/capabilities/async_ops.rs): `lur.async.sleep` and
@@ -452,6 +702,38 @@ and drops the rest. Bounding the window keeps a long list from parking thousands
 on the semaphore, which was quadratic in list length. `map(list, fn, opts?)` runs
 `fn(item, index)` per element; nested combinators under a tight `--max-concurrency` can
 still starve.
+
+**Rationale.**
+
+- **Sliding window for every combinator** (`all`/`settled`/`race`/`any`/`map` share `drive`).
+  - `try_join_all` is not an option: above 30 futures it silently becomes `FuturesOrdered`, so
+    an early error waited behind earlier items and queued items kept starting.
+  - Creating every future up front parked thousands on the semaphore and each wake-up
+    rescheduled the lot (profiled: 80k items under `limit` took ~500 ms, 20x the unbounded
+    run; windowed it is linear).
+  - The window is `--max-concurrency`, narrowed by `map`'s `opts.limit`. `limit` is a per-call
+    bound, so there is no per-call semaphore; only the global permit is acquired inside each
+    task, since it is shared across calls.
+  - Nested combinators (a `map` inside `map`/`all`/`any`) under a tight `--max-concurrency` can
+    still starve: a parent task holds a global permit while its children wait for one.
+- **`limit`** must be an integer >= 1 (`math.huge`, floats and strings raise naming
+  `opts.limit`); values above the item count are harmless.
+- **`drop_errors`** compacts the result in input order (failed items vanish, later indexes
+  shift) and discards error messages; use `settled` when they matter. A `nil` return still
+  leaves a hole, as in `all`.
+- **The list must be a pure array** (non-sequence keys raise) so a typo'd dict is not silently
+  ignored.
+
+## Diagnostics & docs rendering
+
+- **Diagnostics**: chunk name is the CLI path as typed (not canonicalized or
+  basenamed). Exit codes deliberately not split per error kind.
+- **`lur docs`**: hand-rolled ANSI renderer over `pulldown-cmark` (no default features);
+  `termimad` rejected for its dependency weight. 16-color SGR only. Terminal size comes from
+  a positive `COLUMNS`, else `TIOCGWINSZ` via `rustix::termios` (unix, no `unsafe`); pipes get
+  full-width tables. Cell width uses `unicode-width` rather than a hand range table, which got
+  emoji (✅) and ZWJ sequences (👨‍👩‍👧) wrong. Known limitation: nested quotes / lists inside a
+  quote remain unwrapped.
 
 ## Configuration resolution
 

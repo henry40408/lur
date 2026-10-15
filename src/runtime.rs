@@ -1,4 +1,20 @@
 //! The shared execution core: a single sandboxed Luau VM.
+//!
+//! ## Design notes
+//!
+//! A timed-out run must drop its host futures at once, so three pieces keep the deadline
+//! from killing a Lua thread inside mlua's async poll loop (`ASYNC_POLL_SOURCE`): the
+//! interrupt skips that frame (`in_async_poll`), `with_timeout` clears the deadline before
+//! dropping the call, and `reclaim` runs a full GC after a timeout or OOM. Why, and the
+//! Rejected alternatives (a GC after every run, a GC loop alone): ARCHITECTURE.md,
+//! "Two-layer timeout" → "Rationale".
+//!
+//! Tests: a unit test pins the poll chunk name, so an mlua bump that renames it fails
+//! loudly. A serve test (a timed-out handler's nested `lur.async` task holding a `db.tx`
+//! must release the write lock at once) is the only test that fails without the skip. The
+//! other two pieces are belt-and-braces no test can catch: the memory cap failing inside
+//! the poll frame cannot be forced, and with the skip mlua's terminate resume already
+//! starts there. They cost nothing on a normal run.
 
 use std::future::Future;
 use std::path::PathBuf;

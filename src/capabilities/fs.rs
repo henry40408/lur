@@ -1,6 +1,17 @@
 //! `lur.fs` — filesystem access gated by the [`Policy`] allowlists: paths are
 //! canonicalized to pick a root, then opened confined beneath that root's
 //! directory handle. Data and paths are raw bytes.
+//!
+//! ## Design notes
+//!
+//! - Files are opened beneath a root's directory handle (`cap-std`) instead of
+//!   canonicalize-then-`std::fs::open`, which had a TOCTOU window (a symlink swapped in after
+//!   the check). Canonicalizing still picks the granting root, but the OS confines the open to
+//!   that root, so losing the race can only reach files inside it. Cost: +17 KB binary.
+//! - Rejected: hand-rolled `openat2` (`unsafe`, no macOS equivalent).
+//! - Consequences: a file root is a handle on its parent plus the one allowed name; `--loose`
+//!   is a handle on `/` (one code path); a dangling symlink pointing inside the root can be
+//!   written through, one pointing out is refused at open time.
 
 use std::path::PathBuf;
 use std::sync::Arc;

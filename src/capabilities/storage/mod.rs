@@ -1,5 +1,12 @@
 //! Storage backend seam: keeps `db.rs`/`kv.rs` backend-neutral. The `--db`
 //! scheme picks `SQLite` or `Postgres`.
+//!
+//! ## Design notes
+//!
+//! - **Enum dispatch, not `dyn` trait.** Exactly two backends, one per deployment, no plugin
+//!   model; no runtime backend switching. Promoting the enum to a trait later is mechanical.
+//! - **No SQL translation.** Each backend uses its native dialect and placeholders (`?` is a
+//!   jsonb operator in Postgres, so translating would be ambiguous).
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, Ordering};

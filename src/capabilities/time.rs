@@ -1,6 +1,19 @@
 //! `lur.time` — what `os.*` lacks: millisecond wall/monotonic clocks, RFC 3339 /
 //! RFC 2822 / HTTP-date parsing, lenient parsing of scraped dates, and
 //! timezone-aware formatting (`os.date` only knows local time and UTC).
+//!
+//! ## Design notes
+//!
+//! - Integer milliseconds everywhere. `os.date("!…")` knows only local time and UTC, but feeds
+//!   need RFC 2822 with offsets and scraped sites need `Asia/Taipei`-style zones, so
+//!   `format*`/`parse` take an optional `tz` (IANA via `chrono-tz`, or a fixed offset).
+//! - `parse` without a format accepts a short fixed list on purpose (no guessing `dd/mm` vs
+//!   `mm/dd`: ambiguous input needs an explicit `fmt`). A DST gap raises; an overlap picks the
+//!   earlier instant.
+//! - `try_parse` returns `nil` for unparseable text and for `nil` text (a missing scraped
+//!   node), but still raises on a bad `fmt`/`tz`: those are script bugs, not data. A
+//!   well-formed `fmt` that can never yield a timestamp (`"%H:%M"`) returns `nil`, where
+//!   `parse` would raise.
 
 mod zoned;
 
