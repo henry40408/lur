@@ -1,4 +1,9 @@
 //! `lur.db` — Lua wiring over `storage::Backend` (`SQLite` or Postgres).
+//!
+//! ## Design notes
+//!
+//! - **`db.tx` takes the write lock on SQLite even when read-only** (`BEGIN IMMEDIATE`) —
+//!   deliberate.
 
 use mlua::{Error, Function, Lua, MultiValue, Table, Value, Variadic};
 use std::path::PathBuf;

@@ -1,6 +1,11 @@
 //! The flat `lur.*` capability table. [`install`] must run before
 //! `sandbox(true)` freezes the globals; it also freezes each direct child of
 //! `lur` (deeper tables are frozen by the capability that creates them).
+//!
+//! ## Design notes
+//!
+//! **Pure-compute capabilities** (`json`, `base64`, `crypto`, `cookie`, `time`, `url`, `charset`, `html`, `feed`) are not
+//! policy-gated and take/return raw bytes; callers bridge with `hex`/`base64`.
 
 pub(crate) mod argcheck;
 pub mod args;

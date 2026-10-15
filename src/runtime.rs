@@ -1,4 +1,27 @@
 //! The shared execution core: a single sandboxed Luau VM.
+//!
+//! ## Design notes
+//!
+//! - **The deadline interrupt never raises inside mlua's async poll loop.** Found while adding
+//!   `fetch` single-flight: a run timed out on a reused VM left its leader's flight in place,
+//!   so later callers of that key waited until their own timeouts. mlua drives each async host
+//!   call from a small Lua loop (`=__mlua_async_poll`); the tokio timer and the deadline expire
+//!   together, the timer wakes the loop first, the interrupt raised in it, and the thread died
+//!   with the pending host futures on its stack: nothing dropped them until a GC, which an idle
+//!   pooled VM may not run for a long time. The interrupt now skips that frame (CPU-bound code
+//!   is still stopped in its own frames; parked code by the wall clock), `with_timeout` clears
+//!   the deadline before dropping the call so mlua's terminate resume is not aborted, and a
+//!   timed-out or OOM run ends with a full GC as a backstop. This also makes every other
+//!   drop guard on a timed-out run (e.g. a cancelled `db.tx`) run promptly. A unit test pins
+//!   the chunk name so an mlua bump that renames it fails loudly. A serve test pins the skip
+//!   itself: a timed-out handler's nested `lur.async` task holding a `db.tx` must release the
+//!   write lock at once. Without the skip that test fails, and so do none of the others. The
+//!   other two pieces are belt-and-braces and no test can catch their removal. With the skip,
+//!   mlua's terminate resume already starts in the poll frame. The memory cap failing inside
+//!   that frame needs an allocation at exactly that point, which cannot be forced. Both are
+//!   kept because they cost nothing on a normal run. Rejected: a GC after every
+//!   run (cost on the hot path); a GC loop alone (one collection only frees one level of
+//!   nested `lur.async` tasks).
 
 use std::future::Future;
 use std::path::PathBuf;

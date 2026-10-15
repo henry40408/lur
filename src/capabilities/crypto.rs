@@ -1,5 +1,10 @@
 //! `lur.crypto` — hashing, HMAC, secure random, constant-time compare. Digests
 //! are raw bytes; `lur.crypto.hex` converts to lowercase hex.
+//!
+//! ## Design notes
+//!
+//! **`lur.crypto`**: `hmac_md5` and `random_hex` omitted on purpose (extinct /
+//! composable). `constant_eq` returns early on length mismatch (length isn't secret).
 
 use hmac::{Hmac, KeyInit, Mac};
 use md5::Md5;

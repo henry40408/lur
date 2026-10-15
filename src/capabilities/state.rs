@@ -6,6 +6,64 @@
 //! `fetch` is single-flight per key: on a miss one caller (the *leader*) runs
 //! the loader while concurrent callers for the same key, on any VM, wait for
 //! its outcome (see [`Flight`]). Only Rust data ([`Shared`]) crosses VMs.
+//!
+//! ## Design notes
+//!
+//! - **`lur.state` grows TTL, an opt-in eviction cap, and `fetch`; there is no `lur.cache`.**
+//!   A second in-memory store next to `state` and `kv` makes users pick between three; the
+//!   honest axis is persistence (`kv` needs `--db`, `state` does not), so `state` is "`kv` in
+//!   memory" with the same `ttl_ms` rules. Eviction is the hazard: a counter or an `add`-as-lock
+//!   silently dropped is a correctness bug. So only entries written with `evictable = true` (and
+//!   everything `fetch` stores) are ever dropped; a write that cannot fit raises
+//!   (`state is full`) and changes nothing. Caps default to unlimited so existing scripts are
+//!   unaffected. `fetch` (Rails' name, not `get_or_set`: the rest of the API is short Redis-style
+//!   verbs) is separate from `update` because its function has side effects and so cannot be
+//!   retried. `stale_ms` keeps an expired value only for `fetch`'s loader-failed fallback; every
+//!   other operation sees it as absent. Rejected: a separate `lur.cache`, named cache
+//!   instances (handle lifetime across the VM pool), a global LRU over every entry, negative
+//!   caching of loader errors, and `kv.fetch` for now (needs `--db`, which a cache should not).
+//!   Single-flight came later (next entry). The LRU is a separate small index in `state.rs` rather than a shared core with
+//!   `HttpCache`: the two differ (non-evictable entries, stale windows, versions), and sharing
+//!   would have changed a hot path for no behavioral gain. Counters (`hits`/`misses`/`stale`/
+//!   `evictions`) are kept for a future `/metrics`.
+//! - **`fetch` is single-flight per key, pool-wide, with no new API.** Without it, N
+//!   concurrent misses ran the loader N times (a stampede on exactly the slow upstream the
+//!   cache protects). One caller leads and runs the loader unlocked; the others await a
+//!   `tokio::sync::watch` channel in the host-side flight table, each under its own timeout.
+//!   How a leader's run ends decides what waiters get:
+//!
+//!   | Leader ends with | Waiters get | Loader runs again? |
+//!   | --- | --- | --- |
+//!   | a value (incl. `nil`, or one too big to cache) | the value, status `"hit"` | no |
+//!   | an error the loader raised (incl. its own `lur.http` timing out, OOM) | the stale value as `"stale"`, else the same error | no, and the failure is not remembered |
+//!   | no outcome: its own deadline/timeout, or its future dropped (client gone, lost a `race`, shutdown, cron skip) | nothing yet: one waiter becomes the new leader | yes, once |
+//!   Choices: waiters report `"hit"` (meaning "your loader did not run"; a new `"shared"`
+//!   status would break scripts that branch on the three existing ones). `nil` is shared but,
+//!   as before, not cached, so the next miss loads again. A non-primitive return is raised to
+//!   every waiter (it is the loader's verdict, so no stale fallback). Error identity is not
+//!   kept across VMs: a waiter gets the same `mlua::Error`, i.e. its text, never a Lua value
+//!   from another VM, so an error table from `lur.validate` or `lur.serve.abort` in a loader
+//!   arrives as a plain error (a 500, not the abort's status) — a known limitation. OOM inside
+//!   the loader counts as the loader failing (shared), since it is not the waiter's own limit.
+//!   (noise: the hit path did not change). Gap: a memory error
+//!   raised inside mlua's poll loop kills a leader's thread with its guard still on the stack:
+//!   garbage, but only dropped at a GC, which a VM that only waits may never start. A caller
+//!   waiting on a leader of its own VM therefore runs a full GC every second (at most once a
+//!   second per VM) until it hands off (`wait_same_vm`). That also runs while a sibling waits
+//!   on a slow live leader, accepted as same-VM waits are rare. A unit test leaks a guard into
+//!   garbage, since that memory error cannot be raised on demand. A caller on another VM
+//!   waits for that VM's GC, its `end_run`, or its own timeout.
+//!   The first loader to finish stores (normally the leader; an inline caller can beat it),
+//!   so the leader's `ttl_ms`/`stale_ms` win over its waiters': a waiter's own options never
+//!   reach the store. The stale fallback on a shared failure uses the window stored with the
+//!   old value, as it always has. A leader's OOM is shared as plain text so waiters are not
+//!   themselves classified as OOM.
+//!   Rejected: a per-key `Mutex` held across the loader (holds a lock across an `await`, and a
+//!   waiter could not tell success from a leader that died); retrying on failure (the loader
+//!   has side effects, and N waiters would retry N times: the stampede again); remembering
+//!   failures (negative caching, rejected for `fetch` before); a chain of `oneshot`s per waiter
+//!   (`watch` gives late subscribers the outcome and a close signal for free); passing Lua
+//!   values between VMs (unsound: a VM's values belong to its own state).
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};

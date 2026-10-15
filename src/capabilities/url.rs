@@ -1,5 +1,12 @@
 //! `lur.url` — parse, resolve and build URLs (WHATWG, via the `url` crate).
 //! Pure compute: nothing here touches the network, so it is not policy-gated.
+//!
+//! ## Design notes
+//!
+//! **`lur.url`**: thin wrapper over the `url` crate (WHATWG, already in the tree via
+//! `reqwest`). `parse` returns a plain table (no userdata, no setters). `encode_query`
+//! sorts keys for deterministic output; `decode_query` keeps the last duplicate to match
+//! `req.query`. No percent-encode helper yet: `join` and `encode_query` cover URL building.
 
 use std::collections::BTreeMap;
 

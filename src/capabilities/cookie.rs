@@ -1,5 +1,10 @@
 //! `lur.cookie` — parse `Cookie` and build `Set-Cookie`. Raw bytes, no
 //! percent-encoding; `serialize` rejects input that would corrupt the header.
+//!
+//! ## Design notes
+//!
+//! **`lur.cookie`**: no percent-encoding (a value containing `%` would be ambiguous).
+//! `SameSite=None` without `secure` raises rather than silently adding `Secure`.
 
 use mlua::{Error, Lua, Table, Value};
 

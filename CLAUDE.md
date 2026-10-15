@@ -53,8 +53,9 @@ Violating these compiles but breaks the sandbox or the pool.
   `CHANGELOG.md`.
 - GitHub Actions are pinned by commit SHA with the tag as a trailing comment.
 - Integration tests: one file per surface under `tests/`; unit tests inline.
-- Design rationale, rejected alternatives, and known limitations live in
-  [docs/decisions.md](docs/decisions.md); update it when making a non-obvious design call.
+- Design rationale, rejected alternatives, and known limitations live in the module's `//!`
+  docs or the matching [ARCHITECTURE.md](ARCHITECTURE.md) section; update them when making a
+  non-obvious design call.
 - Docs ship with the change: a user-visible behaviour or `lur.*` API change updates, in the
   same change, [README.md](README.md) (reference) and [docs/GUIDE.md](docs/GUIDE.md) (examples;
   every `lua` block is a test in `tests/guide.rs`). A change to an invariant, module or

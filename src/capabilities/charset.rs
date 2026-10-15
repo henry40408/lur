@@ -1,6 +1,18 @@
 //! `lur.charset` — decode/encode legacy encodings (Big5, GBK, `Shift_JIS`, …)
 //! with `encoding_rs`, so a scraped page that isn't UTF-8 can reach
 //! `lur.html` and `lur.feed` intact.
+//!
+//! ## Design notes
+//!
+//! **`lur.charset`**: `encoding_rs` (the Encoding Standard's labels and BOM/replacement rules,
+//! as browsers behave), not `chardet`-style guessing: an unlabeled page decodes as UTF-8 and
+//! the script says otherwise, so output never depends on a heuristic. Explicit, not automatic
+//! in `lur.http`/`lur.html.parse`: both stay byte-oriented, and decoding is one call
+//! (`lur.charset.decode(res.body, res.headers["content-type"])`). A bare label or a whole
+//! `Content-Type` is accepted as the hint, so callers don't parse the header. An unknown
+//! label raises rather than guessing (wrap in `pcall` to fall back). `<meta>` sniffing only
+//! looks at `charset=` in the first 1 KiB and ignores a UTF-16 declaration, as browsers do.
+//! Not done: encoding detection, streaming decode, UTF-16 targets for `encode`.
 
 use encoding_rs::{Encoding, UTF_8};
 use mlua::{Error, Lua, Table, Value};

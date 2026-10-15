@@ -10,6 +10,27 @@
 //! Memory is bounded by `--replacer-max-bytes`: replacers that live only in one
 //! VM are counted per VM, replacers shared through `opts.key` are counted for
 //! the process. Over the cap raises; nothing is evicted.
+//!
+//! ## Design notes
+//!
+//! **`lur.text.replacer`**: Go `strings.NewReplacer` semantics (earliest listed pair wins at
+//! a position, non-overlapping, left to right), plus `match = "longest"` as an option, not a
+//! second constructor: input, method and budget are identical, only the winner differs, and
+//! both are the same trie. Input is parsed `{ old, new }` pairs, deliberately not a
+//! dictionary format (`OpenCC` TSV and others are parsed in Lua; measured at ~15 ms for 54k
+//! lines, so no Rust text-parsing entry). Sharing is explicit (`opts.key`), never inferred
+//! from content: no hashing, and each VM otherwise owns its replacer (GC releases it, which
+//! keeps pool isolation). A key reused with a different `#pairs` or `match` raises instead
+//! of silently returning something else. The cap (`--replacer-max-bytes`) is per VM for
+//! unkeyed and per process for keyed, enforced by raising after a GC (no eviction: a
+//! replacer in use cannot be dropped). The trie is built incrementally so an over-cap
+//! dictionary stops early, and `replace` runs in native code, so it caps its output at the
+//! VM's remaining `--memory` and polls the deadline (`first` also prunes by smallest pair
+//! index under a node; `longest` is O(n x longest old) like Go, bounded by the deadline).
+//! A key is "first definition wins while some VM still holds it": when it is collected a
+//! later call rebuilds from its own pairs, so a shared key must not carry request-specific
+//! data. Not done: a loader-function form (build only on a cache miss), rune-aware matching
+//! (bytes are matched), regex replacement.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
