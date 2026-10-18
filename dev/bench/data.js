@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792301309994,
+  "lastUpdate": 1792302124157,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -6209,6 +6209,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1429133,
             "range": "± 21288",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8bd883edaf953ede8e9c5a0314ba7bfa2f17319e",
+          "message": "chore(deps): bump the cargo group across 1 directory with 5 updates (#187)\n\nBumps the cargo group with 5 updates in the / directory:\n\n| Package | From | To |\n| --- | --- | --- |\n| [hyper](https://github.com/hyperium/hyper) | `1.11.1` | `1.12.0` |\n| [serde_json](https://github.com/serde-rs/json) | `1.0.151` | `1.0.152` |\n| [tokio-util](https://github.com/tokio-rs/tokio) | `0.7.19` | `0.7.20` |\n| [toml](https://github.com/toml-rs/toml) | `1.1.6+spec-1.1.0` | `1.1.8+spec-1.1.0` |\n| [rustix](https://github.com/bytecodealliance/rustix) | `1.1.4` | `1.1.5` |\n\n\n\nUpdates `hyper` from 1.11.1 to 1.12.0\n- [Release notes](https://github.com/hyperium/hyper/releases)\n- [Changelog](https://github.com/hyperium/hyper/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/hyperium/hyper/compare/v1.11.1...v1.12.0)\n\nUpdates `serde_json` from 1.0.151 to 1.0.152\n- [Release notes](https://github.com/serde-rs/json/releases)\n- [Commits](https://github.com/serde-rs/json/compare/v1.0.151...v1.0.152)\n\nUpdates `tokio-util` from 0.7.19 to 0.7.20\n- [Release notes](https://github.com/tokio-rs/tokio/releases)\n- [Commits](https://github.com/tokio-rs/tokio/compare/tokio-util-0.7.19...tokio-util-0.7.20)\n\nUpdates `toml` from 1.1.6+spec-1.1.0 to 1.1.8+spec-1.1.0\n- [Commits](https://github.com/toml-rs/toml/compare/toml-v1.1.6...toml-v1.1.8)\n\nUpdates `rustix` from 1.1.4 to 1.1.5\n- [Release notes](https://github.com/bytecodealliance/rustix/releases)\n- [Changelog](https://github.com/bytecodealliance/rustix/blob/main/CHANGES.md)\n- [Commits](https://github.com/bytecodealliance/rustix/compare/v1.1.4...v1.1.5)\n\n---\nupdated-dependencies:\n- dependency-name: hyper\n  dependency-version: 1.12.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo\n- dependency-name: serde_json\n  dependency-version: 1.0.152\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: tokio-util\n  dependency-version: 0.7.20\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: toml\n  dependency-version: 1.1.8+spec-1.1.0\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: rustix\n  dependency-version: 1.1.5\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-18T13:38:14+08:00",
+          "tree_id": "d5f6b5ada2daf7cfa68fda6b0c50b54c20a41389",
+          "url": "https://github.com/henry40408/lur/commit/8bd883edaf953ede8e9c5a0314ba7bfa2f17319e"
+        },
+        "date": 1792302123439,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 182723,
+            "range": "± 6490",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3249,
+            "range": "± 51",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 262787,
+            "range": "± 12361",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 13883009,
+            "range": "± 240427",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 2128738,
+            "range": "± 145204",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1274111,
+            "range": "± 29742",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1344224,
+            "range": "± 54416",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2137299,
+            "range": "± 32636",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1080470,
+            "range": "± 41961",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1380464,
+            "range": "± 76678",
             "unit": "ns/iter"
           }
         ]
