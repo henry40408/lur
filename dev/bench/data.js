@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792394418704,
+  "lastUpdate": 1792547345960,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -6377,6 +6377,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1445933,
             "range": "± 13910",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6a7edf97646e0c13394ee25d6a475032361b686c",
+          "message": "fix: bump rustls-webpki, webpki-roots and webpki-root-certs for emSign distrust (#189)\n\nrustls-webpki 0.103.16 rejects chains through the compromised eMudhra\nintermediates (RUSTSEC-2026-0382); webpki-roots and webpki-root-certs\n1.0.10 drop the emSign ECC Root CA - G3 anchor (RUSTSEC-2026-0381/0383).\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-21T09:45:09+08:00",
+          "tree_id": "a98c25f600c08cd5c9518315b241d823b6eac284",
+          "url": "https://github.com/henry40408/lur/commit/6a7edf97646e0c13394ee25d6a475032361b686c"
+        },
+        "date": 1792547345222,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 398182,
+            "range": "± 12964",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 6054,
+            "range": "± 42",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 184487,
+            "range": "± 967",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 20231275,
+            "range": "± 227125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3525169,
+            "range": "± 39527",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1848697,
+            "range": "± 41358",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1986342,
+            "range": "± 33168",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2210223,
+            "range": "± 43027",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1252689,
+            "range": "± 14298",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1374371,
+            "range": "± 16827",
             "unit": "ns/iter"
           }
         ]
