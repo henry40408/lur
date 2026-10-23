@@ -124,6 +124,13 @@ enum Expiry {
     AfterIfUnset(i64),
 }
 
+/// One write for [`Inner::put`]: `value` of `None` deletes `key`.
+struct Put {
+    key: Vec<u8>,
+    value: Option<Prim>,
+    w: Write,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct Write {
     expiry: Expiry,
@@ -437,14 +444,8 @@ impl Inner {
     /// Write `value` (`None` deletes) under a fresh version, evicting evictable
     /// entries (expired first) to stay under `limits`. On `Err(Full)` nothing
     /// was changed.
-    fn put(
-        &mut self,
-        key: Vec<u8>,
-        value: Option<Prim>,
-        w: Write,
-        now: Instant,
-        limits: Limits,
-    ) -> Result<(), Full> {
+    fn put(&mut self, entry: Put, now: Instant, limits: Limits) -> Result<(), Full> {
+        let Put { key, value, w } = entry;
         let Some(value) = value else {
             self.remove(&key);
             return Ok(());
@@ -627,7 +628,8 @@ impl StateStore {
     }
 
     fn set(&self, key: Vec<u8>, value: Option<Prim>, w: Write) -> Result<(), Full> {
-        self.lock().put(key, value, w, Instant::now(), self.limits)
+        self.lock()
+            .put(Put { key, value, w }, Instant::now(), self.limits)
     }
 
     fn incr(&self, key: Vec<u8>, n: i64, w: Write) -> Result<i64, IncrError> {
@@ -644,7 +646,15 @@ impl StateStore {
         };
         let new = base.checked_add(n).ok_or(IncrError::Overflow)?;
         inner
-            .put(key, Some(Prim::Num(new as f64)), w, now, self.limits)
+            .put(
+                Put {
+                    key,
+                    value: Some(Prim::Num(new as f64)),
+                    w,
+                },
+                now,
+                self.limits,
+            )
             .map_err(|Full| IncrError::Full)?;
         Ok(new)
     }
@@ -669,7 +679,15 @@ impl StateStore {
         if inner.version(key, now) != expected {
             return Ok(false);
         }
-        inner.put(key.to_vec(), value, w, now, self.limits)?;
+        inner.put(
+            Put {
+                key: key.to_vec(),
+                value,
+                w,
+            },
+            now,
+            self.limits,
+        )?;
         Ok(true)
     }
 
@@ -828,7 +846,15 @@ impl LeadGuard {
         {
             // Version 0 = still absent or stale, as when we looked: a write
             // that landed meanwhile (a counter, an inline fetch) wins.
-            let _ = inner.put(self.key.clone(), Some(p.clone()), w, now, store.limits);
+            let _ = inner.put(
+                Put {
+                    key: self.key.clone(),
+                    value: Some(p.clone()),
+                    w,
+                },
+                now,
+                store.limits,
+            );
         }
         if let Some(f) = take_flight(&mut inner, &self.key, self.id) {
             f.tx.send_replace(Some(Arc::new(shared)));
@@ -1045,18 +1071,29 @@ fn write_opts(value: &Value, fname: &str, no_ttl: NoTtl, counter: bool) -> mlua:
     Ok(w)
 }
 
+/// What a `fetch` loader run needs besides the VM and the leader's guard.
+struct LoadJob<'a> {
+    store: &'a Arc<StateStore>,
+    key: &'a [u8],
+    func: &'a mlua::Function,
+    w: Write,
+}
+
 /// Run a `fetch` loader. As the leader (`guard`), publish the outcome to the
 /// waiters, unless this VM hit its deadline: then there is none, and dropping
 /// the guard hands off. Without a guard (a deadlocking wait was refused), just
 /// load and store as a plain cache would.
 async fn load(
     lua: &Lua,
-    s: &Arc<StateStore>,
-    key: &[u8],
-    func: &mlua::Function,
-    w: Write,
+    job: &LoadJob<'_>,
     guard: Option<LeadGuard>,
 ) -> mlua::Result<(Value, &'static str)> {
+    let LoadJob {
+        store: s,
+        key,
+        func,
+        w,
+    } = *job;
     let result = match &guard {
         Some(g) => {
             let link = Link {
@@ -1369,6 +1406,12 @@ async fn fetch_flight(
         evictable: Some(true),
         stale_ms,
     };
+    let job = LoadJob {
+        store: s,
+        key: &key,
+        func: &func,
+        w,
+    };
     // Single-flight: lead, or wait for the leader and share its outcome. A
     // leader that ends without one hands off: every waiter wakes and goes round
     // again, and the first to re-join leads.
@@ -1378,8 +1421,8 @@ async fn fetch_flight(
                 s.hits.fetch_add(1, Ordering::Relaxed);
                 return Ok((to_lua(lua, Some(p))?, "hit"));
             }
-            Join::Lead(guard) => return load(lua, s, &key, &func, w, Some(guard)).await,
-            Join::Inline => return load(lua, s, &key, &func, w, None).await,
+            Join::Lead(guard) => return load(lua, &job, Some(guard)).await,
+            Join::Inline => return load(lua, &job, None).await,
             Join::Wait(mut rx, same_vm, _edges) => {
                 // Bound only by this caller's own timeout.
                 let outcome = if same_vm {
