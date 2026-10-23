@@ -27,82 +27,95 @@ fn highlight_lua(code: &str, color: bool) -> String {
     if !color {
         return code.to_string();
     }
-    let bytes = code.as_bytes();
     let mut out = String::with_capacity(code.len() + 32);
     let mut i = 0;
-    let wrap = |out: &mut String, c: &str, s: &str| {
-        out.push_str(c);
-        out.push_str(s);
-        out.push_str(RESET);
-    };
-    while i < bytes.len() {
+    while i < code.len() {
         let rest = &code[i..];
-        if rest.starts_with("--") {
-            let end = if rest.starts_with("--[[") {
-                rest.find("]]").map_or(rest.len(), |p| p + 2)
-            } else {
-                rest.find('\n').unwrap_or(rest.len())
-            };
-            wrap(&mut out, COM_C, &rest[..end]);
-            i += end;
-            continue;
-        }
-        if rest.starts_with("[[") {
-            let end = rest.find("]]").map_or(rest.len(), |p| p + 2);
-            wrap(&mut out, STR_C, &rest[..end]);
-            i += end;
-            continue;
-        }
-        let c0 = bytes[i];
-        if c0 == b'"' || c0 == b'\'' {
-            let quote = c0;
-            let mut j = i + 1;
-            while j < bytes.len() {
-                if bytes[j] == b'\\' {
-                    j += 2;
-                    continue;
-                }
-                if bytes[j] == quote {
-                    j += 1;
-                    break;
-                }
-                j += 1;
+        let (len, token_color) = lua_token(rest);
+        match token_color {
+            Some(c) => {
+                out.push_str(c);
+                out.push_str(&rest[..len]);
+                out.push_str(RESET);
             }
-            let end = j.min(bytes.len());
-            wrap(&mut out, STR_C, &code[i..end]);
-            i = end;
-            continue;
+            None => out.push_str(&rest[..len]),
         }
-        if c0.is_ascii_digit() {
-            let mut j = i + 1;
-            while j < bytes.len()
-                && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'.' || bytes[j] == b'x')
-            {
-                j += 1;
-            }
-            wrap(&mut out, NUM_C, &code[i..j]);
-            i = j;
-            continue;
-        }
-        if c0.is_ascii_alphabetic() || c0 == b'_' {
-            let mut j = i + 1;
-            while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
-                j += 1;
-            }
-            let word = &code[i..j];
-            if LUA_KEYWORDS.contains(&word) {
-                wrap(&mut out, KW_C, word);
-            } else {
-                out.push_str(word);
-            }
-            i = j;
-            continue;
-        }
-        let ch = rest.chars().next().unwrap();
-        out.push(ch);
-        i += ch.len_utf8();
+        i += len;
     }
     out
+}
+
+/// Byte length and colour (`None` = plain) of the token at the start of the
+/// non-empty `rest`.
+fn lua_token(rest: &str) -> (usize, Option<&'static str>) {
+    if rest.starts_with("--") {
+        return (comment_len(rest), Some(COM_C));
+    }
+    if rest.starts_with("[[") {
+        return (long_string_len(rest), Some(STR_C));
+    }
+    let bytes = rest.as_bytes();
+    let c0 = bytes[0];
+    if c0 == b'"' || c0 == b'\'' {
+        return (quoted_len(bytes), Some(STR_C));
+    }
+    if c0.is_ascii_digit() {
+        return (number_len(bytes), Some(NUM_C));
+    }
+    if c0.is_ascii_alphabetic() || c0 == b'_' {
+        let len = word_len(bytes);
+        return (len, LUA_KEYWORDS.contains(&&rest[..len]).then_some(KW_C));
+    }
+    let ch = rest.chars().next().unwrap();
+    (ch.len_utf8(), None)
+}
+
+/// A `--` comment: block (`--[[ ... ]]`) or to the end of the line.
+fn comment_len(rest: &str) -> usize {
+    if rest.starts_with("--[[") {
+        return rest.find("]]").map_or(rest.len(), |p| p + 2);
+    }
+    rest.find('\n').unwrap_or(rest.len())
+}
+
+fn long_string_len(rest: &str) -> usize {
+    rest.find("]]").map_or(rest.len(), |p| p + 2)
+}
+
+/// A quoted string starting at `bytes[0]`; `\` skips the next byte.
+fn quoted_len(bytes: &[u8]) -> usize {
+    let quote = bytes[0];
+    let mut j = 1;
+    while j < bytes.len() {
+        if bytes[j] == b'\\' {
+            j += 2;
+            continue;
+        }
+        if bytes[j] == quote {
+            j += 1;
+            break;
+        }
+        j += 1;
+    }
+    j.min(bytes.len())
+}
+
+fn number_len(bytes: &[u8]) -> usize {
+    let mut j = 1;
+    while j < bytes.len()
+        && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'.' || bytes[j] == b'x')
+    {
+        j += 1;
+    }
+    j
+}
+
+fn word_len(bytes: &[u8]) -> usize {
+    let mut j = 1;
+    while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+        j += 1;
+    }
+    j
 }
 
 /// Printed width of `s`, skipping `ESC [ … m` colour sequences. Text between
@@ -215,42 +228,64 @@ struct TableLayout<'a> {
 /// Column-aligned table: bold header, dim rule, two-space gutters, last column
 /// unpadded.
 fn render_table(rows: &[Vec<String>], layout: &TableLayout<'_>) -> String {
-    let TableLayout {
-        prefix,
-        prefix_width,
-        max_width,
-        color,
-    } = *layout;
-    let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
-    let mut widths = vec![0; cols];
-    for row in rows {
-        for (i, cell) in row.iter().enumerate() {
-            widths[i] = widths[i].max(visible_len(cell));
-        }
-    }
-    let gutters = 2 * cols.saturating_sub(1);
-    if let Some(max) = max_width {
-        let avail = max.saturating_sub(prefix_width);
-        while widths.iter().sum::<usize>() + gutters > avail {
-            let (i, &w) = widths
-                .iter()
-                .enumerate()
-                .max_by_key(|&(i, &w)| (w, std::cmp::Reverse(i)))
-                .unwrap();
-            if w <= MIN_COL {
-                break;
-            }
-            widths[i] -= 1;
-        }
-    }
+    let grid = Grid::fit(rows, layout);
     let mut out = String::new();
     for (r, row) in rows.iter().enumerate() {
+        grid.push_row(&mut out, row, r == 0);
+        if r == 0 {
+            grid.push_rule(&mut out);
+        }
+    }
+    out
+}
+
+/// Column widths of a table, after shrinking to the terminal, with what
+/// drawing a row needs.
+struct Grid<'a> {
+    widths: Vec<usize>,
+    prefix: &'a str,
+    wraps: bool,
+    color: bool,
+}
+
+impl<'a> Grid<'a> {
+    fn fit(rows: &[Vec<String>], layout: &TableLayout<'a>) -> Self {
+        let TableLayout {
+            prefix,
+            prefix_width,
+            max_width,
+            color,
+        } = *layout;
+        let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
+        let mut widths = vec![0; cols];
+        for row in rows {
+            for (i, cell) in row.iter().enumerate() {
+                widths[i] = widths[i].max(visible_len(cell));
+            }
+        }
+        if let Some(max) = max_width {
+            shrink_columns(&mut widths, max.saturating_sub(prefix_width));
+        }
+        Self {
+            widths,
+            prefix,
+            wraps: max_width.is_some(),
+            color,
+        }
+    }
+
+    fn gutters(&self) -> usize {
+        2 * self.widths.len().saturating_sub(1)
+    }
+
+    /// One table row, possibly several output lines when cells wrap.
+    fn push_row(&self, out: &mut String, row: &[String], header: bool) {
         let wrapped: Vec<Vec<String>> = row
             .iter()
             .enumerate()
             .map(|(i, cell)| {
-                if max_width.is_some() && visible_len(cell) > widths[i] {
-                    wrap_cell(cell, widths[i])
+                if self.wraps && visible_len(cell) > self.widths[i] {
+                    wrap_cell(cell, self.widths[i])
                 } else {
                     vec![cell.clone()]
                 }
@@ -258,44 +293,67 @@ fn render_table(rows: &[Vec<String>], layout: &TableLayout<'_>) -> String {
             .collect();
         let height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
         for l in 0..height {
-            let start = out.len();
-            out.push_str(prefix);
-            let prefix_end = out.len();
-            for (i, lines) in wrapped.iter().enumerate() {
-                let cell = lines.get(l).map_or("", String::as_str);
-                if r == 0 && color && !cell.is_empty() {
-                    out.push_str(BOLD);
-                    out.push_str(cell);
-                    out.push_str(RESET);
-                } else {
-                    out.push_str(cell);
-                }
-                if i + 1 < wrapped.len() {
-                    let fill = (widths[i] + 2).saturating_sub(visible_len(cell));
-                    out.push_str(&" ".repeat(fill));
-                }
-            }
-            let trimmed = out.trim_end_matches(' ').len().max(prefix_end);
-            out.truncate(trimmed);
-            if out.len() == prefix_end {
-                out.truncate(start + prefix.trim_end_matches(' ').len());
-            }
-            out.push('\n');
-        }
-        if r == 0 {
-            let total = widths.iter().sum::<usize>() + gutters;
-            out.push_str(prefix);
-            if color {
-                out.push_str(DIM);
-            }
-            out.push_str(&"\u{2500}".repeat(total));
-            if color {
-                out.push_str(RESET);
-            }
-            out.push('\n');
+            self.push_line(out, &wrapped, l, header);
         }
     }
-    out
+
+    /// Line `l` of a wrapped row, trailing spaces trimmed.
+    fn push_line(&self, out: &mut String, wrapped: &[Vec<String>], l: usize, header: bool) {
+        let start = out.len();
+        out.push_str(self.prefix);
+        let prefix_end = out.len();
+        for (i, lines) in wrapped.iter().enumerate() {
+            let cell = lines.get(l).map_or("", String::as_str);
+            if header && self.color && !cell.is_empty() {
+                out.push_str(BOLD);
+                out.push_str(cell);
+                out.push_str(RESET);
+            } else {
+                out.push_str(cell);
+            }
+            if i + 1 < wrapped.len() {
+                let fill = (self.widths[i] + 2).saturating_sub(visible_len(cell));
+                out.push_str(&" ".repeat(fill));
+            }
+        }
+        let trimmed = out.trim_end_matches(' ').len().max(prefix_end);
+        out.truncate(trimmed);
+        if out.len() == prefix_end {
+            out.truncate(start + self.prefix.trim_end_matches(' ').len());
+        }
+        out.push('\n');
+    }
+
+    /// The dim rule under the header.
+    fn push_rule(&self, out: &mut String) {
+        let total = self.widths.iter().sum::<usize>() + self.gutters();
+        out.push_str(self.prefix);
+        if self.color {
+            out.push_str(DIM);
+        }
+        out.push_str(&"\u{2500}".repeat(total));
+        if self.color {
+            out.push_str(RESET);
+        }
+        out.push('\n');
+    }
+}
+
+/// Shrink the widest column (the later one on a tie) until the table plus its
+/// gutters fits in `avail`, never below `MIN_COL`.
+fn shrink_columns(widths: &mut [usize], avail: usize) {
+    let gutters = 2 * widths.len().saturating_sub(1);
+    while widths.iter().sum::<usize>() + gutters > avail {
+        let (i, &w) = widths
+            .iter()
+            .enumerate()
+            .max_by_key(|&(i, &w)| (w, std::cmp::Reverse(i)))
+            .unwrap();
+        if w <= MIN_COL {
+            break;
+        }
+        widths[i] -= 1;
+    }
 }
 
 /// Terminal width for `lur docs`: `None` (no wrapping) unless stdout is a TTY,
