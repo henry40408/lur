@@ -73,14 +73,20 @@ use crate::runtime::RunError;
 
 const MAX_REDIRECTS: usize = 10;
 
+/// What `lur.http` shares across its functions.
+pub(crate) struct HttpConfig {
+    pub policy: Arc<Policy>,
+    pub max_body: usize,
+    pub cache: Arc<HttpCache>,
+}
+
 /// The client is built on first use: its rustls setup dominates VM cold start.
-pub(crate) fn install(
-    lua: &Lua,
-    lur: &Table,
-    policy: Arc<Policy>,
-    max_body: usize,
-    cache: Arc<HttpCache>,
-) -> Result<(), RunError> {
+pub(crate) fn install(lua: &Lua, lur: &Table, config: HttpConfig) -> Result<(), RunError> {
+    let HttpConfig {
+        policy,
+        max_body,
+        cache,
+    } = config;
     let cell: Arc<OnceLock<Client>> = Arc::new(OnceLock::new());
     let http = lua.create_table().map_err(RunError::Init)?;
 
@@ -110,7 +116,12 @@ pub(crate) fn install(
                             cache: &cache,
                             max_body,
                         };
-                        do_request(&lua, &ctx, &method, &url, opts).await
+                        let call = Call {
+                            method: &method,
+                            url: &url,
+                            opts,
+                        };
+                        do_request(&lua, &ctx, call).await
                     }
                 },
             )
@@ -144,7 +155,12 @@ pub(crate) fn install(
                         cache: &cache,
                         max_body,
                     };
-                    do_request(&lua, &ctx, &method, &url, opts).await
+                    let call = Call {
+                        method: &method,
+                        url: &url,
+                        opts,
+                    };
+                    do_request(&lua, &ctx, call).await
                 }
             })
             .map_err(RunError::Init)?;
@@ -449,13 +465,19 @@ impl HttpCache {
     }
 }
 
-async fn do_request(
-    lua: &Lua,
-    ctx: &Ctx<'_>,
-    method: &str,
-    url_str: &str,
+/// One `lur.http` call: the arguments the script passed.
+struct Call<'a> {
+    method: &'a str,
+    url: &'a str,
     opts: Option<Table>,
-) -> mlua::Result<Table> {
+}
+
+async fn do_request(lua: &Lua, ctx: &Ctx<'_>, call: Call<'_>) -> mlua::Result<Table> {
+    let Call {
+        method,
+        url: url_str,
+        opts,
+    } = call;
     let url = Url::parse(url_str)
         .map_err(|e| Error::runtime(format!("lur.http: invalid url {url_str:?}: {e}")))?;
     // Before any cache lookup: a cached body must never outlive the policy.
