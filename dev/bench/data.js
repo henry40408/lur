@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792724865094,
+  "lastUpdate": 1792725742622,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -6881,6 +6881,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1410840,
             "range": "± 37642",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "32ce11ab94fd453b02ebb708315061c2312fcef1",
+          "message": "refactor(validate): pass check inputs as parameter objects (#201)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-23T11:16:59+08:00",
+          "tree_id": "2e37216a74c952c251a9aabc802772cdff924a6c",
+          "url": "https://github.com/henry40408/lur/commit/32ce11ab94fd453b02ebb708315061c2312fcef1"
+        },
+        "date": 1792725742170,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 394936,
+            "range": "± 17969",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 6015,
+            "range": "± 36",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 191128,
+            "range": "± 679",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 20139598,
+            "range": "± 306549",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3549227,
+            "range": "± 21829",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1878489,
+            "range": "± 14922",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 2007997,
+            "range": "± 16147",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2247119,
+            "range": "± 51058",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1395872,
+            "range": "± 19824",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1373800,
+            "range": "± 9188",
             "unit": "ns/iter"
           }
         ]
