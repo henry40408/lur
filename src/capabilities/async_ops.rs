@@ -395,8 +395,24 @@ fn map_fn(lua: &Lua, limits: &Limits, sentinel: &Arc<raise::Sentinel>) -> mlua::
         let cap = limits.cap;
         let sentinel = sentinel.clone();
         async move {
-            let list: Table = argcheck::arg(&lua, list, MAP, 1, "table")?;
-            let func: Function = argcheck::arg(&lua, func, MAP, 2, "function")?;
+            let list: Table = argcheck::arg(
+                &lua,
+                list,
+                argcheck::ArgSpec {
+                    fname: MAP,
+                    n: 1,
+                    expected: "table",
+                },
+            )?;
+            let func: Function = argcheck::arg(
+                &lua,
+                func,
+                argcheck::ArgSpec {
+                    fname: MAP,
+                    n: 2,
+                    expected: "function",
+                },
+            )?;
             let MapOpts { limit, drop_errors } = map_opts(opts)?;
             let items = array_items(&list)?.ok_or_else(|| {
                 mlua::Error::RuntimeError(format!(

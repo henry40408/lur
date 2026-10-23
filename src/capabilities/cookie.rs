@@ -61,8 +61,15 @@ pub(crate) fn cookie_pairs(header: &[u8]) -> Vec<(&[u8], &[u8])> {
 fn install_parse(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
     let parse = lua
         .create_function(|lua, header: Value| {
-            let header: mlua::LuaString =
-                argcheck::arg(lua, header, "lur.cookie.parse", 1, "string")?;
+            let header: mlua::LuaString = argcheck::arg(
+                lua,
+                header,
+                argcheck::ArgSpec {
+                    fname: "lur.cookie.parse",
+                    n: 1,
+                    expected: "string",
+                },
+            )?;
             let out = lua.create_table()?;
             let bytes = header.as_bytes();
             // Later duplicates win.
@@ -145,10 +152,24 @@ fn canon_same_site(v: &[u8]) -> Result<&'static str, Error> {
 fn install_serialize(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
     let serialize = lua
         .create_function(|lua, (name, value, opts): (Value, Value, Option<Table>)| {
-            let name: mlua::LuaString =
-                argcheck::arg(lua, name, "lur.cookie.serialize", 1, "string")?;
-            let value: mlua::LuaString =
-                argcheck::arg(lua, value, "lur.cookie.serialize", 2, "string")?;
+            let name: mlua::LuaString = argcheck::arg(
+                lua,
+                name,
+                argcheck::ArgSpec {
+                    fname: "lur.cookie.serialize",
+                    n: 1,
+                    expected: "string",
+                },
+            )?;
+            let value: mlua::LuaString = argcheck::arg(
+                lua,
+                value,
+                argcheck::ArgSpec {
+                    fname: "lur.cookie.serialize",
+                    n: 2,
+                    expected: "string",
+                },
+            )?;
             let name = name.as_bytes();
             let value = value.as_bytes();
             validate_name(&name)?;

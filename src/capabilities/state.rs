@@ -1212,7 +1212,15 @@ fn build(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<Table> {
 fn get_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
     lua.create_function(move |lua, key: Value| {
-        let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.get", 1, "string")?;
+        let key: mlua::LuaString = argcheck::arg(
+            lua,
+            key,
+            argcheck::ArgSpec {
+                fname: "lur.state.get",
+                n: 1,
+                expected: "string",
+            },
+        )?;
         reject_reentry()?;
         let found = s.get(&key.as_bytes());
         let counter = if found.is_some() { &s.hits } else { &s.misses };
@@ -1224,7 +1232,15 @@ fn get_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
 fn set_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
     lua.create_function(move |lua, (key, value, opts): (Value, Value, Value)| {
-        let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.set", 1, "string")?;
+        let key: mlua::LuaString = argcheck::arg(
+            lua,
+            key,
+            argcheck::ArgSpec {
+                fname: "lur.state.set",
+                n: 1,
+                expected: "string",
+            },
+        )?;
         reject_reentry()?;
         let w = write_opts(&opts, "lur.state.set", NoTtl::Clear, false)?;
         s.set(key.as_bytes().to_vec(), from_lua(&value)?, w)
@@ -1242,7 +1258,15 @@ fn counter_fn(
     let s = store.clone();
     let fname = format!("lur.state.{name}");
     lua.create_function(move |lua, (key, n, opts): (Value, Value, Value)| {
-        let key: mlua::LuaString = argcheck::arg(lua, key, &fname, 1, "string")?;
+        let key: mlua::LuaString = argcheck::arg(
+            lua,
+            key,
+            argcheck::ArgSpec {
+                fname: &fname,
+                n: 1,
+                expected: "string",
+            },
+        )?;
         let n = argcheck::integer_arg(n, &fname, 2)?;
         reject_reentry()?;
         let w = write_opts(&opts, &fname, NoTtl::Keep, true)?;
@@ -1269,8 +1293,24 @@ fn counter_fn(
 fn update_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
     lua.create_function(move |lua, (key, func, opts): (Value, Value, Value)| {
-        let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.update", 1, "string")?;
-        let func: mlua::Function = argcheck::arg(lua, func, "lur.state.update", 2, "function")?;
+        let key: mlua::LuaString = argcheck::arg(
+            lua,
+            key,
+            argcheck::ArgSpec {
+                fname: "lur.state.update",
+                n: 1,
+                expected: "string",
+            },
+        )?;
+        let func: mlua::Function = argcheck::arg(
+            lua,
+            func,
+            argcheck::ArgSpec {
+                fname: "lur.state.update",
+                n: 2,
+                expected: "function",
+            },
+        )?;
         reject_reentry()?;
         let w = write_opts(&opts, "lur.state.update", NoTtl::Keep, false)?;
         let key = key.as_bytes().to_vec();
@@ -1297,7 +1337,15 @@ fn cas_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
     lua.create_function(
         move |lua, (key, expected, new, opts): (Value, Value, Value, Value)| {
-            let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.cas", 1, "string")?;
+            let key: mlua::LuaString = argcheck::arg(
+                lua,
+                key,
+                argcheck::ArgSpec {
+                    fname: "lur.state.cas",
+                    n: 1,
+                    expected: "string",
+                },
+            )?;
             reject_reentry()?;
             let w = write_opts(&opts, "lur.state.cas", NoTtl::Keep, false)?;
             let expected_prim = from_lua(&expected)?;
@@ -1311,7 +1359,15 @@ fn cas_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
 fn add_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
     lua.create_function(move |lua, (key, value, opts): (Value, Value, Value)| {
-        let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.add", 1, "string")?;
+        let key: mlua::LuaString = argcheck::arg(
+            lua,
+            key,
+            argcheck::ArgSpec {
+                fname: "lur.state.add",
+                n: 1,
+                expected: "string",
+            },
+        )?;
         reject_reentry()?;
         let w = write_opts(&opts, "lur.state.add", NoTtl::Clear, false)?;
         let new_prim = from_lua(&value)?;
@@ -1324,7 +1380,15 @@ fn add_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
 fn ttl_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
     lua.create_function(move |lua, key: Value| {
-        let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.ttl", 1, "string")?;
+        let key: mlua::LuaString = argcheck::arg(
+            lua,
+            key,
+            argcheck::ArgSpec {
+                fname: "lur.state.ttl",
+                n: 1,
+                expected: "string",
+            },
+        )?;
         reject_reentry()?;
         Ok(match s.ttl(&key.as_bytes()) {
             None => (Value::Nil, false),
@@ -1365,7 +1429,15 @@ struct FetchArgs {
 
 fn fetch_args(lua: &Lua, key: Value, opts: &Value, func: Value) -> mlua::Result<FetchArgs> {
     const F: &str = "lur.state.fetch";
-    let key: mlua::LuaString = argcheck::arg(lua, key, F, 1, "string")?;
+    let key: mlua::LuaString = argcheck::arg(
+        lua,
+        key,
+        argcheck::ArgSpec {
+            fname: F,
+            n: 1,
+            expected: "string",
+        },
+    )?;
     let key = key.as_bytes().to_vec();
     let Some(opts) = opts_table(opts, F)? else {
         return Err(mlua::Error::RuntimeError(format!(
@@ -1375,7 +1447,15 @@ fn fetch_args(lua: &Lua, key: Value, opts: &Value, func: Value) -> mlua::Result<
     let ttl_ms = ms_field(opts, "ttl_ms", F)?
         .ok_or_else(|| mlua::Error::RuntimeError(format!("{F}: opts.ttl_ms is required")))?;
     let stale_ms = ms_field(opts, "stale_ms", F)?;
-    let func: mlua::Function = argcheck::arg(lua, func, F, 3, "function")?;
+    let func: mlua::Function = argcheck::arg(
+        lua,
+        func,
+        argcheck::ArgSpec {
+            fname: F,
+            n: 3,
+            expected: "function",
+        },
+    )?;
     reject_reentry()?;
     Ok(FetchArgs {
         key,

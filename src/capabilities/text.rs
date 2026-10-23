@@ -302,7 +302,15 @@ struct Replacer(Arc<Matcher>, usize);
 impl UserData for Replacer {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("replace", |lua, this, text: Value| {
-            let text: mlua::LuaString = argcheck::arg(lua, text, "replacer:replace", 1, "string")?;
+            let text: mlua::LuaString = argcheck::arg(
+                lua,
+                text,
+                argcheck::ArgSpec {
+                    fname: "replacer:replace",
+                    n: 1,
+                    expected: "string",
+                },
+            )?;
             // Leave the VM's remaining memory budget as the output cap.
             let budget = match this.1 {
                 0 => usize::MAX,
@@ -349,7 +357,15 @@ pub fn install(
 
     let replacer = lua
         .create_function(move |lua, (pairs, opts): (Value, Value)| {
-            let pairs: Table = argcheck::arg(lua, pairs, REPLACER, 1, "table")?;
+            let pairs: Table = argcheck::arg(
+                lua,
+                pairs,
+                argcheck::ArgSpec {
+                    fname: REPLACER,
+                    n: 1,
+                    expected: "table",
+                },
+            )?;
             let ReplacerOpts { mode, key } = replacer_opts(opts)?;
             let request = Request {
                 count: pairs.raw_len(),

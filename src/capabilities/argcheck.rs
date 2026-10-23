@@ -32,15 +32,17 @@ pub(crate) fn integer_arg(value: Value, fname: &str, n: usize) -> mlua::Result<O
     }
 }
 
-/// Convert argument `n` of `fname` to `T` with mlua's coercions (a number still
-/// passes as a string); only the error message changes.
-pub(crate) fn arg<T: FromLua>(
-    lua: &Lua,
-    value: Value,
-    fname: &str,
-    n: usize,
-    expected: &str,
-) -> mlua::Result<T> {
+/// Which argument is being converted, for the error message.
+pub(crate) struct ArgSpec<'a> {
+    pub fname: &'a str,
+    pub n: usize,
+    pub expected: &'a str,
+}
+
+/// Convert an argument to `T` with mlua's coercions (a number still passes as
+/// a string); only the error message changes.
+pub(crate) fn arg<T: FromLua>(lua: &Lua, value: Value, spec: ArgSpec<'_>) -> mlua::Result<T> {
+    let ArgSpec { fname, n, expected } = spec;
     let got = value.type_name();
     #[allow(clippy::map_err_ignore)]
     // The original error is replaced on purpose.
@@ -53,13 +55,22 @@ pub(crate) fn arg<T: FromLua>(
 
 #[cfg(test)]
 mod tests {
-    use super::{arg, integer_arg, whole_f64_to_i64};
+    use super::{ArgSpec, arg, integer_arg, whole_f64_to_i64};
     use mlua::{Lua, Value};
 
     #[test]
     fn good_value_converts() {
         let lua = Lua::new();
-        let s: mlua::LuaString = arg(&lua, Value::Integer(5), "lur.x.y", 1, "string").unwrap();
+        let s: mlua::LuaString = arg(
+            &lua,
+            Value::Integer(5),
+            ArgSpec {
+                fname: "lur.x.y",
+                n: 1,
+                expected: "string",
+            },
+        )
+        .unwrap();
         // mlua coerces a number to a string — behavior preserved.
         assert_eq!(s.to_str().unwrap(), "5");
     }
@@ -68,7 +79,16 @@ mod tests {
     fn wrong_type_raises_lur_voiced_message() {
         let lua = Lua::new();
         let tbl = Value::Table(lua.create_table().unwrap());
-        let err = arg::<mlua::LuaString>(&lua, tbl, "lur.crypto.sha256", 1, "string").unwrap_err();
+        let err = arg::<mlua::LuaString>(
+            &lua,
+            tbl,
+            ArgSpec {
+                fname: "lur.crypto.sha256",
+                n: 1,
+                expected: "string",
+            },
+        )
+        .unwrap_err();
         assert_eq!(
             err.to_string(),
             "runtime error: lur.crypto.sha256: argument #1 must be string, got table"
@@ -78,7 +98,16 @@ mod tests {
     #[test]
     fn nil_to_optional_is_none_not_error() {
         let lua = Lua::new();
-        let got: Option<i64> = arg(&lua, Value::Nil, "lur.x.y", 1, "number").unwrap();
+        let got: Option<i64> = arg(
+            &lua,
+            Value::Nil,
+            ArgSpec {
+                fname: "lur.x.y",
+                n: 1,
+                expected: "number",
+            },
+        )
+        .unwrap();
         assert_eq!(got, None);
     }
 

@@ -426,7 +426,15 @@ impl UserData for Node {
 }
 
 fn string_arg(lua: &Lua, value: Value, fname: &str) -> mlua::Result<String> {
-    let s: mlua::LuaString = argcheck::arg(lua, value, fname, 1, "string")?;
+    let s: mlua::LuaString = argcheck::arg(
+        lua,
+        value,
+        argcheck::ArgSpec {
+            fname,
+            n: 1,
+            expected: "string",
+        },
+    )?;
     s.to_str()
         .map(|s| s.to_string())
         .map_err(|e| Error::runtime(format!("{fname}: {e}")))
@@ -437,7 +445,15 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 
     let parse = lua
         .create_function(|lua, data: Value| {
-            let data: mlua::LuaString = argcheck::arg(lua, data, "lur.xml.parse", 1, "string")?;
+            let data: mlua::LuaString = argcheck::arg(
+                lua,
+                data,
+                argcheck::ArgSpec {
+                    fname: "lur.xml.parse",
+                    n: 1,
+                    expected: "string",
+                },
+            )?;
             let text = decode_input(&data.as_bytes())
                 .map_err(|e| Error::runtime(format!("lur.xml.parse: {e}")))?;
             let doc =

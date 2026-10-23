@@ -30,8 +30,15 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 
     let decode = lua
         .create_function(|lua, (data, hint): (Value, Option<String>)| {
-            let data: mlua::LuaString =
-                argcheck::arg(lua, data, "lur.charset.decode", 1, "string")?;
+            let data: mlua::LuaString = argcheck::arg(
+                lua,
+                data,
+                argcheck::ArgSpec {
+                    fname: "lur.charset.decode",
+                    n: 1,
+                    expected: "string",
+                },
+            )?;
             let bytes = data.as_bytes();
             let enc = match hint.as_deref().and_then(label_of) {
                 Some(label) => Some(lookup("lur.charset.decode", label)?),
@@ -44,8 +51,15 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 
     let encode = lua
         .create_function(|lua, (text, label): (Value, String)| {
-            let text: mlua::LuaString =
-                argcheck::arg(lua, text, "lur.charset.encode", 1, "string")?;
+            let text: mlua::LuaString = argcheck::arg(
+                lua,
+                text,
+                argcheck::ArgSpec {
+                    fname: "lur.charset.encode",
+                    n: 1,
+                    expected: "string",
+                },
+            )?;
             let text = std::str::from_utf8(&text.as_bytes())
                 .map_err(|e| {
                     Error::runtime(format!(
