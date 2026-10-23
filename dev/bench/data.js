@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792726857559,
+  "lastUpdate": 1792727183083,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -7217,6 +7217,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1370444,
             "range": "± 27333",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4d3ea63a9443cd3385c04a8a62aafc076df492af",
+          "message": "refactor(docs): pass render_table layout as a TableLayout struct (#205)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-23T11:42:30+08:00",
+          "tree_id": "27aa4d5af618208efc5ec17b4dae64ca1ebc202a",
+          "url": "https://github.com/henry40408/lur/commit/4d3ea63a9443cd3385c04a8a62aafc076df492af"
+        },
+        "date": 1792727182076,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 398786,
+            "range": "± 4425",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 6099,
+            "range": "± 159",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 183351,
+            "range": "± 6118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 20483670,
+            "range": "± 298131",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3574770,
+            "range": "± 36080",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1856095,
+            "range": "± 20259",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1984746,
+            "range": "± 75806",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2203486,
+            "range": "± 37402",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1350372,
+            "range": "± 9264",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1418192,
+            "range": "± 14638",
             "unit": "ns/iter"
           }
         ]
