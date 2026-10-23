@@ -170,6 +170,18 @@ unsafe fn resume(
     narg: c_int,
     vm: &VmFlights,
 ) -> Option<c_int> {
+    unsafe {
+        if !push_unresumable_message(l, co) {
+            return None;
+        }
+        move_args(l, co, narg);
+        let status = run_counted(l, co, narg, vm);
+        collect_outcome(l, co, status)
+    }
+}
+
+/// Push the reason `co` cannot be resumed onto `l`. `false`: it cannot be.
+unsafe fn push_unresumable_message(l: *mut ffi::lua_State, co: *mut ffi::lua_State) -> bool {
     const STATUS: [&std::ffi::CStr; 5] = [
         c"cannot resume running coroutine",
         c"cannot resume suspended coroutine",
@@ -178,26 +190,46 @@ unsafe fn resume(
         c"cannot resume dead coroutine",
     ];
     unsafe {
-        if ffi::lua_status(co) != ffi::LUA_YIELD {
-            let status = ffi::lua_costatus(l, co);
-            if status != ffi::LUA_COSUS {
-                let msg = usize::try_from(status)
-                    .ok()
-                    .and_then(|i| STATUS.get(i).copied())
-                    .unwrap_or(STATUS[3]);
-                ffi::lua_pushstring(l, msg.as_ptr());
-                return None;
-            }
+        if ffi::lua_status(co) == ffi::LUA_YIELD {
+            return true;
         }
-        if narg != 0 {
-            if ffi::lua_checkstack(co, narg) == 0 {
+        let status = ffi::lua_costatus(l, co);
+        if status == ffi::LUA_COSUS {
+            return true;
+        }
+        let msg = usize::try_from(status)
+            .ok()
+            .and_then(|i| STATUS.get(i).copied())
+            .unwrap_or(STATUS[3]);
+        ffi::lua_pushstring(l, msg.as_ptr());
+        false
+    }
+}
+
+/// Move the top `narg` values of `l` onto `co`, raising on overflow.
+unsafe fn move_args(l: *mut ffi::lua_State, co: *mut ffi::lua_State, narg: c_int) {
+    unsafe {
+        if narg == 0 {
+            if ffi::lua_gettop(co) > MAX_CSTACK {
                 ffi::luaL_error(l, c"too many arguments to resume".as_ptr());
             }
-            ffi::lua_xmove(l, co, narg);
-        } else if ffi::lua_gettop(co) > MAX_CSTACK {
+            return;
+        }
+        if ffi::lua_checkstack(co, narg) == 0 {
             ffi::luaL_error(l, c"too many arguments to resume".as_ptr());
         }
+        ffi::lua_xmove(l, co, narg);
+    }
+}
 
+/// Run `lua_resume_` with the VM's depth raised, then tell the VM.
+unsafe fn run_counted(
+    l: *mut ffi::lua_State,
+    co: *mut ffi::lua_State,
+    narg: c_int,
+    vm: &VmFlights,
+) -> c_int {
+    unsafe {
         let depth = vm.leads.depth.load(Ordering::Relaxed) + 1;
         vm.leads.depth.store(depth, Ordering::Relaxed);
         let status = ffi::lua_resume_(co, l, narg);
@@ -205,25 +237,36 @@ unsafe fn resume(
         // A panic here would leave the flights to `end_run`; it must not
         // unwind into Luau.
         let _ = catch_unwind(AssertUnwindSafe(|| vm.resumed(depth)));
+        status
+    }
+}
 
+/// Move what `co` produced onto `l` for resume `status`: `Some(n)` results,
+/// or `None` with the error value on top.
+unsafe fn collect_outcome(
+    l: *mut ffi::lua_State,
+    co: *mut ffi::lua_State,
+    status: c_int,
+) -> Option<c_int> {
+    unsafe {
         if status == ffi::LUA_OK || status == ffi::LUA_YIELD {
             let nres = ffi::lua_gettop(co);
             if nres + 1 > ffi::LUA_MINSTACK && ffi::lua_checkstack(l, nres + 1) == 0 {
                 ffi::luaL_error(l, c"too many results to resume".as_ptr());
             }
             ffi::lua_xmove(co, l, nres);
-            Some(nres)
-        } else if status == ffi::LUA_BREAK {
+            return Some(nres);
+        }
+        if status == ffi::LUA_BREAK {
             // Only a debugger breaks a coroutine; `lur` installs none.
             ffi::lua_pushstring(
                 l,
                 c"cannot resume a coroutine stopped at a breakpoint".as_ptr(),
             );
-            None
-        } else {
-            ffi::lua_xmove(co, l, 1);
-            None
+            return None;
         }
+        ffi::lua_xmove(co, l, 1);
+        None
     }
 }
 

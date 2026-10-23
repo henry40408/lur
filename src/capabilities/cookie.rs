@@ -61,8 +61,15 @@ pub(crate) fn cookie_pairs(header: &[u8]) -> Vec<(&[u8], &[u8])> {
 fn install_parse(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
     let parse = lua
         .create_function(|lua, header: Value| {
-            let header: mlua::LuaString =
-                argcheck::arg(lua, header, "lur.cookie.parse", 1, "string")?;
+            let header: mlua::LuaString = argcheck::arg(
+                lua,
+                header,
+                argcheck::ArgSpec {
+                    fname: "lur.cookie.parse",
+                    n: 1,
+                    expected: "string",
+                },
+            )?;
             let out = lua.create_table()?;
             let bytes = header.as_bytes();
             // Later duplicates win.
@@ -143,84 +150,110 @@ fn canon_same_site(v: &[u8]) -> Result<&'static str, Error> {
 
 /// Returns one `Set-Cookie` header value (no `Set-Cookie:` prefix).
 fn install_serialize(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
-    let serialize = lua
-        .create_function(|lua, (name, value, opts): (Value, Value, Option<Table>)| {
-            let name: mlua::LuaString =
-                argcheck::arg(lua, name, "lur.cookie.serialize", 1, "string")?;
-            let value: mlua::LuaString =
-                argcheck::arg(lua, value, "lur.cookie.serialize", 2, "string")?;
-            let name = name.as_bytes();
-            let value = value.as_bytes();
-            validate_name(&name)?;
-            reject_bad_bytes("value", &value)?;
-
-            let mut out: Vec<u8> = Vec::new();
-            out.extend_from_slice(&name);
-            out.push(b'=');
-            out.extend_from_slice(&value);
-
-            if let Some(opts) = opts {
-                if let Some(domain) = opts.get::<Option<mlua::LuaString>>("domain")? {
-                    let domain = domain.as_bytes();
-                    reject_bad_bytes("domain", &domain)?;
-                    out.extend_from_slice(b"; Domain=");
-                    out.extend_from_slice(&domain);
-                }
-                if let Some(path) = opts.get::<Option<mlua::LuaString>>("path")? {
-                    let path = path.as_bytes();
-                    reject_bad_bytes("path", &path)?;
-                    out.extend_from_slice(b"; Path=");
-                    out.extend_from_slice(&path);
-                }
-                if let Some(max_age) = opts.get::<Option<Value>>("max_age")? {
-                    let bad_max_age =
-                        || Error::runtime("lur.cookie.serialize: max_age must be an integer");
-                    let n = match max_age {
-                        Value::Integer(i) => i,
-                        Value::Number(f) => {
-                            argcheck::whole_f64_to_i64(f).ok_or_else(bad_max_age)?
-                        }
-                        _ => return Err(bad_max_age()),
-                    };
-                    out.extend_from_slice(format!("; Max-Age={n}").as_bytes());
-                }
-                if let Some(expires) = opts.get::<Option<mlua::LuaString>>("expires")? {
-                    let expires = expires.as_bytes();
-                    reject_bad_bytes("expires", &expires)?;
-                    out.extend_from_slice(b"; Expires=");
-                    out.extend_from_slice(&expires);
-                }
-
-                let same_site = match opts.get::<Option<mlua::LuaString>>("same_site")? {
-                    Some(s) => Some(canon_same_site(&s.as_bytes())?),
-                    None => None,
-                };
-                let secure = opts.get::<Option<bool>>("secure")?.unwrap_or(false);
-                let http_only = opts.get::<Option<bool>>("http_only")?.unwrap_or(false);
-
-                if same_site == Some("None") && !secure {
-                    return Err(Error::runtime(
-                        "lur.cookie.serialize: same_site=None requires secure=true",
-                    ));
-                }
-
-                if http_only {
-                    out.extend_from_slice(b"; HttpOnly");
-                }
-                if secure {
-                    out.extend_from_slice(b"; Secure");
-                }
-                if let Some(s) = same_site {
-                    out.extend_from_slice(b"; SameSite=");
-                    out.extend_from_slice(s.as_bytes());
-                }
-            }
-
-            lua.create_string(&out)
-        })
-        .map_err(RunError::Init)?;
+    let serialize = lua.create_function(serialize).map_err(RunError::Init)?;
     cookie.set("serialize", serialize).map_err(RunError::Init)?;
     Ok(())
+}
+
+fn serialize(
+    lua: &Lua,
+    (name, value, opts): (Value, Value, Option<Table>),
+) -> mlua::Result<mlua::LuaString> {
+    let name: mlua::LuaString = argcheck::arg(
+        lua,
+        name,
+        argcheck::ArgSpec {
+            fname: "lur.cookie.serialize",
+            n: 1,
+            expected: "string",
+        },
+    )?;
+    let value: mlua::LuaString = argcheck::arg(
+        lua,
+        value,
+        argcheck::ArgSpec {
+            fname: "lur.cookie.serialize",
+            n: 2,
+            expected: "string",
+        },
+    )?;
+    let name = name.as_bytes();
+    let value = value.as_bytes();
+    validate_name(&name)?;
+    reject_bad_bytes("value", &value)?;
+
+    let mut out: Vec<u8> = Vec::new();
+    out.extend_from_slice(&name);
+    out.push(b'=');
+    out.extend_from_slice(&value);
+
+    if let Some(opts) = opts {
+        append_attributes(&mut out, &opts)?;
+    }
+
+    lua.create_string(&out)
+}
+
+/// Append the `; Attr=...` parts for `opts`, in a fixed order.
+fn append_attributes(out: &mut Vec<u8>, opts: &Table) -> Result<(), Error> {
+    append_text_attr(out, opts, "domain", b"; Domain=")?;
+    append_text_attr(out, opts, "path", b"; Path=")?;
+    if let Some(max_age) = opts.get::<Option<Value>>("max_age")? {
+        let n = max_age_seconds(max_age)?;
+        out.extend_from_slice(format!("; Max-Age={n}").as_bytes());
+    }
+    append_text_attr(out, opts, "expires", b"; Expires=")?;
+
+    let same_site = match opts.get::<Option<mlua::LuaString>>("same_site")? {
+        Some(s) => Some(canon_same_site(&s.as_bytes())?),
+        None => None,
+    };
+    let secure = opts.get::<Option<bool>>("secure")?.unwrap_or(false);
+    let http_only = opts.get::<Option<bool>>("http_only")?.unwrap_or(false);
+
+    if same_site == Some("None") && !secure {
+        return Err(Error::runtime(
+            "lur.cookie.serialize: same_site=None requires secure=true",
+        ));
+    }
+
+    if http_only {
+        out.extend_from_slice(b"; HttpOnly");
+    }
+    if secure {
+        out.extend_from_slice(b"; Secure");
+    }
+    if let Some(s) = same_site {
+        out.extend_from_slice(b"; SameSite=");
+        out.extend_from_slice(s.as_bytes());
+    }
+    Ok(())
+}
+
+/// `; <prefix><opts[key]>` for a string option, if set.
+fn append_text_attr(
+    out: &mut Vec<u8>,
+    opts: &Table,
+    key: &str,
+    prefix: &[u8],
+) -> Result<(), Error> {
+    let Some(text) = opts.get::<Option<mlua::LuaString>>(key)? else {
+        return Ok(());
+    };
+    let text = text.as_bytes();
+    reject_bad_bytes(key, &text)?;
+    out.extend_from_slice(prefix);
+    out.extend_from_slice(&text);
+    Ok(())
+}
+
+fn max_age_seconds(max_age: Value) -> Result<i64, Error> {
+    let bad_max_age = || Error::runtime("lur.cookie.serialize: max_age must be an integer");
+    match max_age {
+        Value::Integer(i) => Ok(i),
+        Value::Number(f) => argcheck::whole_f64_to_i64(f).ok_or_else(bad_max_age),
+        _ => Err(bad_max_age()),
+    }
 }
 
 #[cfg(test)]

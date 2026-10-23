@@ -25,40 +25,59 @@ use crate::runtime::RunError;
 pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunError> {
     let fs = lua.create_table().map_err(RunError::Init)?;
 
-    let read_policy = Arc::clone(&policy);
-    let read = lua
-        .create_function(move |lua, path: Value| {
-            let path: mlua::LuaString = argcheck::arg(lua, path, "lur.fs.read", 1, "string")?;
-            let requested = bytes_to_path(&path.as_bytes());
-            let file = read_policy
-                .open_read(&requested)
-                .map_err(|e| Error::runtime(e.to_string()))?;
-            let data = file
-                .read()
-                .map_err(|e| Error::runtime(format!("lur.fs.read: {e}")))?;
-            lua.create_string(&data)
-        })
-        .map_err(RunError::Init)?;
+    let read = read_fn(lua, policy.clone()).map_err(RunError::Init)?;
     fs.set("read", read).map_err(RunError::Init)?;
 
-    let write_policy = Arc::clone(&policy);
-    let write = lua
-        .create_function(move |lua, (path, data): (Value, Value)| {
-            let path: mlua::LuaString = argcheck::arg(lua, path, "lur.fs.write", 1, "string")?;
-            let data: mlua::LuaString = argcheck::arg(lua, data, "lur.fs.write", 2, "string")?;
-            let requested = bytes_to_path(&path.as_bytes());
-            let file = write_policy
-                .open_write(&requested)
-                .map_err(|e| Error::runtime(e.to_string()))?;
-            file.write(&data.as_bytes())
-                .map_err(|e| Error::runtime(format!("lur.fs.write: {e}")))?;
-            Ok(())
-        })
-        .map_err(RunError::Init)?;
+    let write = write_fn(lua, policy).map_err(RunError::Init)?;
     fs.set("write", write).map_err(RunError::Init)?;
 
     lur.set("fs", fs).map_err(RunError::Init)?;
     Ok(())
+}
+
+fn string_arg(
+    lua: &Lua,
+    value: Value,
+    fname: &'static str,
+    n: usize,
+) -> mlua::Result<mlua::LuaString> {
+    argcheck::arg(
+        lua,
+        value,
+        argcheck::ArgSpec {
+            fname,
+            n,
+            expected: "string",
+        },
+    )
+}
+
+fn read_fn(lua: &Lua, policy: Arc<Policy>) -> mlua::Result<mlua::Function> {
+    lua.create_function(move |lua, path: Value| {
+        let path = string_arg(lua, path, "lur.fs.read", 1)?;
+        let requested = bytes_to_path(&path.as_bytes());
+        let file = policy
+            .open_read(&requested)
+            .map_err(|e| Error::runtime(e.to_string()))?;
+        let data = file
+            .read()
+            .map_err(|e| Error::runtime(format!("lur.fs.read: {e}")))?;
+        lua.create_string(&data)
+    })
+}
+
+fn write_fn(lua: &Lua, policy: Arc<Policy>) -> mlua::Result<mlua::Function> {
+    lua.create_function(move |lua, (path, data): (Value, Value)| {
+        let path = string_arg(lua, path, "lur.fs.write", 1)?;
+        let data = string_arg(lua, data, "lur.fs.write", 2)?;
+        let requested = bytes_to_path(&path.as_bytes());
+        let file = policy
+            .open_write(&requested)
+            .map_err(|e| Error::runtime(e.to_string()))?;
+        file.write(&data.as_bytes())
+            .map_err(|e| Error::runtime(format!("lur.fs.write: {e}")))?;
+        Ok(())
+    })
 }
 
 #[cfg(unix)]

@@ -84,7 +84,15 @@ fn parse_offset(text: &str) -> Option<FixedOffset> {
 }
 
 fn str_arg(lua: &Lua, value: Value, fname: &str, n: usize) -> mlua::Result<String> {
-    let s: mlua::LuaString = argcheck::arg(lua, value, fname, n, "string")?;
+    let s: mlua::LuaString = argcheck::arg(
+        lua,
+        value,
+        argcheck::ArgSpec {
+            fname,
+            n,
+            expected: "string",
+        },
+    )?;
     s.to_str()
         .map(|s| s.to_string())
         .map_err(|e| Error::runtime(format!("{fname}: {e}")))
@@ -168,106 +176,107 @@ fn parse_lenient(text: &str, zone: Zone) -> Result<i64, String> {
 }
 
 pub fn install(lua: &Lua, time: &Table) -> Result<(), RunError> {
-    let format_rfc3339 = lua
-        .create_function(|lua, (ms, tz): (Value, Value)| {
-            let f = "lur.time.format_rfc3339";
-            let zone = zone_arg(lua, tz, f, 2)?;
-            let dt = zone
-                .at(ms_arg(ms, f)?)
-                .map_err(|e| Error::runtime(format!("{f}: {e}")))?;
-            Ok(dt.to_rfc3339_opts(SecondsFormat::Millis, true))
-        })
-        .map_err(RunError::Init)?;
-    time.set("format_rfc3339", format_rfc3339)
-        .map_err(RunError::Init)?;
+    build(lua, time).map_err(RunError::Init)
+}
 
-    let format_rfc2822 = lua
-        .create_function(|lua, (ms, tz): (Value, Value)| {
-            let f = "lur.time.format_rfc2822";
-            let zone = zone_arg(lua, tz, f, 2)?;
-            let dt = zone
-                .at(ms_arg(ms, f)?)
-                .map_err(|e| Error::runtime(format!("{f}: {e}")))?;
-            Ok(dt.to_rfc2822())
-        })
-        .map_err(RunError::Init)?;
-    time.set("format_rfc2822", format_rfc2822)
-        .map_err(RunError::Init)?;
-
-    // `format(ms, fmt, tz?)` — strftime.
-    let format = lua
-        .create_function(|lua, (ms, fmt, tz): (Value, Value, Value)| {
-            let f = "lur.time.format";
-            let fmt = str_arg(lua, fmt, f, 2)?;
-            let zone = zone_arg(lua, tz, f, 3)?;
-            check_format(&fmt).map_err(|e| Error::runtime(format!("{f}: {e}")))?;
-            let dt = zone
-                .at(ms_arg(ms, f)?)
-                .map_err(|e| Error::runtime(format!("{f}: {e}")))?;
-            Ok(dt.format(&fmt).to_string())
-        })
-        .map_err(RunError::Init)?;
-    time.set("format", format).map_err(RunError::Init)?;
-
-    let parse_rfc2822 = lua
-        .create_function(|lua, text: Value| {
-            let f = "lur.time.parse_rfc2822";
-            let text = str_arg(lua, text, f, 1)?;
-            DateTime::parse_from_rfc2822(text.trim())
-                .map(|d| d.timestamp_millis())
-                .map_err(|e| Error::runtime(format!("{f}: {e}")))
-        })
-        .map_err(RunError::Init)?;
-    time.set("parse_rfc2822", parse_rfc2822)
-        .map_err(RunError::Init)?;
-
-    // `parse(text, fmt?, tz?)` — with `fmt` it is strptime; without, the common
-    // machine formats then a few scraped-site layouts. A wall-clock time with no
-    // offset is read in `tz` (default UTC).
-    let parse = lua
-        .create_function(|lua, (text, fmt, tz): (Value, Value, Value)| {
-            let f = "lur.time.parse";
-            let text = str_arg(lua, text, f, 1)?;
-            let text = text.trim();
-            let zone = zone_arg(lua, tz, f, 3)?;
-            let result = match fmt {
-                Value::Nil => parse_lenient(text, zone),
-                other => parse_with_format(text, &str_arg(lua, other, f, 2)?, zone),
-            };
-            result.map_err(|e| Error::runtime(format!("{f}: {e}")))
-        })
-        .map_err(RunError::Init)?;
-    time.set("parse", parse).map_err(RunError::Init)?;
-
-    // `try_parse(text, fmt?, tz?)` — `parse`, but unparseable text (or a `nil`
-    // text, as from a missing node) gives `nil`. A bad `fmt`/`tz` still raises.
-    let try_parse = lua
-        .create_function(|lua, (text, fmt, tz): (Value, Value, Value)| {
-            let f = "lur.time.try_parse";
-            let zone = zone_arg(lua, tz, f, 3)?;
-            let fmt = match fmt {
-                Value::Nil => None,
-                other => {
-                    let fmt = str_arg(lua, other, f, 2)?;
-                    check_format(&fmt).map_err(|e| Error::runtime(format!("{f}: {e}")))?;
-                    Some(fmt)
-                }
-            };
-            if matches!(text, Value::Nil) {
-                return Ok(None);
-            }
-            let text = str_arg(lua, text, f, 1)?;
-            let text = text.trim();
-            let result = match fmt {
-                None => parse_lenient(text, zone),
-                Some(fmt) => parse_with_format(text, &fmt, zone),
-            };
-            Ok(result.ok())
-        })
-        .map_err(RunError::Init)?;
-    time.set("try_parse", try_parse).map_err(RunError::Init)?;
-
+fn build(lua: &Lua, time: &Table) -> mlua::Result<()> {
+    time.set("format_rfc3339", format_rfc3339_fn(lua)?)?;
+    time.set("format_rfc2822", format_rfc2822_fn(lua)?)?;
+    time.set("format", format_fn(lua)?)?;
+    time.set("parse_rfc2822", parse_rfc2822_fn(lua)?)?;
+    time.set("parse", parse_fn(lua)?)?;
+    time.set("try_parse", try_parse_fn(lua)?)?;
     Ok(())
+}
+
+fn format_rfc3339_fn(lua: &Lua) -> mlua::Result<mlua::Function> {
+    lua.create_function(|lua, (ms, tz): (Value, Value)| {
+        let f = "lur.time.format_rfc3339";
+        let zone = zone_arg(lua, tz, f, 2)?;
+        let dt = zone
+            .at(ms_arg(ms, f)?)
+            .map_err(|e| Error::runtime(format!("{f}: {e}")))?;
+        Ok(dt.to_rfc3339_opts(SecondsFormat::Millis, true))
+    })
+}
+
+fn format_rfc2822_fn(lua: &Lua) -> mlua::Result<mlua::Function> {
+    lua.create_function(|lua, (ms, tz): (Value, Value)| {
+        let f = "lur.time.format_rfc2822";
+        let zone = zone_arg(lua, tz, f, 2)?;
+        let dt = zone
+            .at(ms_arg(ms, f)?)
+            .map_err(|e| Error::runtime(format!("{f}: {e}")))?;
+        Ok(dt.to_rfc2822())
+    })
+}
+
+/// `format(ms, fmt, tz?)` — strftime.
+fn format_fn(lua: &Lua) -> mlua::Result<mlua::Function> {
+    lua.create_function(|lua, (ms, fmt, tz): (Value, Value, Value)| {
+        let f = "lur.time.format";
+        let fmt = str_arg(lua, fmt, f, 2)?;
+        let zone = zone_arg(lua, tz, f, 3)?;
+        check_format(&fmt).map_err(|e| Error::runtime(format!("{f}: {e}")))?;
+        let dt = zone
+            .at(ms_arg(ms, f)?)
+            .map_err(|e| Error::runtime(format!("{f}: {e}")))?;
+        Ok(dt.format(&fmt).to_string())
+    })
+}
+
+fn parse_rfc2822_fn(lua: &Lua) -> mlua::Result<mlua::Function> {
+    lua.create_function(|lua, text: Value| {
+        let f = "lur.time.parse_rfc2822";
+        let text = str_arg(lua, text, f, 1)?;
+        DateTime::parse_from_rfc2822(text.trim())
+            .map(|d| d.timestamp_millis())
+            .map_err(|e| Error::runtime(format!("{f}: {e}")))
+    })
+}
+
+/// `parse(text, fmt?, tz?)` — with `fmt` it is strptime; without, the common
+/// machine formats then a few scraped-site layouts. A wall-clock time with no
+/// offset is read in `tz` (default UTC).
+fn parse_fn(lua: &Lua) -> mlua::Result<mlua::Function> {
+    lua.create_function(|lua, (text, fmt, tz): (Value, Value, Value)| {
+        let f = "lur.time.parse";
+        let text = str_arg(lua, text, f, 1)?;
+        let text = text.trim();
+        let zone = zone_arg(lua, tz, f, 3)?;
+        let result = match fmt {
+            Value::Nil => parse_lenient(text, zone),
+            other => parse_with_format(text, &str_arg(lua, other, f, 2)?, zone),
+        };
+        result.map_err(|e| Error::runtime(format!("{f}: {e}")))
+    })
+}
+
+/// `try_parse(text, fmt?, tz?)` — `parse`, but unparseable text (or a `nil`
+/// text, as from a missing node) gives `nil`. A bad `fmt`/`tz` still raises.
+fn try_parse_fn(lua: &Lua) -> mlua::Result<mlua::Function> {
+    lua.create_function(|lua, (text, fmt, tz): (Value, Value, Value)| {
+        let f = "lur.time.try_parse";
+        let zone = zone_arg(lua, tz, f, 3)?;
+        let fmt = match fmt {
+            Value::Nil => None,
+            other => {
+                let fmt = str_arg(lua, other, f, 2)?;
+                check_format(&fmt).map_err(|e| Error::runtime(format!("{f}: {e}")))?;
+                Some(fmt)
+            }
+        };
+        if matches!(text, Value::Nil) {
+            return Ok(None);
+        }
+        let text = str_arg(lua, text, f, 1)?;
+        let text = text.trim();
+        let result = match fmt {
+            None => parse_lenient(text, zone),
+            Some(fmt) => parse_with_format(text, &fmt, zone),
+        };
+        Ok(result.ok())
+    })
 }
 
 #[cfg(test)]

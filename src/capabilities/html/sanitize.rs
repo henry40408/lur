@@ -21,7 +21,15 @@ use crate::runtime::RunError;
 pub fn install(lua: &Lua, html: &Table) -> Result<(), RunError> {
     let f = lua
         .create_function(|lua, (text, opts): (Value, Option<Table>)| {
-            let text: mlua::LuaString = argcheck::arg(lua, text, "lur.html.sanitize", 1, "string")?;
+            let text: mlua::LuaString = argcheck::arg(
+                lua,
+                text,
+                argcheck::ArgSpec {
+                    fname: "lur.html.sanitize",
+                    n: 1,
+                    expected: "string",
+                },
+            )?;
             let text = String::from_utf8_lossy(&text.as_bytes()).into_owned();
             let base = match opts {
                 Some(opts) => opts

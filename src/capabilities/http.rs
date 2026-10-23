@@ -73,51 +73,56 @@ use crate::runtime::RunError;
 
 const MAX_REDIRECTS: usize = 10;
 
-/// The client is built on first use: its rustls setup dominates VM cold start.
-pub(crate) fn install(
-    lua: &Lua,
-    lur: &Table,
+/// What `lur.http` shares across its functions.
+pub(crate) struct HttpConfig {
+    pub policy: Arc<Policy>,
+    pub max_body: usize,
+    pub cache: Arc<HttpCache>,
+}
+
+/// What every `lur.http` request function shares. The client is built on first
+/// use: its rustls setup dominates VM cold start.
+#[derive(Clone)]
+struct Shared {
+    cell: Arc<OnceLock<Client>>,
     policy: Arc<Policy>,
-    max_body: usize,
     cache: Arc<HttpCache>,
-) -> Result<(), RunError> {
-    let cell: Arc<OnceLock<Client>> = Arc::new(OnceLock::new());
-    let http = lua.create_table().map_err(RunError::Init)?;
+    max_body: usize,
+}
 
-    {
-        let cache = Arc::clone(&cache);
-        let clear = lua
-            .create_function(move |_, ()| Ok(cache.clear()))
-            .map_err(RunError::Init)?;
-        http.set("cache_clear", clear).map_err(RunError::Init)?;
+impl Shared {
+    async fn request(&self, lua: &Lua, call: Call<'_>) -> mlua::Result<Table> {
+        let client = ensure_client(&self.cell, &self.policy)?;
+        let ctx = Ctx {
+            client: &client,
+            policy: &self.policy,
+            cache: &self.cache,
+            max_body: self.max_body,
+        };
+        do_request(lua, &ctx, call).await
     }
+}
 
-    {
-        let cell = Arc::clone(&cell);
-        let policy = Arc::clone(&policy);
-        let cache = Arc::clone(&cache);
-        let request = lua
-            .create_async_function(
-                move |lua, (method, url, opts): (String, String, Option<Table>)| {
-                    let cell = Arc::clone(&cell);
-                    let policy = Arc::clone(&policy);
-                    let cache = Arc::clone(&cache);
-                    async move {
-                        let client = ensure_client(&cell, &policy)?;
-                        let ctx = Ctx {
-                            client: &client,
-                            policy: &policy,
-                            cache: &cache,
-                            max_body,
-                        };
-                        do_request(&lua, &ctx, &method, &url, opts).await
-                    }
-                },
-            )
-            .map_err(RunError::Init)?;
-        http.set("request", request).map_err(RunError::Init)?;
-    }
+pub(crate) fn install(lua: &Lua, lur: &Table, config: HttpConfig) -> Result<(), RunError> {
+    build(lua, lur, config).map_err(RunError::Init)
+}
 
+fn build(lua: &Lua, lur: &Table, config: HttpConfig) -> mlua::Result<()> {
+    let HttpConfig {
+        policy,
+        max_body,
+        cache,
+    } = config;
+    let shared = Shared {
+        cell: Arc::new(OnceLock::new()),
+        policy,
+        cache,
+        max_body,
+    };
+    let http = lua.create_table()?;
+
+    http.set("cache_clear", cache_clear_fn(lua, &shared.cache)?)?;
+    http.set("request", request_fn(lua, &shared)?)?;
     for (name, method) in [
         ("get", "GET"),
         ("post", "POST"),
@@ -126,33 +131,50 @@ pub(crate) fn install(
         ("delete", "DELETE"),
         ("head", "HEAD"),
     ] {
-        let cell = Arc::clone(&cell);
-        let policy = Arc::clone(&policy);
-        let cache = Arc::clone(&cache);
-        let method = method.to_string();
-        let f = lua
-            .create_async_function(move |lua, (url, opts): (String, Option<Table>)| {
-                let cell = Arc::clone(&cell);
-                let policy = Arc::clone(&policy);
-                let cache = Arc::clone(&cache);
-                let method = method.clone();
-                async move {
-                    let client = ensure_client(&cell, &policy)?;
-                    let ctx = Ctx {
-                        client: &client,
-                        policy: &policy,
-                        cache: &cache,
-                        max_body,
-                    };
-                    do_request(&lua, &ctx, &method, &url, opts).await
-                }
-            })
-            .map_err(RunError::Init)?;
-        http.set(name, f).map_err(RunError::Init)?;
+        http.set(name, verb_fn(lua, &shared, method)?)?;
     }
 
-    lur.set("http", http).map_err(RunError::Init)?;
+    lur.set("http", http)?;
     Ok(())
+}
+
+fn cache_clear_fn(lua: &Lua, cache: &Arc<HttpCache>) -> mlua::Result<mlua::Function> {
+    let cache = Arc::clone(cache);
+    lua.create_function(move |_, ()| Ok(cache.clear()))
+}
+
+/// `lur.http.request(method, url, opts?)`.
+fn request_fn(lua: &Lua, shared: &Shared) -> mlua::Result<mlua::Function> {
+    let shared = shared.clone();
+    lua.create_async_function(
+        move |lua, (method, url, opts): (String, String, Option<Table>)| {
+            let shared = shared.clone();
+            async move {
+                let call = Call {
+                    method: &method,
+                    url: &url,
+                    opts,
+                };
+                shared.request(&lua, call).await
+            }
+        },
+    )
+}
+
+/// `lur.http.get` / `post` / ...: `request` with the method fixed.
+fn verb_fn(lua: &Lua, shared: &Shared, method: &'static str) -> mlua::Result<mlua::Function> {
+    let shared = shared.clone();
+    lua.create_async_function(move |lua, (url, opts): (String, Option<Table>)| {
+        let shared = shared.clone();
+        async move {
+            let call = Call {
+                method,
+                url: &url,
+                opts,
+            };
+            shared.request(&lua, call).await
+        }
+    })
 }
 
 fn ensure_client(cell: &OnceLock<Client>, policy: &Arc<Policy>) -> mlua::Result<Client> {
@@ -449,13 +471,23 @@ impl HttpCache {
     }
 }
 
-async fn do_request(
-    lua: &Lua,
-    ctx: &Ctx<'_>,
-    method: &str,
-    url_str: &str,
+/// One `lur.http` call: the arguments the script passed.
+struct Call<'a> {
+    method: &'a str,
+    url: &'a str,
     opts: Option<Table>,
-) -> mlua::Result<Table> {
+}
+
+/// Validates the call (url, policy, method, cache opts) and builds the request.
+fn build_request(
+    ctx: &Ctx<'_>,
+    call: Call<'_>,
+) -> mlua::Result<(reqwest::Request, Option<CacheOpts>)> {
+    let Call {
+        method,
+        url: url_str,
+        opts,
+    } = call;
     let url = Url::parse(url_str)
         .map_err(|e| Error::runtime(format!("lur.http: invalid url {url_str:?}: {e}")))?;
     // Before any cache lookup: a cached body must never outlive the policy.
@@ -482,6 +514,11 @@ async fn do_request(
     let req = req
         .build()
         .map_err(|e| Error::runtime(format!("lur.http: {e}")))?;
+    Ok((req, cache))
+}
+
+async fn do_request(lua: &Lua, ctx: &Ctx<'_>, call: Call<'_>) -> mlua::Result<Table> {
+    let (req, cache) = build_request(ctx, call)?;
 
     // `None` also when the request carries credentials the script didn't allow.
     let wants_cache = cache.is_some();
@@ -577,25 +614,47 @@ fn cacheable(raw: &RawResponse) -> bool {
     (200..300).contains(&raw.status) && !raw.headers.iter().any(|(k, _)| k == "set-cookie")
 }
 
-fn apply_opts(
+fn apply_opts(req: reqwest::RequestBuilder, opts: &Table) -> mlua::Result<reqwest::RequestBuilder> {
+    let req = apply_headers(req, opts)?;
+    let req = apply_query(req, opts)?;
+    let mut req = apply_body(req, opts)?;
+    if let Some(ms) = opts.get::<Option<u64>>("timeout")? {
+        req = req.timeout(Duration::from_millis(ms));
+    }
+    Ok(req)
+}
+
+fn apply_headers(
     mut req: reqwest::RequestBuilder,
     opts: &Table,
 ) -> mlua::Result<reqwest::RequestBuilder> {
-    if let Some(headers) = opts.get::<Option<Table>>("headers")? {
-        for pair in headers.pairs::<String, mlua::LuaString>() {
-            let (k, v) = pair?;
-            req = req.header(k.as_str(), v.as_bytes().as_ref());
-        }
+    let Some(headers) = opts.get::<Option<Table>>("headers")? else {
+        return Ok(req);
+    };
+    for pair in headers.pairs::<String, mlua::LuaString>() {
+        let (k, v) = pair?;
+        req = req.header(k.as_str(), v.as_bytes().as_ref());
     }
-    if let Some(query) = opts.get::<Option<Table>>("query")? {
-        let mut pairs = Vec::new();
-        for pair in query.pairs::<String, Value>() {
-            let (k, v) = pair?;
-            pairs.push((k, value_to_string(&v)?));
-        }
-        req = req.query(&pairs);
-    }
+    Ok(req)
+}
 
+fn apply_query(
+    req: reqwest::RequestBuilder,
+    opts: &Table,
+) -> mlua::Result<reqwest::RequestBuilder> {
+    let Some(query) = opts.get::<Option<Table>>("query")? else {
+        return Ok(req);
+    };
+    let mut pairs = Vec::new();
+    for pair in query.pairs::<String, Value>() {
+        let (k, v) = pair?;
+        pairs.push((k, value_to_string(&v)?));
+    }
+    Ok(req.query(&pairs))
+}
+
+/// Applies whichever of `opts.body`, `opts.json` or `opts.form` is given.
+fn apply_body(req: reqwest::RequestBuilder, opts: &Table) -> mlua::Result<reqwest::RequestBuilder> {
     let body = opts.get::<Option<mlua::LuaString>>("body")?;
     let json_val = opts.get::<Option<Value>>("json")?;
     let form = match opts.get::<Value>("form")? {
@@ -615,25 +674,25 @@ fn apply_opts(
         ));
     }
     if let Some(b) = body {
-        req = req.body(b.as_bytes().to_vec());
-    } else if let Some(v) = json_val {
+        return Ok(req.body(b.as_bytes().to_vec()));
+    }
+    if let Some(v) = json_val {
         let json = json::lua_to_json(&v)?;
         let bytes = serde_json::to_vec(&json)
             .map_err(|e| Error::runtime(format!("lur.http: encoding opts.json: {e}")))?;
-        req = req.header("content-type", "application/json").body(bytes);
-    } else if let Some(form) = form {
-        let encoded = encode_form(&form)?;
-        // Unlike `json`, an explicit Content-Type from the caller is kept.
-        if !has_content_type(opts)? {
-            req = req.header("content-type", "application/x-www-form-urlencoded");
-        }
-        req = req.body(encoded.into_bytes());
+        return Ok(req.header("content-type", "application/json").body(bytes));
     }
-
-    if let Some(ms) = opts.get::<Option<u64>>("timeout")? {
-        req = req.timeout(Duration::from_millis(ms));
-    }
-    Ok(req)
+    let Some(form) = form else {
+        return Ok(req);
+    };
+    let encoded = encode_form(&form)?;
+    // Unlike `json`, an explicit Content-Type from the caller is kept.
+    let req = if has_content_type(opts)? {
+        req
+    } else {
+        req.header("content-type", "application/x-www-form-urlencoded")
+    };
+    Ok(req.body(encoded.into_bytes()))
 }
 
 /// Whether `opts.headers` already names `Content-Type` (any case).
@@ -743,10 +802,11 @@ async fn read_response(mut resp: reqwest::Response, max_body: usize) -> mlua::Re
     })
 }
 
-fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
+/// Builds the `headers` (last value wins) and `headers_all` (every value) tables.
+fn header_tables(lua: &Lua, raw_headers: &[(String, Vec<u8>)]) -> mlua::Result<(Table, Table)> {
     let headers = lua.create_table()?;
     let headers_all = lua.create_table()?;
-    for (key, value) in &raw.headers {
+    for (key, value) in raw_headers {
         let val = lua.create_string(value)?;
         headers.set(key.as_str(), &val)?; // last value wins
         let arr = if let Some(t) = headers_all.get::<Option<Table>>(key.as_str())? {
@@ -759,16 +819,12 @@ fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
         let next = arr.raw_len() + 1;
         arr.raw_set(next as i64, &val)?;
     }
-    let body = lua.create_string(&raw.body)?;
+    Ok((headers, headers_all))
+}
 
-    let res = lua.create_table()?;
-    res.set("status", raw.status)?;
-    res.set("body", &body)?;
-    res.set("headers", headers)?;
-    res.set("headers_all", headers_all)?;
-
-    let body_for_json = body.clone();
-    let json_fn = lua.create_function(move |lua, opts: Value| {
+/// `res.json(opts)`: decodes the body as JSON.
+fn json_fn(lua: &Lua, body: mlua::LuaString) -> mlua::Result<mlua::Function> {
+    lua.create_function(move |lua, opts: Value| {
         // Options are checked first so a bad `opts` is reported even for a bad body.
         // `r:json(...)` passes the response table itself as the first argument.
         if let Value::Table(t) = &opts
@@ -778,12 +834,19 @@ fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
             return Err(Error::runtime("res.json: call with a dot, not a colon"));
         }
         let drop_null = json::parse_decode_opts(lua, opts, "res.json", 1)?;
-        let parsed: serde_json::Value = serde_json::from_slice(&body_for_json.as_bytes())
+        let parsed: serde_json::Value = serde_json::from_slice(&body.as_bytes())
             .map_err(|e| Error::runtime(format!("res.json: {e}")))?;
         json::json_to_lua(lua, &parsed, drop_null)
-    })?;
-    res.set("json", json_fn)?;
+    })
+}
 
+/// Sets `res.text` and `res.html`, both decoding the body by the response charset.
+fn set_text_fns(
+    lua: &Lua,
+    res: &Table,
+    raw: &RawResponse,
+    body: &mlua::LuaString,
+) -> mlua::Result<()> {
     // Decoded with the Content-Type charset hint (last header wins, like
     // `headers`); same rules as `lur.charset.decode`.
     let content_type = raw
@@ -803,7 +866,20 @@ fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
         lua.create_userdata(html::parse_document(text_of(&body_h)))
     })?;
     res.set("html", html_fn)?;
+    Ok(())
+}
 
+fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
+    let (headers, headers_all) = header_tables(lua, &raw.headers)?;
+    let body = lua.create_string(&raw.body)?;
+
+    let res = lua.create_table()?;
+    res.set("status", raw.status)?;
+    res.set("body", &body)?;
+    res.set("headers", headers)?;
+    res.set("headers_all", headers_all)?;
+    res.set("json", json_fn(lua, body.clone())?)?;
+    set_text_fns(lua, &res, raw, &body)?;
     Ok(res)
 }
 

@@ -29,7 +29,15 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 
     let decode = lua
         .create_function(|lua, (text, opts): (Value, Value)| {
-            let text: mlua::LuaString = argcheck::arg(lua, text, "lur.json.decode", 1, "string")?;
+            let text: mlua::LuaString = argcheck::arg(
+                lua,
+                text,
+                argcheck::ArgSpec {
+                    fname: "lur.json.decode",
+                    n: 1,
+                    expected: "string",
+                },
+            )?;
             let drop_null = parse_decode_opts(lua, opts, "lur.json.decode", 2)?;
             let parsed: Json = serde_json::from_slice(&text.as_bytes())
                 .map_err(|e| Error::runtime(e.to_string()))?;
@@ -50,7 +58,16 @@ pub(crate) fn parse_decode_opts(
     fname: &str,
     pos: usize,
 ) -> mlua::Result<bool> {
-    let Some(opts) = argcheck::arg::<Option<Table>>(lua, opts, fname, pos, "table")? else {
+    let Some(opts) = argcheck::arg::<Option<Table>>(
+        lua,
+        opts,
+        argcheck::ArgSpec {
+            fname,
+            n: pos,
+            expected: "table",
+        },
+    )?
+    else {
         return Ok(false);
     };
     match opts.get::<Value>("null")? {
@@ -162,6 +179,14 @@ fn number_to_json(f: f64) -> mlua::Result<Json> {
 
 /// Array iff the keys are exactly `1..#t`; otherwise (and when empty) an object.
 fn table_to_json(t: &Table, depth: usize) -> mlua::Result<Json> {
+    if is_sequence(t)? {
+        return encode_array(t, depth);
+    }
+    encode_object(t, depth)
+}
+
+/// True when the table is non-empty and its keys are exactly `1..#t`.
+fn is_sequence(t: &Table) -> mlua::Result<bool> {
     let len = t.raw_len();
     let mut count = 0usize;
     let mut in_sequence = true;
@@ -180,15 +205,20 @@ fn table_to_json(t: &Table, depth: usize) -> mlua::Result<Json> {
         }
     }
 
-    if len > 0 && in_sequence && count == len {
-        let mut arr = Vec::with_capacity(len);
-        for i in 1..=len {
-            arr.push(encode_value(&t.raw_get::<Value>(i as i64)?, depth)?);
-        }
-        return Ok(Json::Array(arr));
-    }
+    Ok(len > 0 && in_sequence && count == len)
+}
 
-    let mut map = serde_json::Map::with_capacity(count);
+fn encode_array(t: &Table, depth: usize) -> mlua::Result<Json> {
+    let len = t.raw_len();
+    let mut arr = Vec::with_capacity(len);
+    for i in 1..=len {
+        arr.push(encode_value(&t.raw_get::<Value>(i as i64)?, depth)?);
+    }
+    Ok(Json::Array(arr))
+}
+
+fn encode_object(t: &Table, depth: usize) -> mlua::Result<Json> {
+    let mut map = serde_json::Map::new();
     for pair in t.clone().pairs::<Value, Value>() {
         let (k, v) = pair?;
         let key = match &k {

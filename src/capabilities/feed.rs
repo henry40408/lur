@@ -76,8 +76,24 @@ fn install_format(
     let f = lua
         .create_function(move |lua, (meta, items, opts): (Value, Value, Value)| {
             let fname = format!("lur.feed.{name}");
-            let meta: Table = argcheck::arg(lua, meta, &fname, 1, "table")?;
-            let items: Table = argcheck::arg(lua, items, &fname, 2, "table")?;
+            let meta: Table = argcheck::arg(
+                lua,
+                meta,
+                argcheck::ArgSpec {
+                    fname: &fname,
+                    n: 1,
+                    expected: "table",
+                },
+            )?;
+            let items: Table = argcheck::arg(
+                lua,
+                items,
+                argcheck::ArgSpec {
+                    fname: &fname,
+                    n: 2,
+                    expected: "table",
+                },
+            )?;
             let skip_invalid = skip_invalid_opt(lua, opts, &fname)?;
             let meta = read_meta(&meta, &fname)?;
             let items = read_items(&items, &fname, skip_invalid)?;
@@ -133,7 +149,16 @@ fn read_meta(t: &Table, fname: &str) -> mlua::Result<Meta> {
 /// `opts.skip_invalid` (third argument): skip items with no usable title
 /// instead of raising.
 fn skip_invalid_opt(lua: &Lua, opts: Value, fname: &str) -> mlua::Result<bool> {
-    let Some(opts) = argcheck::arg::<Option<Table>>(lua, opts, fname, 3, "table")? else {
+    let Some(opts) = argcheck::arg::<Option<Table>>(
+        lua,
+        opts,
+        argcheck::ArgSpec {
+            fname,
+            n: 3,
+            expected: "table",
+        },
+    )?
+    else {
         return Ok(false);
     };
     match opts.get::<Value>("skip_invalid")? {
@@ -174,57 +199,8 @@ fn read_items(t: &Table, fname: &str, skip_invalid: bool) -> mlua::Result<Vec<It
 }
 
 fn read_item(t: &Table, ctx: &str) -> mlua::Result<Item> {
-    let mut categories = Vec::new();
-    match t.get::<Value>("categories")? {
-        Value::Nil => {}
-        Value::Table(list) => {
-            for c in list.sequence_values::<Value>() {
-                match c? {
-                    Value::String(s) => categories.push(
-                        s.to_str()
-                            .map_err(|e| Error::runtime(format!("{ctx}.categories: {e}")))?
-                            .to_string(),
-                    ),
-                    other => {
-                        return Err(Error::runtime(format!(
-                            "{ctx}.categories must contain strings, got {}",
-                            other.type_name()
-                        )));
-                    }
-                }
-            }
-        }
-        other => {
-            return Err(Error::runtime(format!(
-                "{ctx}.categories must be table, got {}",
-                other.type_name()
-            )));
-        }
-    }
-
-    let enclosure = match t.get::<Value>("enclosure")? {
-        Value::Nil => None,
-        Value::Table(e) => {
-            let ectx = format!("{ctx}.enclosure");
-            Some(Enclosure {
-                url: req_str(&e, "url", &ectx)?,
-                mime: opt_str(&e, "type", &ectx)?,
-                length: argcheck::integer_arg(
-                    e.get::<Value>("length")?,
-                    &format!("{ectx}.length"),
-                    1,
-                )
-                .map_err(|err| Error::runtime(err.to_string().replace("argument #1 ", "")))?,
-            })
-        }
-        other => {
-            return Err(Error::runtime(format!(
-                "{ctx}.enclosure must be table, got {}",
-                other.type_name()
-            )));
-        }
-    };
-
+    let categories = read_categories(t, ctx)?;
+    let enclosure = read_enclosure(t, ctx)?;
     Ok(Item {
         title: req_str(t, "title", ctx)?,
         link: opt_str(t, "link", ctx)?,
@@ -237,6 +213,56 @@ fn read_item(t: &Table, ctx: &str) -> mlua::Result<Item> {
         categories,
         enclosure,
     })
+}
+
+fn read_categories(t: &Table, ctx: &str) -> mlua::Result<Vec<String>> {
+    let list = match t.get::<Value>("categories")? {
+        Value::Nil => return Ok(Vec::new()),
+        Value::Table(list) => list,
+        other => {
+            return Err(Error::runtime(format!(
+                "{ctx}.categories must be table, got {}",
+                other.type_name()
+            )));
+        }
+    };
+    let mut categories = Vec::new();
+    for c in list.sequence_values::<Value>() {
+        match c? {
+            Value::String(s) => categories.push(
+                s.to_str()
+                    .map_err(|e| Error::runtime(format!("{ctx}.categories: {e}")))?
+                    .to_string(),
+            ),
+            other => {
+                return Err(Error::runtime(format!(
+                    "{ctx}.categories must contain strings, got {}",
+                    other.type_name()
+                )));
+            }
+        }
+    }
+    Ok(categories)
+}
+
+fn read_enclosure(t: &Table, ctx: &str) -> mlua::Result<Option<Enclosure>> {
+    let e = match t.get::<Value>("enclosure")? {
+        Value::Nil => return Ok(None),
+        Value::Table(e) => e,
+        other => {
+            return Err(Error::runtime(format!(
+                "{ctx}.enclosure must be table, got {}",
+                other.type_name()
+            )));
+        }
+    };
+    let ectx = format!("{ctx}.enclosure");
+    Ok(Some(Enclosure {
+        url: req_str(&e, "url", &ectx)?,
+        mime: opt_str(&e, "type", &ectx)?,
+        length: argcheck::integer_arg(e.get::<Value>("length")?, &format!("{ectx}.length"), 1)
+            .map_err(|err| Error::runtime(err.to_string().replace("argument #1 ", "")))?,
+    }))
 }
 
 // ---- writing ----
@@ -522,46 +548,54 @@ fn render_json(meta: &Meta, items: &[Item]) -> mlua::Result<String> {
             .as_deref()
             .or(item.link.as_deref())
             .ok_or_else(|| Error::runtime(format!("items[{}] needs guid or link", i + 1)))?;
-        let mut o = Map::new();
-        o.insert("id".into(), json!(id));
-        o.insert("title".into(), json!(item.title));
-        if let Some(v) = &item.link {
-            o.insert("url".into(), json!(v));
-        }
-        if let Some(v) = &item.content {
-            o.insert("content_html".into(), json!(v));
-        }
-        if let Some(v) = &item.summary {
-            o.insert("summary".into(), json!(v));
-        }
-        if let Some(ms) = item.date {
-            o.insert("date_published".into(), json!(rfc3339(ms)));
-        }
-        if let Some(ms) = item.updated {
-            o.insert("date_modified".into(), json!(rfc3339(ms)));
-        }
-        if let Some(a) = &item.author {
-            o.insert("authors".into(), json!([{ "name": a }]));
-        }
-        if !item.categories.is_empty() {
-            o.insert("tags".into(), json!(item.categories));
-        }
-        if let Some(e) = &item.enclosure {
-            let mut att = Map::new();
-            att.insert("url".into(), json!(e.url));
-            att.insert(
-                "mime_type".into(),
-                json!(e.mime.as_deref().unwrap_or("application/octet-stream")),
-            );
-            if let Some(n) = e.length {
-                att.insert("size_in_bytes".into(), json!(n));
-            }
-            o.insert("attachments".into(), json!([att]));
-        }
-        out_items.push(serde_json::Value::Object(o));
+        out_items.push(json_item(item, id));
     }
     feed.insert("items".into(), serde_json::Value::Array(out_items));
     serde_json::to_string(&feed).map_err(|e| Error::runtime(e.to_string()))
+}
+
+fn json_item(item: &Item, id: &str) -> serde_json::Value {
+    let mut o = Map::new();
+    o.insert("id".into(), json!(id));
+    o.insert("title".into(), json!(item.title));
+    if let Some(v) = &item.link {
+        o.insert("url".into(), json!(v));
+    }
+    if let Some(v) = &item.content {
+        o.insert("content_html".into(), json!(v));
+    }
+    if let Some(v) = &item.summary {
+        o.insert("summary".into(), json!(v));
+    }
+    if let Some(ms) = item.date {
+        o.insert("date_published".into(), json!(rfc3339(ms)));
+    }
+    if let Some(ms) = item.updated {
+        o.insert("date_modified".into(), json!(rfc3339(ms)));
+    }
+    if let Some(a) = &item.author {
+        o.insert("authors".into(), json!([{ "name": a }]));
+    }
+    if !item.categories.is_empty() {
+        o.insert("tags".into(), json!(item.categories));
+    }
+    if let Some(e) = &item.enclosure {
+        o.insert("attachments".into(), json!([json_attachment(e)]));
+    }
+    serde_json::Value::Object(o)
+}
+
+fn json_attachment(e: &Enclosure) -> Map<String, serde_json::Value> {
+    let mut att = Map::new();
+    att.insert("url".into(), json!(e.url));
+    att.insert(
+        "mime_type".into(),
+        json!(e.mime.as_deref().unwrap_or("application/octet-stream")),
+    );
+    if let Some(n) = e.length {
+        att.insert("size_in_bytes".into(), json!(n));
+    }
+    att
 }
 
 #[cfg(test)]

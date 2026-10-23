@@ -28,7 +28,15 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 }
 
 fn str_arg(lua: &Lua, value: Value, fname: &str, n: usize) -> mlua::Result<String> {
-    let s: mlua::LuaString = argcheck::arg(lua, value, fname, n, "string")?;
+    let s: mlua::LuaString = argcheck::arg(
+        lua,
+        value,
+        argcheck::ArgSpec {
+            fname,
+            n,
+            expected: "string",
+        },
+    )?;
     s.to_str()
         .map(|s| s.to_string())
         .map_err(|e| Error::runtime(format!("{fname}: {e}")))
@@ -109,7 +117,15 @@ fn scalar(value: &Value, key: &str) -> mlua::Result<String> {
 fn install_encode_query(lua: &Lua, url: &Table) -> Result<(), RunError> {
     let encode = lua
         .create_function(|lua, params: Value| {
-            let params: Table = argcheck::arg(lua, params, "lur.url.encode_query", 1, "table")?;
+            let params: Table = argcheck::arg(
+                lua,
+                params,
+                argcheck::ArgSpec {
+                    fname: "lur.url.encode_query",
+                    n: 1,
+                    expected: "table",
+                },
+            )?;
             let mut pairs: BTreeMap<String, Vec<String>> = BTreeMap::new();
             for entry in params.pairs::<Value, Value>() {
                 let (k, v) = entry?;

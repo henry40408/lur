@@ -42,7 +42,9 @@ use tokio_util::task::TaskTracker;
 use tracing::{error, info, warn};
 
 use crate::capabilities::raise;
-use crate::capabilities::serve::{AbortSlot, PendingAbort, Registry};
+use crate::capabilities::serve::{
+    Abort, AbortSlot, PendingAbort, Registry, ServeCtx, abort_table, status_arg,
+};
 use crate::runtime::{Deadline, RunError, RuntimeConfig, build_lua};
 
 /// A loaded app: VM pool, route table, cron jobs, and the tokio runtime.
@@ -217,7 +219,6 @@ impl Server {
     /// Run `app.lua` once per pooled VM to collect handlers. Fails if VMs
     /// register differently or a route is duplicated.
     pub fn load(source: &str, config: RuntimeConfig) -> Result<Self, RunError> {
-        let pool_size = config.pool_size.max(1);
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -226,56 +227,7 @@ impl Server {
         // Warm up inside the runtime so top-level awaits in app.lua work.
         let bare_chunk_name = config.chunk_name.as_deref().unwrap_or("script").to_owned();
         let chunk_name = format!("@{bare_chunk_name}");
-        let (vms, routes, crons) = rt.block_on(async {
-            let mut vms = Vec::with_capacity(pool_size);
-            let mut routes: Option<Vec<(String, String)>> = None;
-            let mut crons: Option<Vec<CronMeta>> = None;
-            for _ in 0..pool_size {
-                let registry = Registry::default();
-                let (lua, deadline) = build_lua(&config, Some(&registry))?;
-                let top = lua.load(source).set_name(&chunk_name).exec_async();
-                // No timeout here, but the same end-of-run cleanup.
-                crate::runtime::with_timeout(&lua, &deadline, None, top)
-                    .await
-                    .unwrap_or_else(|()| unreachable!("no timeout set"))
-                    .map_err(RunError::Script)?;
-
-                let regs = registry.take();
-                let handlers = regs.iter().map(|r| r.handler.clone()).collect();
-                let route_sig: Vec<(String, String)> =
-                    regs.into_iter().map(|r| (r.method, r.path)).collect();
-
-                let cron_regs = registry.take_crons();
-                let cron_handlers = cron_regs.iter().map(|r| r.handler.clone()).collect();
-                let cron_meta: Vec<CronMeta> = cron_regs
-                    .into_iter()
-                    .map(|r| CronMeta {
-                        spec: r.spec,
-                        name: r.name,
-                        overlap: r.overlap,
-                        timeout_ms: r.timeout_ms,
-                    })
-                    .collect();
-
-                // Every VM must register the same routes and jobs in the same
-                // order, or the shared handler ids would not line up.
-                if routes.get_or_insert_with(|| route_sig.clone()) != &route_sig
-                    || crons.get_or_insert_with(|| cron_meta.clone()) != &cron_meta
-                {
-                    return Err(RunError::Script(mlua::Error::RuntimeError(
-                        "lur.serve: app.lua registered differently across VMs".into(),
-                    )));
-                }
-                vms.push(Vm {
-                    lua,
-                    deadline,
-                    handlers,
-                    cron_handlers,
-                    abort: registry.abort_slot(),
-                });
-            }
-            Ok((vms, routes.unwrap_or_default(), crons.unwrap_or_default()))
-        })?;
+        let (vms, routes, crons) = rt.block_on(warm_up(&config, source, &chunk_name))?;
 
         let router = Router::build(&routes)?;
         let cron_jobs = build_cron_jobs(&crons)?;
@@ -334,66 +286,84 @@ impl Server {
         addr: SocketAddr,
         shutdown: impl Future<Output = ()> + Send + 'static,
     ) -> std::io::Result<()> {
-        let grace = self.shutdown_grace;
         let server = Arc::new(self);
         let driver = server.clone();
-        driver.rt.block_on(async move {
-            let listener = TcpListener::bind(addr).await?;
-            info!("listening on http://{addr}");
+        driver.rt.block_on(server.serve(addr, shutdown))
+    }
 
-            // Fan shutdown out to the accept loop and every cron loop.
-            let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-            tokio::spawn(async move {
-                shutdown.await;
-                let _ = shutdown_tx.send(true);
-            });
+    async fn serve(
+        self: Arc<Self>,
+        addr: SocketAddr,
+        shutdown: impl Future<Output = ()> + Send + 'static,
+    ) -> std::io::Result<()> {
+        let grace = self.shutdown_grace;
+        let listener = TcpListener::bind(addr).await?;
+        info!("listening on http://{addr}");
 
-            // Connections are watched by `graceful`, which tells idle keep-alive
-            // ones to close on shutdown; cron runs are tracked by `crons`.
-            let graceful = GracefulShutdown::new();
-            let crons = TaskTracker::new();
+        let shutdown_rx = fan_out_shutdown(shutdown);
 
-            for job in &server.cron_jobs {
-                tokio::spawn(cron_loop(
-                    server.clone(),
-                    job.clone(),
-                    shutdown_rx.clone(),
-                    crons.clone(),
-                ));
-            }
+        // Connections are watched by `graceful`, which tells idle keep-alive
+        // ones to close on shutdown; cron runs are tracked by `crons`.
+        let graceful = GracefulShutdown::new();
+        let crons = TaskTracker::new();
 
-            let mut accept_shutdown = shutdown_rx.clone();
-            loop {
-                tokio::select! {
-                    _ = accept_shutdown.changed() => break,
-                    res = listener.accept() => {
-                        let (stream, _) = res?;
-                        let io = TokioIo::new(stream);
-                        let server = server.clone();
-                        let service = service_fn(move |req| {
-                            let server = server.clone();
-                            async move { server.handle(req).await }
-                        });
-                        let conn = graceful.watch(http1::Builder::new().serve_connection(io, service));
-                        tokio::spawn(async move {
-                            if let Err(e) = conn.await {
-                                warn!("connection error: {e}");
-                            }
-                        });
-                    }
+        for job in &self.cron_jobs {
+            tokio::spawn(cron_loop(
+                self.clone(),
+                job.clone(),
+                shutdown_rx.clone(),
+                crons.clone(),
+            ));
+        }
+
+        self.accept_until(&listener, &graceful, shutdown_rx).await?;
+
+        info!("shutting down, draining for up to {}ms", grace.as_millis());
+        crons.close();
+        // Anything still running after the grace period is aborted when the
+        // runtime drops.
+        let _ = tokio::time::timeout(grace, async {
+            tokio::join!(graceful.shutdown(), crons.wait());
+        })
+        .await;
+        Ok(())
+    }
+
+    /// Accept connections until `shutdown` flips.
+    async fn accept_until(
+        self: &Arc<Self>,
+        listener: &TcpListener,
+        graceful: &GracefulShutdown,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> std::io::Result<()> {
+        loop {
+            tokio::select! {
+                _ = shutdown.changed() => return Ok(()),
+                res = listener.accept() => {
+                    let (stream, _) = res?;
+                    self.spawn_connection(stream, graceful);
                 }
             }
+        }
+    }
 
-            info!("shutting down, draining for up to {}ms", grace.as_millis());
-            crons.close();
-            // Anything still running after the grace period is aborted when the
-            // runtime drops.
-            let _ = tokio::time::timeout(grace, async {
-                tokio::join!(graceful.shutdown(), crons.wait());
-            })
-            .await;
-            Ok(())
-        })
+    fn spawn_connection(
+        self: &Arc<Self>,
+        stream: tokio::net::TcpStream,
+        graceful: &GracefulShutdown,
+    ) {
+        let io = TokioIo::new(stream);
+        let server = self.clone();
+        let service = service_fn(move |req| {
+            let server = server.clone();
+            async move { server.handle(req).await }
+        });
+        let conn = graceful.watch(http1::Builder::new().serve_connection(io, service));
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                warn!("connection error: {e}");
+            }
+        });
     }
 
     /// A handler error becomes a logged 500, never a crash.
@@ -401,52 +371,32 @@ impl Server {
         &self,
         req: Request<Incoming>,
     ) -> Result<HyperResponse<Full<Bytes>>, Infallible> {
-        let method = req.method().as_str().to_owned();
-        let path = req.uri().path().to_owned();
-        let query = req.uri().query().unwrap_or("").to_owned();
-        let headers = req
-            .headers()
-            .iter()
-            .map(|(k, v)| (k.as_str().to_owned(), v.to_str().unwrap_or("").to_owned()))
-            .collect();
-        // `Limited` stops reading at the cap, so an oversized body is never buffered.
-        let limit = self.max_body.unwrap_or(usize::MAX);
-        let body = match Limited::new(req.into_body(), limit).collect().await {
-            Ok(c) => c.to_bytes().to_vec(),
-            Err(e) if e.downcast_ref::<LengthLimitError>().is_some() => {
-                return Ok(to_hyper(oversize_response()));
-            }
-            Err(_) => Vec::new(),
-        };
-
-        let raw = RawRequest {
-            method,
-            path,
-            query,
-            headers,
-            body,
+        let raw = match raw_request_from(req, self.max_body).await {
+            Ok(raw) => raw,
+            Err(response) => return Ok(to_hyper(response)),
         };
         let response = match self.dispatch_async(&raw).await {
-            Ok(r) => r,
-            Err(e) => {
-                error!(
-                    "handler error:\n{}",
-                    crate::diagnostics::render(
-                        &self.source,
-                        &self.chunk_name,
-                        &e.to_string(),
-                        crate::color::stderr_color(),
-                    )
-                );
-                Response {
-                    status: 500,
-                    headers: Vec::new(),
-                    body: b"Internal Server Error".to_vec(),
-                }
-            }
+            Ok(response) => response,
+            Err(e) => self.dispatch_error_response(&e),
         };
-
         Ok(to_hyper(response))
+    }
+
+    fn dispatch_error_response(&self, e: &RunError) -> Response {
+        error!(
+            "handler error:\n{}",
+            crate::diagnostics::render(
+                &self.source,
+                &self.chunk_name,
+                &e.to_string(),
+                crate::color::stderr_color(),
+            )
+        );
+        Response {
+            status: 500,
+            headers: Vec::new(),
+            body: b"Internal Server Error".to_vec(),
+        }
     }
 
     async fn dispatch_async(&self, req: &RawRequest) -> Result<Response, RunError> {
@@ -469,7 +419,17 @@ impl Server {
         let handler = &vm.handlers[id];
         let req_table = build_req(&vm.lua, req, &params).map_err(RunError::Script)?;
 
-        match call_handler(vm, handler, req_table, self.per_event_timeout, true).await {
+        match call_handler(
+            vm,
+            handler,
+            req_table,
+            Run {
+                timeout: self.per_event_timeout,
+                in_request: true,
+            },
+        )
+        .await
+        {
             Ok(values) => response_from(values),
             Err(CallError::TimedOut) => Ok(timeout_response()),
             Err(CallError::Aborted(a)) => Ok(abort_response(a)),
@@ -483,7 +443,17 @@ impl Server {
         let vm = checked.vm();
         let handler = &vm.cron_handlers[job.id];
         let timeout = job.timeout.or(self.per_event_timeout);
-        match call_handler(vm, handler, (), timeout, false).await {
+        match call_handler(
+            vm,
+            handler,
+            (),
+            Run {
+                timeout,
+                in_request: false,
+            },
+        )
+        .await
+        {
             Ok(_) => {}
             Err(CallError::TimedOut) => {
                 warn!("cron[{}]: timed out", job.name);
@@ -506,6 +476,37 @@ impl Server {
             }
         }
     }
+}
+
+/// Collects the request parts and body; `Err` carries the response to send instead.
+async fn raw_request_from(
+    req: Request<Incoming>,
+    max_body: Option<usize>,
+) -> Result<RawRequest, Response> {
+    let method = req.method().as_str().to_owned();
+    let path = req.uri().path().to_owned();
+    let query = req.uri().query().unwrap_or("").to_owned();
+    let headers = req
+        .headers()
+        .iter()
+        .map(|(k, v)| (k.as_str().to_owned(), v.to_str().unwrap_or("").to_owned()))
+        .collect();
+    // `Limited` stops reading at the cap, so an oversized body is never buffered.
+    let limit = max_body.unwrap_or(usize::MAX);
+    let body = match Limited::new(req.into_body(), limit).collect().await {
+        Ok(c) => c.to_bytes().to_vec(),
+        Err(e) if e.downcast_ref::<LengthLimitError>().is_some() => {
+            return Err(oversize_response());
+        }
+        Err(_) => Vec::new(),
+    };
+    Ok(RawRequest {
+        method,
+        path,
+        query,
+        headers,
+        body,
+    })
 }
 
 fn to_hyper(response: Response) -> HyperResponse<Full<Bytes>> {
@@ -548,6 +549,93 @@ fn abort_response(a: PendingAbort) -> Response {
     }
 }
 
+/// The routes and cron jobs `app.lua` registered, in order.
+#[derive(Clone, Default, PartialEq)]
+struct Registrations {
+    routes: Vec<(String, String)>,
+    crons: Vec<CronMeta>,
+}
+
+/// A VM that has run `app.lua`, with what it registered.
+struct Warmed {
+    vm: Vm,
+    registered: Registrations,
+}
+
+/// Run `app.lua` in a fresh VM and collect its handlers.
+async fn warm_up_vm(
+    config: &RuntimeConfig,
+    source: &str,
+    chunk_name: &str,
+) -> Result<Warmed, RunError> {
+    let registry = Registry::default();
+    let (lua, deadline) = build_lua(config, Some(&registry))?;
+    let top = lua.load(source).set_name(chunk_name).exec_async();
+    // No timeout here, but the same end-of-run cleanup.
+    crate::runtime::with_timeout(&lua, &deadline, None, top)
+        .await
+        .unwrap_or_else(|()| unreachable!("no timeout set"))
+        .map_err(RunError::Script)?;
+
+    let regs = registry.take();
+    let handlers = regs.iter().map(|r| r.handler.clone()).collect();
+    let routes = regs.into_iter().map(|r| (r.method, r.path)).collect();
+
+    let cron_regs = registry.take_crons();
+    let cron_handlers = cron_regs.iter().map(|r| r.handler.clone()).collect();
+    let crons = cron_regs
+        .into_iter()
+        .map(|r| CronMeta {
+            spec: r.spec,
+            name: r.name,
+            overlap: r.overlap,
+            timeout_ms: r.timeout_ms,
+        })
+        .collect();
+
+    Ok(Warmed {
+        vm: Vm {
+            lua,
+            deadline,
+            handlers,
+            cron_handlers,
+            abort: registry.abort_slot(),
+        },
+        registered: Registrations { routes, crons },
+    })
+}
+
+/// Warm every pooled VM. Warm up inside the runtime so top-level awaits in
+/// app.lua work. Every VM must register the same routes and jobs in the same
+/// order, or the shared handler ids would not line up.
+async fn warm_up(
+    config: &RuntimeConfig,
+    source: &str,
+    chunk_name: &str,
+) -> Result<(Vec<Vm>, Vec<(String, String)>, Vec<CronMeta>), RunError> {
+    let pool_size = config.pool_size.max(1);
+    let mut vms = Vec::with_capacity(pool_size);
+    let mut expected: Option<Registrations> = None;
+    for _ in 0..pool_size {
+        let Warmed { vm, registered } = warm_up_vm(config, source, chunk_name).await?;
+        if *expected.get_or_insert_with(|| registered.clone()) != registered {
+            return Err(RunError::Script(mlua::Error::RuntimeError(
+                "lur.serve: app.lua registered differently across VMs".into(),
+            )));
+        }
+        vms.push(vm);
+    }
+    let Registrations { routes, crons } = expected.unwrap_or_default();
+    Ok((vms, routes, crons))
+}
+
+/// How `call_handler` runs a handler: its time budget, and whether
+/// `lur.serve.abort` is allowed (only inside an HTTP request).
+struct Run {
+    timeout: Option<Duration>,
+    in_request: bool,
+}
+
 /// Run `handler` in a fresh environment under the two-layer timeout:
 /// the deadline interrupt stops CPU-bound code, `tokio::time::timeout` drops
 /// code parked on async I/O.
@@ -555,20 +643,13 @@ async fn call_handler(
     vm: &Vm,
     handler: &Function,
     args: impl IntoLuaMulti,
-    timeout: Option<Duration>,
-    in_request: bool,
+    run: Run,
 ) -> Result<MultiValue, CallError> {
-    {
-        // Drop any abort left by a previous run (e.g. one `pcall` caught).
-        let mut abort = vm.abort.lock().expect("abort slot poisoned");
-        abort.in_request = in_request;
-        abort.pending = None;
-    }
-    // ...and any error table a previous run left for `lur.async` to recover.
-    raise::reset(&vm.lua);
-    handler
-        .set_environment(fresh_env(&vm.lua).map_err(CallError::Lua)?)
-        .map_err(CallError::Lua)?;
+    let Run {
+        timeout,
+        in_request,
+    } = run;
+    arm_vm(vm, handler, in_request)?;
 
     let at = timeout.map(|d| Instant::now() + d);
     *vm.deadline.lock().expect("deadline mutex poisoned") = at;
@@ -586,7 +667,38 @@ async fn call_handler(
         abort.pending.take()
     };
 
-    let result = match outcome {
+    let result = classify_outcome(outcome, at, pending);
+    if needs_reclaim(&result) {
+        crate::runtime::reclaim(&vm.lua);
+    }
+    result
+}
+
+/// Reset what a previous run left on the pooled VM and give `handler` a fresh
+/// environment.
+fn arm_vm(vm: &Vm, handler: &Function, in_request: bool) -> Result<(), CallError> {
+    {
+        // Drop any abort left by a previous run (e.g. one `pcall` caught).
+        let mut abort = vm.abort.lock().expect("abort slot poisoned");
+        abort.in_request = in_request;
+        abort.pending = None;
+    }
+    // ...and any error table a previous run left for `lur.async` to recover.
+    raise::reset(&vm.lua);
+    handler
+        .set_environment(fresh_env(&vm.lua).map_err(CallError::Lua)?)
+        .map_err(CallError::Lua)?;
+    Ok(())
+}
+
+/// `outcome` of `with_timeout`: `Err(())` is the async timeout; a script error
+/// past `at` is the deadline interrupt; one matching `pending` is an abort.
+fn classify_outcome(
+    outcome: Result<mlua::Result<MultiValue>, ()>,
+    at: Option<Instant>,
+    pending: Option<PendingAbort>,
+) -> Result<MultiValue, CallError> {
+    match outcome {
         Err(()) => Err(CallError::TimedOut),
         Ok(Ok(values)) => Ok(values),
         Ok(Err(e)) => {
@@ -600,15 +712,16 @@ async fn call_handler(
                 Err(CallError::Lua(e))
             }
         }
-    };
-    if match &result {
+    }
+}
+
+/// A timeout or out-of-memory error leaves garbage worth collecting now.
+fn needs_reclaim(result: &Result<MultiValue, CallError>) -> bool {
+    match result {
         Err(CallError::TimedOut) => true,
         Err(CallError::Lua(e)) => crate::runtime::is_memory_error(e),
         _ => false,
-    } {
-        crate::runtime::reclaim(&vm.lua);
     }
-    result
 }
 
 /// Sleep to each next fire and run the job. Single-flight by default (a tick
@@ -646,6 +759,18 @@ async fn cron_loop(
             in_flight.store(false, Ordering::SeqCst);
         });
     }
+}
+
+/// Fan `shutdown` out to the accept loop and every cron loop.
+fn fan_out_shutdown(
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> tokio::sync::watch::Receiver<bool> {
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown.await;
+        let _ = tx.send(true);
+    });
+    rx
 }
 
 async fn wait_for_signal() {
@@ -886,50 +1011,17 @@ fn build_req(
     let table = lua.create_table()?;
     table.set("method", req.method.to_uppercase())?;
     table.set("path", req.path.as_str())?;
-
-    // Both come from client-controlled headers: fine for building links,
-    // not for access decisions.
-    if let Some(origin) = request_origin(&req.headers) {
-        let mut url = format!("{origin}{}", req.path);
-        if !req.query.is_empty() {
-            url.push('?');
-            url.push_str(&req.query);
-        }
-        table.set("origin", origin)?;
-        table.set("url", url)?;
-    }
-
-    let params_table = lua.create_table()?;
-    for (name, value) in params {
-        params_table.set(name.as_str(), lua.create_string(value)?)?;
-    }
-    table.set("params", params_table)?;
+    set_origin_and_url(&table, req)?;
+    table.set("params", params_table(lua, params)?)?;
 
     // Query: `query` keeps the last value per key, `query_all` the full list.
     let pairs = parse_query(&req.query);
-    let query = last_table(lua, &pairs)?;
-    let query_all = all_table(lua, &pairs)?;
-    table.set("query", query)?;
-    table.set("query_all", query_all)?;
+    table.set("query", last_table(lua, &pairs)?)?;
+    table.set("query_all", all_table(lua, &pairs)?)?;
 
-    // Lower-cased names; last value wins.
-    let headers = lua.create_table()?;
-    for (name, value) in &req.headers {
-        headers.set(name.to_lowercase(), value.as_str())?;
-    }
+    let headers = headers_table(lua, req)?;
     table.set("headers", headers.clone())?;
-
-    // All `Cookie` headers fold into one table (later wins; never `nil`).
-    // Cookie names are case-sensitive, so not lowered.
-    let cookies = lua.create_table()?;
-    for (name, value) in &req.headers {
-        if name.eq_ignore_ascii_case("cookie") {
-            for (cname, cvalue) in crate::capabilities::cookie::cookie_pairs(value.as_bytes()) {
-                cookies.set(lua.create_string(cname)?, lua.create_string(cvalue)?)?;
-            }
-        }
-    }
-    table.set("cookies", cookies)?;
+    table.set("cookies", cookies_table(lua, req)?)?;
 
     // `req.body` / `req.json()` become unavailable once `req.read(n)` has run.
     // The mutex makes the closures `Send`.
@@ -938,40 +1030,94 @@ fn build_req(
         cursor: 0,
         streamed: false,
     }));
+    table.set("read", read_fn(lua, &state)?)?;
+    table.set("json", json_fn(lua, &state)?)?;
 
-    let read_state = Arc::clone(&state);
-    let read = lua.create_function(move |lua, n: Option<usize>| {
-        let mut st = read_state.lock().expect("body stream mutex poisoned");
-        match n {
-            // No arg: drain the rest; does not count as streaming.
-            None => {
-                let chunk = lua.create_string(&st.body[st.cursor..])?;
-                st.cursor = st.body.len();
-                Ok(Value::String(chunk))
-            }
-            // nil once exhausted.
-            Some(n) => {
-                st.streamed = true;
-                if st.cursor >= st.body.len() && n > 0 {
-                    return Ok(Value::Nil);
-                }
-                let end = (st.cursor + n).min(st.body.len());
-                let chunk = lua.create_string(&st.body[st.cursor..end])?;
-                st.cursor = end;
-                Ok(Value::String(chunk))
-            }
+    let meta = lua.create_table()?;
+    meta.set("__index", index_fn(lua, state, headers)?)?;
+    table.set_metatable(Some(meta))?;
+
+    Ok(table)
+}
+
+/// Both come from client-controlled headers: fine for building links, not for
+/// access decisions.
+fn set_origin_and_url(table: &mlua::Table, req: &RawRequest) -> mlua::Result<()> {
+    let Some(origin) = request_origin(&req.headers) else {
+        return Ok(());
+    };
+    let mut url = format!("{origin}{}", req.path);
+    if !req.query.is_empty() {
+        url.push('?');
+        url.push_str(&req.query);
+    }
+    table.set("origin", origin)?;
+    table.set("url", url)
+}
+
+fn params_table(lua: &mlua::Lua, params: &[(String, Vec<u8>)]) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table()?;
+    for (name, value) in params {
+        table.set(name.as_str(), lua.create_string(value)?)?;
+    }
+    Ok(table)
+}
+
+/// Lower-cased names; last value wins.
+fn headers_table(lua: &mlua::Lua, req: &RawRequest) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table()?;
+    for (name, value) in &req.headers {
+        table.set(name.to_lowercase(), value.as_str())?;
+    }
+    Ok(table)
+}
+
+/// All `Cookie` headers fold into one table (later wins; never `nil`).
+/// Cookie names are case-sensitive, so not lowered.
+fn cookies_table(lua: &mlua::Lua, req: &RawRequest) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table()?;
+    for (name, value) in &req.headers {
+        if !name.eq_ignore_ascii_case("cookie") {
+            continue;
         }
-    })?;
-    table.set("read", read)?;
+        for (cname, cvalue) in crate::capabilities::cookie::cookie_pairs(value.as_bytes()) {
+            table.set(lua.create_string(cname)?, lua.create_string(cvalue)?)?;
+        }
+    }
+    Ok(table)
+}
 
+/// `req.read(n?)`: with no argument, drain the rest (not counted as
+/// streaming); with `n`, return up to `n` bytes, or `nil` once exhausted.
+fn read_fn(lua: &mlua::Lua, state: &Arc<Mutex<BodyStream>>) -> mlua::Result<mlua::Function> {
+    let state = Arc::clone(state);
+    lua.create_function(move |lua, n: Option<usize>| {
+        let mut st = state.lock().expect("body stream mutex poisoned");
+        let Some(n) = n else {
+            let chunk = lua.create_string(&st.body[st.cursor..])?;
+            st.cursor = st.body.len();
+            return Ok(Value::String(chunk));
+        };
+        st.streamed = true;
+        if st.cursor >= st.body.len() && n > 0 {
+            return Ok(Value::Nil);
+        }
+        let end = (st.cursor + n).min(st.body.len());
+        let chunk = lua.create_string(&st.body[st.cursor..end])?;
+        st.cursor = end;
+        Ok(Value::String(chunk))
+    })
+}
+
+fn json_fn(lua: &mlua::Lua, state: &Arc<Mutex<BodyStream>>) -> mlua::Result<mlua::Function> {
     let decode: mlua::Function = lua
         .globals()
         .get::<mlua::Table>("lur")?
         .get::<mlua::Table>("json")?
         .get("decode")?;
-    let json_state = Arc::clone(&state);
-    let json = lua.create_function(move |lua, ()| {
-        let st = json_state.lock().expect("body stream mutex poisoned");
+    let state = Arc::clone(state);
+    lua.create_function(move |lua, ()| {
+        let st = state.lock().expect("body stream mutex poisoned");
         if st.streamed {
             return Err(mlua::Error::runtime(
                 "req.json() is unavailable after req.read(n) consumed part of the body",
@@ -979,56 +1125,99 @@ fn build_req(
         }
         let raw = lua.create_string(&st.body)?;
         decode.call::<Value>(raw)
-    })?;
-    table.set("json", json)?;
+    })
+}
 
-    // Served via `__index` so the streamed guard can fire.
-    let index_state = Arc::clone(&state);
-    let index = lua.create_function(move |lua, (t, key): (mlua::Table, Value)| {
+/// `req.form()` / `req.form_all()`, returned as a function by `__index`.
+fn form_fn(
+    lua: &mlua::Lua,
+    state: Arc<Mutex<BodyStream>>,
+    headers: mlua::Table,
+    all: bool,
+) -> mlua::Result<mlua::Function> {
+    lua.create_function(move |lua, ()| {
+        let label = if all { "req.form_all()" } else { "req.form()" };
+        let pairs = form_pairs(&state, &headers, label)?;
+        if all {
+            all_table(lua, &pairs)
+        } else {
+            last_table(lua, &pairs)
+        }
+    })
+}
+
+/// Served via `__index` so the streamed guard can fire.
+fn index_fn(
+    lua: &mlua::Lua,
+    state: Arc<Mutex<BodyStream>>,
+    headers: mlua::Table,
+) -> mlua::Result<mlua::Function> {
+    lua.create_function(move |lua, (t, key): (mlua::Table, Value)| {
+        let Value::String(s) = &key else {
+            return Ok(Value::Nil);
+        };
         // `req.valid_*` and `req.form*` are built on first access, so requests
         // that never use them pay nothing.
-        if let Value::String(s) = &key {
-            match &*s.as_bytes() {
-                b"valid_query" => return valid_fn(lua, &t, true),
-                b"valid_params" => return valid_fn(lua, &t, false),
-                b"valid_body" => return valid_body_fn(lua, &index_state, &headers),
-                b"form" | b"form_all" => {
-                    let all = &*s.as_bytes() == b"form_all";
-                    let state = Arc::clone(&index_state);
-                    let headers = headers.clone();
-                    let f = lua.create_function(move |lua, ()| {
-                        let pairs = form_pairs(
-                            &state,
-                            &headers,
-                            if all { "req.form_all()" } else { "req.form()" },
-                        )?;
-                        if all {
-                            all_table(lua, &pairs)
-                        } else {
-                            last_table(lua, &pairs)
-                        }
-                    })?;
-                    return Ok(Value::Function(f));
+        match &*s.as_bytes() {
+            b"valid_query" => valid_fn(lua, &t, true),
+            b"valid_params" => valid_fn(lua, &t, false),
+            b"valid_body" => valid_body_fn(lua, &state, &headers),
+            b"form" | b"form_all" => {
+                let all = &*s.as_bytes() == b"form_all";
+                let f = form_fn(lua, Arc::clone(&state), headers.clone(), all)?;
+                Ok(Value::Function(f))
+            }
+            b"body" => {
+                let st = state.lock().expect("body stream mutex poisoned");
+                if st.streamed {
+                    return Err(mlua::Error::runtime(
+                        "req.body is unavailable after req.read(n) consumed part of the body",
+                    ));
                 }
-                _ => {}
+                Ok(Value::String(lua.create_string(&st.body)?))
             }
+            _ => Ok(Value::Nil),
         }
-        if matches!(&key, Value::String(s) if s.as_bytes() == b"body") {
-            let st = index_state.lock().expect("body stream mutex poisoned");
-            if st.streamed {
-                return Err(mlua::Error::runtime(
-                    "req.body is unavailable after req.read(n) consumed part of the body",
-                ));
-            }
-            return Ok(Value::String(lua.create_string(&st.body)?));
-        }
-        Ok(Value::Nil)
-    })?;
-    let meta = lua.create_table()?;
-    meta.set("__index", index)?;
-    table.set_metatable(Some(meta))?;
+    })
+}
 
-    Ok(table)
+/// `ServeCtx` for a `req.valid_*` accessor, or the "only under serve" error.
+fn serve_ctx(lua: &Lua, fname: &str) -> mlua::Result<ServeCtx> {
+    lua.app_data_ref::<ServeCtx>()
+        .map(|c| c.clone())
+        .ok_or_else(|| mlua::Error::runtime(format!("{fname} is only available under `lur serve`")))
+}
+
+/// `opts.fail_status` of `req.valid_*` (default 400).
+fn fail_status_opt(opts: Value, fname: &str) -> mlua::Result<u16> {
+    let opts = match opts {
+        Value::Nil => return Ok(400),
+        Value::Table(o) => o,
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "{fname}: argument #2 must be table, got {}",
+                other.type_name()
+            )));
+        }
+    };
+    match opts.get::<Value>("fail_status")? {
+        Value::Nil => Ok(400),
+        v => status_arg(&v, fname, "opts.fail_status"),
+    }
+}
+
+/// The `issues` of a failed `lur.validate.try`, or `nil`.
+fn issues_of(error: &Value) -> mlua::Result<Value> {
+    match error {
+        Value::Table(e) => e.get::<Value>("issues"),
+        _ => Ok(Value::Nil),
+    }
+}
+
+/// The `(false, err)` result of a `req.valid_*` call that aborts.
+fn aborted(lua: &Lua, ctx: &ServeCtx, abort: Abort<'_>) -> mlua::Result<(bool, Value)> {
+    let err = abort_table(lua, ctx, abort)?;
+    Ok((false, Value::Table(err)))
 }
 
 /// `req.valid_query(schema, opts?)` / `req.valid_params(schema, opts?)`:
@@ -1036,19 +1225,12 @@ fn build_req(
 /// `opts.fail_status` (default 400) and `data = issues`. Anything else `try`
 /// raises (bad schema, a validator's real error) propagates unchanged.
 fn valid_fn(lua: &Lua, req: &mlua::Table, query: bool) -> mlua::Result<Value> {
-    use crate::capabilities::serve::{ServeCtx, abort_table, status_arg};
-
     let fname = if query {
         "req.valid_query"
     } else {
         "req.valid_params"
     };
-    let ctx = lua
-        .app_data_ref::<ServeCtx>()
-        .map(|c| c.clone())
-        .ok_or_else(|| {
-            mlua::Error::runtime(format!("{fname} is only available under `lur serve`"))
-        })?;
+    let ctx = serve_ctx(lua, fname)?;
     let factory = ctx.factory.clone();
     let try_fn = ctx.try_fn.clone();
     let source: mlua::Table = req.raw_get(if query { "query" } else { "params" })?;
@@ -1064,19 +1246,7 @@ fn valid_fn(lua: &Lua, req: &mlua::Table, query: bool) -> mlua::Result<Value> {
         let source = source.clone();
         let query_all = query_all.clone();
         async move {
-            let fail_status = match opts {
-                Value::Nil => 400,
-                Value::Table(o) => match o.get::<Value>("fail_status")? {
-                    Value::Nil => 400,
-                    v => status_arg(&v, fname, "opts.fail_status")?,
-                },
-                other => {
-                    return Err(mlua::Error::runtime(format!(
-                        "{fname}: argument #2 must be table, got {}",
-                        other.type_name()
-                    )));
-                }
-            };
+            let fail_status = fail_status_opt(opts, fname)?;
 
             // Lists read every value (`query_all`); other fields the last one.
             let input = match &query_all {
@@ -1088,12 +1258,12 @@ fn valid_fn(lua: &Lua, req: &mlua::Table, query: bool) -> mlua::Result<Value> {
             if ok {
                 return Ok((true, value));
             }
-            let issues = match &value {
-                Value::Table(e) => e.get::<Value>("issues")?,
-                _ => Value::Nil,
+            let abort = Abort {
+                status: fail_status,
+                message: "validation failed",
+                data: issues_of(&value)?,
             };
-            let err = abort_table(&lua, &ctx, fail_status, "validation failed", issues)?;
-            Ok((false, Value::Table(err)))
+            aborted(&lua, &ctx, abort)
         }
     })?;
     // Fresh `error(tbl, 0)` wrapper so `pcall` sees the table.
@@ -1204,6 +1374,90 @@ fn form_pairs(
     Ok(parse_query(&String::from_utf8_lossy(&st.body)))
 }
 
+/// What `req.valid_body` reads its body from.
+#[derive(Clone)]
+struct BodyReq {
+    state: Arc<Mutex<BodyStream>>,
+    headers: mlua::Table,
+    decode: Function,
+}
+
+/// The body as `lur.validate.try` input, or the abort that rejects it.
+enum BodyInput {
+    /// `empty_json`: an empty JSON body, which only a `nil`-taking schema accepts.
+    Ready {
+        input: Value,
+        empty_json: bool,
+    },
+    Rejected(Abort<'static>),
+}
+
+impl BodyReq {
+    /// Synchronous on purpose: the body lock must not be held across an await.
+    fn read(&self, lua: &Lua, schema: &Value) -> mlua::Result<BodyInput> {
+        let st = self.state.lock().expect("body stream mutex poisoned");
+        if st.streamed {
+            return Err(mlua::Error::runtime(
+                "req.valid_body is unavailable after req.read(n) consumed part of the body",
+            ));
+        }
+        let mt = media_type(&self.headers)?;
+        match mt.as_deref() {
+            Some(mt) if is_json_type(mt) => json_input(lua, &self.decode, &st.body),
+            Some(FORM_TYPE) => form_input(lua, &st.body, schema),
+            other => unsupported_input(lua, other),
+        }
+    }
+}
+
+fn json_input(lua: &Lua, decode: &Function, body: &[u8]) -> mlua::Result<BodyInput> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(BodyInput::Ready {
+            input: Value::Nil,
+            empty_json: true,
+        });
+    }
+    let raw = lua.create_string(body)?;
+    match decode.call::<Value>(raw) {
+        Ok(input) => Ok(BodyInput::Ready {
+            input,
+            empty_json: false,
+        }),
+        Err(mlua::Error::MemoryError(m)) => Err(mlua::Error::MemoryError(m)),
+        Err(_) => Ok(BodyInput::Rejected(Abort {
+            status: 400,
+            message: "invalid JSON body",
+            data: Value::Nil,
+        })),
+    }
+}
+
+fn form_input(lua: &Lua, body: &[u8], schema: &Value) -> mlua::Result<BodyInput> {
+    let pairs = parse_query(&String::from_utf8_lossy(body));
+    let source = last_table(lua, &pairs)?;
+    let input = feed_lists(lua, source, schema, || all_table(lua, &pairs))?;
+    Ok(BodyInput::Ready {
+        input: Value::Table(input),
+        empty_json: false,
+    })
+}
+
+fn unsupported_input(lua: &Lua, media_type: Option<&str>) -> mlua::Result<BodyInput> {
+    let data = match media_type {
+        Some(mt) => {
+            let data = lua.create_table()?;
+            data.set("content_type", mt)?;
+            Value::Table(data)
+        }
+        None => Value::Nil,
+    };
+    Ok(BodyInput::Rejected(Abort {
+        status: 415,
+        message: "unsupported content type",
+        data,
+    }))
+}
+
 /// `req.valid_body(schema, opts?)`: decode the body by `Content-Type` (JSON or
 /// urlencoded), then `lur.validate.try`; failures abort like `req.valid_query`.
 fn valid_body_fn(
@@ -1211,97 +1465,31 @@ fn valid_body_fn(
     state: &Arc<Mutex<BodyStream>>,
     headers: &mlua::Table,
 ) -> mlua::Result<Value> {
-    use crate::capabilities::serve::{ServeCtx, abort_table, status_arg};
     const F: &str = "req.valid_body";
 
-    let ctx = lua
-        .app_data_ref::<ServeCtx>()
-        .map(|c| c.clone())
-        .ok_or_else(|| mlua::Error::runtime(format!("{F} is only available under `lur serve`")))?;
+    let ctx = serve_ctx(lua, F)?;
     let factory = ctx.factory.clone();
     let try_fn = ctx.try_fn.clone();
-    let decode: mlua::Function = lua
+    let decode: Function = lua
         .globals()
         .get::<mlua::Table>("lur")?
         .get::<mlua::Table>("json")?
         .get("decode")?;
-    let state = Arc::clone(state);
-    let headers = headers.clone();
+    let body = BodyReq {
+        state: Arc::clone(state),
+        headers: headers.clone(),
+        decode,
+    };
 
     let inner = lua.create_async_function(move |lua, (schema, opts): (Value, Value)| {
         let ctx = ctx.clone();
         let try_fn = try_fn.clone();
-        let decode = decode.clone();
-        let state = Arc::clone(&state);
-        let headers = headers.clone();
+        let body = body.clone();
         async move {
-            let fail_status = match opts {
-                Value::Nil => 400,
-                Value::Table(o) => match o.get::<Value>("fail_status")? {
-                    Value::Nil => 400,
-                    v => status_arg(&v, F, "opts.fail_status")?,
-                },
-                other => {
-                    return Err(mlua::Error::runtime(format!(
-                        "{F}: argument #2 must be table, got {}",
-                        other.type_name()
-                    )));
-                }
-            };
-
-            // Everything before the await is synchronous: the lock must not
-            // be held across it.
-            let (input, empty_json) = {
-                let st = state.lock().expect("body stream mutex poisoned");
-                if st.streamed {
-                    return Err(mlua::Error::runtime(
-                        "req.valid_body is unavailable after req.read(n) consumed part of the body",
-                    ));
-                }
-                let mt = media_type(&headers)?;
-                match mt.as_deref() {
-                    Some(mt) if is_json_type(mt) => {
-                        if st.body.iter().all(u8::is_ascii_whitespace) {
-                            (Value::Nil, true)
-                        } else {
-                            let raw = lua.create_string(&st.body)?;
-                            match decode.call::<Value>(raw) {
-                                Ok(v) => (v, false),
-                                Err(mlua::Error::MemoryError(m)) => {
-                                    return Err(mlua::Error::MemoryError(m));
-                                }
-                                Err(_) => {
-                                    let err = abort_table(
-                                        &lua,
-                                        &ctx,
-                                        400,
-                                        "invalid JSON body",
-                                        Value::Nil,
-                                    )?;
-                                    return Ok((false, Value::Table(err)));
-                                }
-                            }
-                        }
-                    }
-                    Some(FORM_TYPE) => {
-                        let pairs = parse_query(&String::from_utf8_lossy(&st.body));
-                        let source = last_table(&lua, &pairs)?;
-                        let input = feed_lists(&lua, source, &schema, || all_table(&lua, &pairs))?;
-                        (Value::Table(input), false)
-                    }
-                    _ => {
-                        let data = match &mt {
-                            Some(mt) => {
-                                let data = lua.create_table()?;
-                                data.set("content_type", mt.as_str())?;
-                                Value::Table(data)
-                            }
-                            None => Value::Nil,
-                        };
-                        let err = abort_table(&lua, &ctx, 415, "unsupported content type", data)?;
-                        return Ok((false, Value::Table(err)));
-                    }
-                }
+            let fail_status = fail_status_opt(opts, F)?;
+            let (input, empty_json) = match body.read(&lua, &schema)? {
+                BodyInput::Ready { input, empty_json } => (input, empty_json),
+                BodyInput::Rejected(abort) => return aborted(&lua, &ctx, abort),
             };
 
             let (ok, value): (bool, Value) = try_fn.call_async((schema, input)).await?;
@@ -1309,17 +1497,20 @@ fn valid_body_fn(
                 return Ok((true, value));
             }
             // An empty JSON body is only acceptable to a schema taking `nil`.
-            let (status, message, issues) = if empty_json {
-                (400, "invalid JSON body", Value::Nil)
+            let abort = if empty_json {
+                Abort {
+                    status: 400,
+                    message: "invalid JSON body",
+                    data: Value::Nil,
+                }
             } else {
-                let issues = match &value {
-                    Value::Table(e) => e.get::<Value>("issues")?,
-                    _ => Value::Nil,
-                };
-                (fail_status, "validation failed", issues)
+                Abort {
+                    status: fail_status,
+                    message: "validation failed",
+                    data: issues_of(&value)?,
+                }
             };
-            let err = abort_table(&lua, &ctx, status, message, issues)?;
-            Ok((false, Value::Table(err)))
+            aborted(&lua, &ctx, abort)
         }
     })?;
     Ok(Value::Function(crate::capabilities::raise::raising(

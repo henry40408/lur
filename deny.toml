@@ -12,34 +12,19 @@ version = 2
 # `ignore` holds advisory IDs we've reviewed and consciously accept.
 yanked = "deny"
 ignore = [
-    # ammonia 4.2.1: only affects callers that allow `style` and use
-    # `filter_style_properties`; neither is used in sanitize.rs. Fix 4.2.3 is
-    # inside the 168h cooldown until 2026-10-18 06:27 UTC. Remove when upgraded.
-    # Tracked in https://github.com/henry40408/lur/issues/171
-    "RUSTSEC-2021-0157",
-    # ammonia 4.2.1: only affects callers that allow SVG `animateMotion`,
-    # `animateTransform` or `animateColor`; sanitize.rs uses the default
-    # `Builder`, which allows none of them. Same 4.2.3 fix, same cooldown
-    # until 2026-10-18 06:27 UTC. Remove when upgraded.
-    # Tracked in https://github.com/henry40408/lur/issues/174
-    "RUSTSEC-2021-0158",
-    # rustls 0.23.45: RUSTSEC-2026-0346 (`Debug` impls expose TLS secrets),
-    # -0347 (data buffered to the outer server after ECH rejection), -0348
-    # (Brotli certificate decompression allocates up to 1 GiB) and -0349
-    # (unauthenticated ServerHello downgrades later connections). All four
-    # were published 2026-10-14 and are fixed in 0.23.46, inside the 168h
-    # cooldown until 2026-10-21 09:54 UTC. Remove when upgraded.
-    # Tracked in https://github.com/henry40408/lur/issues/177
-    "RUSTSEC-2026-0346",
-    "RUSTSEC-2026-0347",
-    "RUSTSEC-2026-0348",
-    "RUSTSEC-2026-0349",
-    # ammonia 4.2.1: CSS `url("")` is matched case-sensitively, so `URL("")`
+    # ammonia 4.2.3: CSS `url("")` is matched case-sensitively, so `URL("")`
     # skips URL filtering. Only affects callers that allow `style` and use
     # `filter_style_properties`; neither is used in sanitize.rs. Fix 4.2.4 is
     # inside the 168h cooldown until 2026-10-24 03:45 UTC. Remove when upgraded.
     # Tracked in https://github.com/henry40408/lur/issues/185
     "RUSTSEC-2026-0373",
+    # ctutils 0.4.2 (transitive via digest -> sha2/hmac/sha1/md-5): `Choice`
+    # mask generation and `u128` comparisons may branch. lur never calls
+    # `ctutils::Choice`; `lur.crypto` compares with `subtle`. Fix 0.4.4+ is
+    # inside the 168h cooldown until 2026-10-30 04:02 UTC (0.4.5). Remove when
+    # upgraded.
+    # Tracked in https://github.com/henry40408/lur/issues/231
+    "RUSTSEC-2026-0385",
 ]
 
 [licenses]

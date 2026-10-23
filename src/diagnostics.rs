@@ -30,11 +30,7 @@ impl Palette {
 /// Render an mlua error's `Display` against `source`, rustc-style. `chunk_name`
 /// has no `@`. Falls back to `lur: <body>` when no snippet can be rendered.
 pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> String {
-    // Runtime errors carry a traceback; syntax errors don't.
-    let (head, traceback) = match displayed.split_once("\nstack traceback:") {
-        Some((h, t)) => (h, Some(t)),
-        None => (displayed, None),
-    };
+    let (head, traceback) = split_traceback(displayed);
 
     let body = head
         .strip_prefix("runtime error: ")
@@ -50,10 +46,55 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> S
         return format!("lur: {body}");
     };
 
-    let p = Palette::new(color);
-    let (g, e, r) = (p.gutter, p.err, p.reset);
-    use std::fmt::Write as _;
     let mut out = String::new();
+    format_snippet(
+        &mut out,
+        &Snippet {
+            chunk_name,
+            line,
+            col,
+            message: &message,
+            src_line,
+            palette: Palette::new(color),
+        },
+    );
+
+    if let Some(tb) = traceback {
+        push_traceback(&mut out, tb);
+    }
+
+    out.trim_end().to_string()
+}
+
+/// Runtime errors carry a traceback; syntax errors don't.
+fn split_traceback(displayed: &str) -> (&str, Option<&str>) {
+    match displayed.split_once("\nstack traceback:") {
+        Some((head, traceback)) => (head, Some(traceback)),
+        None => (displayed, None),
+    }
+}
+
+struct Snippet<'a> {
+    chunk_name: &'a str,
+    line: usize,
+    col: Option<usize>,
+    message: &'a str,
+    src_line: &'a str,
+    palette: Palette,
+}
+
+/// Append the `error:` header, `-->` location and the source line with its caret.
+fn format_snippet(out: &mut String, snippet: &Snippet) {
+    use std::fmt::Write as _;
+    let Snippet {
+        chunk_name,
+        line,
+        col,
+        message,
+        src_line,
+        palette,
+    } = snippet;
+    let (g, e, r) = (palette.gutter, palette.err, palette.reset);
     let _ = writeln!(out, "{e}error:{r} {message}");
     let pos = match col {
         Some(c) => format!("{chunk_name}:{line}:{c}"),
@@ -65,9 +106,15 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> S
     let pad = " ".repeat(gutter.len());
     let _ = writeln!(out, "{g}{pad} |{r}");
     let _ = writeln!(out, "{g}{gutter} |{r} {src_line}");
-    // Caret under `col`, else the first non-whitespace char. The pad keeps the
-    // prefix's tabs and turns every other char into one space, so the caret
-    // lines up at the terminal's tab stops and past multibyte chars.
+    let caret_pad = caret_padding(src_line, *col);
+    let _ = writeln!(out, "{g}{pad} |{r} {caret_pad}{e}^{r}");
+}
+
+/// Whitespace that puts a caret under `col`, else under the first
+/// non-whitespace char. It keeps the prefix's tabs and turns every other char
+/// into one space, so the caret lines up at the terminal's tab stops and past
+/// multibyte chars.
+fn caret_padding(src_line: &str, col: Option<usize>) -> String {
     let prefix_end = match col {
         Some(c) => src_line
             .char_indices()
@@ -75,28 +122,28 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> S
             .map_or(src_line.len(), |(i, _)| i),
         None => src_line.len() - src_line.trim_start().len(),
     };
-    let caret_pad: String = src_line[..prefix_end]
+    src_line[..prefix_end]
         .chars()
         .map(|ch| if ch == '\t' { '\t' } else { ' ' })
+        .collect()
+}
+
+/// Append the traceback without blank lines or bare `[C]: in ?` frames, and
+/// nothing at all when no frame is left.
+fn push_traceback(out: &mut String, traceback: &str) {
+    let kept: Vec<&str> = traceback
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter(|l| l.trim() != "[C]: in ?")
         .collect();
-    let _ = writeln!(out, "{g}{pad} |{r} {caret_pad}{e}^{r}");
-
-    if let Some(tb) = traceback {
-        let kept: Vec<&str> = tb
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .filter(|l| l.trim() != "[C]: in ?")
-            .collect();
-        if !kept.is_empty() {
-            out.push_str("stack traceback:\n");
-            for l in kept {
-                out.push_str(l);
-                out.push('\n');
-            }
-        }
+    if kept.is_empty() {
+        return;
     }
-
-    out.trim_end().to_string()
+    out.push_str("stack traceback:\n");
+    for l in kept {
+        out.push_str(l);
+        out.push('\n');
+    }
 }
 
 /// Parse `<chunk_name>:<line>[:<col>]: <message>`, anchored on `chunk_name` so

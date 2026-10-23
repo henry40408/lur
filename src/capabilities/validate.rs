@@ -278,71 +278,44 @@ fn looks_like_position(s: &str) -> bool {
     }
 }
 
-fn check<'a>(
-    cx: &'a mut Ctx<'_>,
-    node: &'a Node,
-    value: Value,
+/// Where a value sits: its path for messages and its nesting depth.
+struct At {
     path: String,
     depth: usize,
-) -> Checked<'a> {
+}
+
+fn check<'a>(cx: &'a mut Ctx<'_>, node: &'a Node, value: Value, at: At) -> Checked<'a> {
     Box::pin(async move {
+        let At { path, depth } = at;
         if depth > MAX_DEPTH {
             cx.fail(&path, "is nested too deeply");
             return Ok(None);
         }
         match node {
-            Node::Func(f) => match f.call_async::<Value>(value).await {
-                Ok(v) => Ok(Some(v)),
-                Err(e) => match validator_message(&e) {
-                    Ok(message) => {
-                        cx.fail(&path, message);
-                        Ok(None)
-                    }
-                    Err(()) => Err(e),
-                },
-            },
+            Node::Func(f) => check_func(cx, f, value, &path).await,
             Node::Optional(inner) => {
-                // `optional` only waives "required"; a `default` still fills.
-                let skip = (inner.is_missing(&value) && !inner.has_default())
-                    || (value.is_nil() && matches!(**inner, Node::Func(_)));
-                if skip {
-                    Ok(Some(Value::Nil))
-                } else {
-                    check(cx, inner, value, path, depth).await
+                if optional_skips(inner, &value) {
+                    return Ok(Some(Value::Nil));
                 }
+                check(cx, inner, value, At { path, depth }).await
             }
             Node::Str {
                 pattern,
                 min_len,
                 max_len,
                 default,
-            } => match value {
-                Value::Nil => match default {
-                    Some(d) => Ok(Some(Value::String(d.clone()))),
-                    None => Ok(required(cx, &path)),
-                },
-                Value::String(s) => {
-                    let ok = check_str(cx, &s, pattern.as_ref(), *min_len, *max_len, &path)?;
-                    Ok(ok.then_some(Value::String(s)))
-                }
-                _ => {
-                    cx.fail(&path, "must be a string");
-                    Ok(None)
-                }
-            },
+            } => {
+                let rule = StrRule::new(pattern.as_ref(), *min_len, *max_len, default.as_ref());
+                check_str_node(cx, &rule, value, &path)
+            }
             Node::Int {
                 min,
                 max,
                 default,
                 clamp,
             } => {
-                if node.is_missing(&value) {
-                    return Ok(match default {
-                        Some(d) => Some(Value::Number(*d as f64)),
-                        None => required(cx, &path),
-                    });
-                }
-                Ok(check_int(cx, &value, *min, *max, *clamp, &path))
+                let limits = Limits::new(*min, *max, *default, *clamp);
+                Ok(check_int(cx, &value, limits, &path))
             }
             Node::Number {
                 min,
@@ -350,56 +323,22 @@ fn check<'a>(
                 default,
                 clamp,
             } => {
-                if node.is_missing(&value) {
-                    return Ok(match default {
-                        Some(d) => Some(Value::Number(*d)),
-                        None => required(cx, &path),
-                    });
-                }
-                Ok(check_number(cx, &value, *min, *max, *clamp, &path))
+                let limits = Limits::new(*min, *max, *default, *clamp);
+                Ok(check_number(cx, &value, limits, &path))
             }
-            Node::Bool { default } => {
-                if node.is_missing(&value) {
-                    return Ok(match default {
-                        Some(d) => Some(Value::Boolean(*d)),
-                        None => required(cx, &path),
-                    });
-                }
-                Ok(match &value {
-                    Value::Boolean(_) => Some(value),
-                    Value::String(s) if &*s.as_bytes() == b"true" => Some(Value::Boolean(true)),
-                    Value::String(s) if &*s.as_bytes() == b"false" => Some(Value::Boolean(false)),
-                    other => {
-                        let got = describe(other);
-                        cx.fail(&path, format!("must be a boolean{got}"));
-                        None
-                    }
-                })
-            }
-            Node::OneOf(options) => {
-                if value.is_nil() {
-                    return Ok(required(cx, &path));
-                }
-                let hit = options.iter().any(|lit| match (lit, &value) {
-                    (Lit::Str(a), Value::String(b)) => a.as_slice() == &*b.as_bytes(),
-                    (Lit::Bool(a), Value::Boolean(b)) => a == b,
-                    (Lit::Num(a), v) => lua_number(v) == Some(*a),
-                    _ => false,
-                });
-                if hit {
-                    Ok(Some(value))
-                } else {
-                    cx.fail(&path, format!("must be one of: {}", list_options(options)));
-                    Ok(None)
-                }
-            }
+            Node::Bool { default } => Ok(check_bool(cx, *default, value, &path)),
+            Node::OneOf(options) => Ok(check_one_of(cx, options, value, &path)),
             Node::List {
                 item,
                 min_items,
                 max_items,
-            } => check_list(cx, item, *min_items, *max_items, value, path, depth).await,
+            } => {
+                let rule = ListRule::new(item, *min_items, *max_items);
+                check_list(cx, &rule, value, At { path, depth }).await
+            }
             Node::Object { fields, strict } => {
-                check_object(cx, fields, *strict, value, path, depth).await
+                let rule = ObjectRule::new(fields, *strict);
+                check_object(cx, &rule, value, At { path, depth }).await
             }
         }
     })
@@ -421,8 +360,105 @@ fn absent_if_null(node: &Node, value: Value) -> Value {
     }
 }
 
+/// `optional` only waives "required"; a `default` still fills.
+fn optional_skips(inner: &Node, value: &Value) -> bool {
+    (inner.is_missing(value) && !inner.has_default())
+        || (value.is_nil() && matches!(inner, Node::Func(_)))
+}
+
 fn required(cx: &mut Ctx<'_>, path: &str) -> Option<Value> {
     cx.fail(path, "is required");
+    None
+}
+
+/// `nil` (and `""` for scalars parsed from text) counts as not provided.
+fn is_blank(value: &Value) -> bool {
+    match value {
+        Value::Nil => true,
+        Value::String(s) => s.as_bytes().is_empty(),
+        _ => false,
+    }
+}
+
+/// The node's `default` for a missing value, or an "is required" issue.
+fn default_or_required(cx: &mut Ctx<'_>, default: Option<Value>, path: &str) -> Option<Value> {
+    match default {
+        Some(d) => Some(d),
+        None => required(cx, path),
+    }
+}
+
+async fn check_func(
+    cx: &mut Ctx<'_>,
+    f: &Function,
+    value: Value,
+    path: &str,
+) -> mlua::Result<Option<Value>> {
+    match f.call_async::<Value>(value).await {
+        Ok(v) => Ok(Some(v)),
+        Err(e) => match validator_message(&e) {
+            Ok(message) => {
+                cx.fail(path, message);
+                Ok(None)
+            }
+            Err(()) => Err(e),
+        },
+    }
+}
+
+fn check_str_node(
+    cx: &mut Ctx<'_>,
+    rule: &StrRule<'_>,
+    value: Value,
+    path: &str,
+) -> mlua::Result<Option<Value>> {
+    match value {
+        Value::Nil => Ok(default_or_required(
+            cx,
+            rule.default.map(|d| Value::String(d.clone())),
+            path,
+        )),
+        Value::String(s) => {
+            let ok = check_str(cx, &s, rule, path)?;
+            Ok(ok.then_some(Value::String(s)))
+        }
+        _ => {
+            cx.fail(path, "must be a string");
+            Ok(None)
+        }
+    }
+}
+
+fn check_bool(cx: &mut Ctx<'_>, default: Option<bool>, value: Value, path: &str) -> Option<Value> {
+    if is_blank(&value) {
+        return default_or_required(cx, default.map(Value::Boolean), path);
+    }
+    match &value {
+        Value::Boolean(_) => Some(value),
+        Value::String(s) if &*s.as_bytes() == b"true" => Some(Value::Boolean(true)),
+        Value::String(s) if &*s.as_bytes() == b"false" => Some(Value::Boolean(false)),
+        other => {
+            let got = describe(other);
+            cx.fail(path, format!("must be a boolean{got}"));
+            None
+        }
+    }
+}
+
+fn check_one_of(cx: &mut Ctx<'_>, options: &[Lit], value: Value, path: &str) -> Option<Value> {
+    if value.is_nil() {
+        return required(cx, path);
+    }
+    let hit = options.iter().any(|lit| match (lit, &value) {
+        (Lit::Str(a), Value::String(b)) => a.as_slice() == &*b.as_bytes(),
+        (Lit::Bool(a), Value::Boolean(b)) => a == b,
+        (Lit::Num(a), v) => lua_number(v) == Some(*a),
+        _ => false,
+    });
+    if hit {
+        return Some(value);
+    }
+    cx.fail(path, format!("must be one of: {}", list_options(options)));
     None
 }
 
@@ -453,14 +489,42 @@ fn list_options(options: &[Lit]) -> String {
     out
 }
 
+/// Constraints of a `str` node, borrowed from it.
+struct StrRule<'a> {
+    pattern: Option<&'a mlua::LuaString>,
+    min_len: Option<usize>,
+    max_len: Option<usize>,
+    default: Option<&'a mlua::LuaString>,
+}
+
+impl<'a> StrRule<'a> {
+    fn new(
+        pattern: Option<&'a mlua::LuaString>,
+        min_len: Option<usize>,
+        max_len: Option<usize>,
+        default: Option<&'a mlua::LuaString>,
+    ) -> Self {
+        Self {
+            pattern,
+            min_len,
+            max_len,
+            default,
+        }
+    }
+}
+
 fn check_str(
     cx: &mut Ctx<'_>,
     s: &mlua::LuaString,
-    pattern: Option<&mlua::LuaString>,
-    min_len: Option<usize>,
-    max_len: Option<usize>,
+    rule: &StrRule<'_>,
     path: &str,
 ) -> mlua::Result<bool> {
+    let StrRule {
+        pattern,
+        min_len,
+        max_len,
+        ..
+    } = *rule;
     let mut ok = true;
     if min_len.is_some() || max_len.is_some() {
         let len = String::from_utf8_lossy(&s.as_bytes()).chars().count();
@@ -487,39 +551,70 @@ fn check_str(
     Ok(ok)
 }
 
-fn check_int(
-    cx: &mut Ctx<'_>,
-    value: &Value,
-    min: Option<i64>,
-    max: Option<i64>,
+/// Bounds of an `int` or `number` node; `clamp` pulls an out-of-range value
+/// to the bound instead of failing.
+#[derive(Clone, Copy)]
+struct Limits<T> {
+    min: Option<T>,
+    max: Option<T>,
+    default: Option<T>,
     clamp: bool,
-    path: &str,
-) -> Option<Value> {
-    let n: i64 = match value {
-        Value::String(s) => match parse_int_str(&s.as_bytes()).map(str::parse::<i64>) {
-            Some(Ok(n)) if n.abs() <= MAX_SAFE_INT => n,
+}
+
+impl<T> Limits<T> {
+    fn new(min: Option<T>, max: Option<T>, default: Option<T>, clamp: bool) -> Self {
+        Self {
+            min,
+            max,
+            default,
+            clamp,
+        }
+    }
+}
+
+fn check_int(cx: &mut Ctx<'_>, value: &Value, limits: Limits<i64>, path: &str) -> Option<Value> {
+    if is_blank(value) {
+        return default_or_required(cx, limits.default.map(|d| Value::Number(d as f64)), path);
+    }
+    let n = parse_int_value(cx, value, path)?;
+    let n = apply_bounds(cx, n, limits, path)?;
+    Some(Value::Number(n as f64))
+}
+
+/// Reads an integer out of a string or number, recording a failure otherwise.
+fn parse_int_value(cx: &mut Ctx<'_>, value: &Value, path: &str) -> Option<i64> {
+    if let Value::String(s) = value {
+        return match parse_int_str(&s.as_bytes()).map(str::parse::<i64>) {
+            Some(Ok(n)) if n.abs() <= MAX_SAFE_INT => Some(n),
             Some(_) => {
                 cx.fail(path, "is out of range (must be within +/-2^53)");
-                return None;
+                None
             }
             None => {
                 cx.fail(path, format!("must be an integer{}", describe(value)));
-                return None;
+                None
             }
-        },
-        v => match lua_number(v) {
-            Some(f) if f.fract() == 0.0 && f.abs() <= MAX_SAFE_INT as f64 => f as i64,
-            Some(f) if f.fract() == 0.0 => {
-                cx.fail(path, "is out of range (must be within +/-2^53)");
-                return None;
-            }
-            _ => {
-                cx.fail(path, "must be an integer");
-                return None;
-            }
-        },
-    };
-    let mut n = n;
+        };
+    }
+    match lua_number(value) {
+        Some(f) if f.fract() == 0.0 && f.abs() <= MAX_SAFE_INT as f64 => Some(f as i64),
+        Some(f) if f.fract() == 0.0 => {
+            cx.fail(path, "is out of range (must be within +/-2^53)");
+            None
+        }
+        _ => {
+            cx.fail(path, "must be an integer");
+            None
+        }
+    }
+}
+
+/// Enforces `min` then `max`; an out-of-range value is clamped or rejected
+/// depending on `clamp`.
+fn apply_bounds(cx: &mut Ctx<'_>, mut n: i64, limits: Limits<i64>, path: &str) -> Option<i64> {
+    let Limits {
+        min, max, clamp, ..
+    } = limits;
     if let Some(lo) = min
         && n < lo
     {
@@ -540,17 +635,19 @@ fn check_int(
             return None;
         }
     }
-    Some(Value::Number(n as f64))
+    Some(n)
 }
 
-fn check_number(
-    cx: &mut Ctx<'_>,
-    value: &Value,
-    min: Option<f64>,
-    max: Option<f64>,
-    clamp: bool,
-    path: &str,
-) -> Option<Value> {
+fn check_number(cx: &mut Ctx<'_>, value: &Value, limits: Limits<f64>, path: &str) -> Option<Value> {
+    let Limits {
+        min,
+        max,
+        default,
+        clamp,
+    } = limits;
+    if is_blank(value) {
+        return default_or_required(cx, default.map(Value::Number), path);
+    }
     let parsed = match value {
         Value::String(s) => parse_float_str(&s.as_bytes()),
         v => lua_number(v).filter(|n| n.is_finite()),
@@ -602,36 +699,69 @@ fn sequence(t: &Table) -> mlua::Result<Option<Vec<Value>>> {
         .map(Some)
 }
 
-async fn check_list(
-    cx: &mut Ctx<'_>,
-    item: &Node,
+/// Constraints of a `list` node, borrowed from it.
+struct ListRule<'a> {
+    item: &'a Node,
     min_items: Option<usize>,
     max_items: Option<usize>,
-    value: Value,
-    path: String,
-    depth: usize,
-) -> mlua::Result<Option<Value>> {
-    let items = match &value {
-        Value::Nil => return Ok(required(cx, &path)),
+}
+
+impl<'a> ListRule<'a> {
+    fn new(item: &'a Node, min_items: Option<usize>, max_items: Option<usize>) -> Self {
+        Self {
+            item,
+            min_items,
+            max_items,
+        }
+    }
+}
+
+/// The elements of a `list` value, or `None` after recording the shape or
+/// length failure.
+fn list_items(
+    cx: &mut Ctx<'_>,
+    rule: &ListRule<'_>,
+    value: &Value,
+    path: &str,
+) -> mlua::Result<Option<Vec<Value>>> {
+    let items = match value {
+        Value::Nil => {
+            cx.fail(path, "is required");
+            return Ok(None);
+        }
         Value::Table(t) => sequence(t)?,
         _ => None,
     };
     let Some(items) = items else {
-        cx.fail(&path, "must be a list");
+        cx.fail(path, "must be a list");
         return Ok(None);
     };
-    if let Some(min) = min_items
+    if let Some(min) = rule.min_items
         && items.len() < min
     {
-        cx.fail(&path, format!("must have at least {min} items"));
+        cx.fail(path, format!("must have at least {min} items"));
         return Ok(None);
     }
-    if let Some(max) = max_items
+    if let Some(max) = rule.max_items
         && items.len() > max
     {
-        cx.fail(&path, format!("must have at most {max} items"));
+        cx.fail(path, format!("must have at most {max} items"));
         return Ok(None);
     }
+    Ok(Some(items))
+}
+
+async fn check_list(
+    cx: &mut Ctx<'_>,
+    rule: &ListRule<'_>,
+    value: Value,
+    at: At,
+) -> mlua::Result<Option<Value>> {
+    let item = rule.item;
+    let At { path, depth } = at;
+    let Some(items) = list_items(cx, rule, &value, &path)? else {
+        return Ok(None);
+    };
     let out = cx.lua.create_table_with_capacity(items.len(), 0)?;
     let before = cx.issues.len();
     let mut n = 0;
@@ -639,7 +769,16 @@ async fn check_list(
         if cx.full() {
             break;
         }
-        if let Some(v) = check(cx, item, v, child_index(&path, i + 1), depth + 1).await?
+        if let Some(v) = check(
+            cx,
+            item,
+            v,
+            At {
+                path: child_index(&path, i + 1),
+                depth: depth + 1,
+            },
+        )
+        .await?
             && !v.is_nil()
         {
             n += 1;
@@ -649,21 +788,43 @@ async fn check_list(
     Ok((cx.issues.len() == before && !cx.truncated).then_some(Value::Table(out)))
 }
 
+/// Constraints of an `object` node, borrowed from it.
+struct ObjectRule<'a> {
+    fields: &'a [(String, Arc<Node>)],
+    strict: bool,
+}
+
+impl<'a> ObjectRule<'a> {
+    fn new(fields: &'a [(String, Arc<Node>)], strict: bool) -> Self {
+        Self { fields, strict }
+    }
+}
+
+/// The table behind an `object` value, or `None` after recording the failure.
+fn object_table(cx: &mut Ctx<'_>, value: Value, path: &str) -> Option<Table> {
+    match value {
+        Value::Table(t) => Some(t),
+        Value::Nil => {
+            cx.fail(path, "is required");
+            None
+        }
+        _ => {
+            cx.fail(path, "must be an object");
+            None
+        }
+    }
+}
+
 async fn check_object(
     cx: &mut Ctx<'_>,
-    fields: &[(String, Arc<Node>)],
-    strict: bool,
+    rule: &ObjectRule<'_>,
     value: Value,
-    path: String,
-    depth: usize,
+    at: At,
 ) -> mlua::Result<Option<Value>> {
-    let t = match value {
-        Value::Nil => return Ok(required(cx, &path)),
-        Value::Table(t) => t,
-        _ => {
-            cx.fail(&path, "must be an object");
-            return Ok(None);
-        }
+    let ObjectRule { fields, strict } = *rule;
+    let At { path, depth } = at;
+    let Some(t) = object_table(cx, value, &path) else {
+        return Ok(None);
     };
     let out = cx.lua.create_table()?;
     let before = cx.issues.len();
@@ -673,35 +834,55 @@ async fn check_object(
         }
         let raw: Value = absent_if_null(node, t.raw_get(name.as_str())?);
         let at = child_key(&path, name);
-        if let Some(v) = check(cx, node, raw, at, depth + 1).await?
+        if let Some(v) = check(
+            cx,
+            node,
+            raw,
+            At {
+                path: at,
+                depth: depth + 1,
+            },
+        )
+        .await?
             && !v.is_nil()
         {
             out.raw_set(name.as_str(), v)?;
         }
     }
     if strict {
-        for pair in t.pairs::<Value, Value>() {
-            if cx.full() {
-                break;
-            }
-            let (key, _) = pair?;
-            let known = match &key {
-                Value::String(k) => fields.iter().any(|(n, _)| n.as_bytes() == &*k.as_bytes()),
-                _ => false,
-            };
-            if known {
-                continue;
-            }
-            let at = match &key {
-                Value::String(k) => child_key(&path, &String::from_utf8_lossy(&k.as_bytes())),
-                Value::Integer(i) => format!("{path}[{i}]"),
-                Value::Number(n) => format!("{path}[{}]", fmt_num(*n)),
-                other => format!("{path}[<{}>]", tname(other)),
-            };
-            cx.fail(&at, "is not a known key");
-        }
+        reject_unknown_keys(cx, fields, &t, &path)?;
     }
     Ok((cx.issues.len() == before && !cx.truncated).then_some(Value::Table(out)))
+}
+
+/// Fail every key of `t` that is not a field name.
+fn reject_unknown_keys(
+    cx: &mut Ctx<'_>,
+    fields: &[(String, Arc<Node>)],
+    t: &Table,
+    path: &str,
+) -> mlua::Result<()> {
+    for pair in t.pairs::<Value, Value>() {
+        if cx.full() {
+            break;
+        }
+        let (key, _) = pair?;
+        let known = match &key {
+            Value::String(k) => fields.iter().any(|(n, _)| n.as_bytes() == &*k.as_bytes()),
+            _ => false,
+        };
+        if known {
+            continue;
+        }
+        let at = match &key {
+            Value::String(k) => child_key(path, &String::from_utf8_lossy(&k.as_bytes())),
+            Value::Integer(i) => format!("{path}[{i}]"),
+            Value::Number(n) => format!("{path}[{}]", fmt_num(*n)),
+            other => format!("{path}[<{}>]", tname(other)),
+        };
+        cx.fail(&at, "is not a known key");
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- constructors
@@ -839,222 +1020,210 @@ fn range_check<T: PartialOrd + std::fmt::Display>(
 
 fn install_constructors(lua: &Lua, v: &Table) -> Result<(), RunError> {
     let init = RunError::Init;
-
-    v.set(
-        "str",
-        lua.create_function(|lua, opts: Value| {
-            const F: &str = "lur.validate.str";
-            let t = opts_of(opts, F, 1, &["pattern", "min_len", "max_len", "default"])?;
-            let min_len = opt_count(t.as_ref(), F, "min_len")?;
-            let max_len = opt_count(t.as_ref(), F, "max_len")?;
-            range_check(F, ("min_len", min_len), ("max_len", max_len))?;
-            let pattern = opt_string(t.as_ref(), F, "pattern")?;
-            if let Some(p) = &pattern {
-                // Reject malformed patterns up front, with string.find's own message.
-                let find: Function = lua.globals().get::<Table>("string")?.get("find")?;
-                if let Err(e) = find.call::<Value>((lua.create_string("")?, p.clone())) {
-                    let msg = validator_message(&e).unwrap_or_else(|()| e.to_string());
-                    return Err(Error::runtime(format!(
-                        "{F}: opts.pattern is not a valid Lua pattern: {msg}"
-                    )));
-                }
-            }
-            let default = opt_string(t.as_ref(), F, "default")?;
-            schema(
-                lua,
-                Node::Str {
-                    pattern,
-                    min_len,
-                    max_len,
-                    default,
-                },
-                F,
-            )
-        })
-        .map_err(init)?,
-    )
-    .map_err(RunError::Init)?;
-
-    v.set(
-        "int",
-        lua.create_function(|lua, opts: Value| {
-            const F: &str = "lur.validate.int";
-            let t = opts_of(opts, F, 1, &["min", "max", "default", "clamp"])?;
-            let min = opt_i64(t.as_ref(), F, "min")?;
-            let max = opt_i64(t.as_ref(), F, "max")?;
-            range_check(F, ("min", min), ("max", max))?;
-            schema(
-                lua,
-                Node::Int {
-                    min,
-                    max,
-                    default: opt_i64(t.as_ref(), F, "default")?,
-                    clamp: opt_bool(t.as_ref(), F, "clamp")?.unwrap_or(false),
-                },
-                F,
-            )
-        })
-        .map_err(RunError::Init)?,
-    )
-    .map_err(RunError::Init)?;
-
-    v.set(
-        "number",
-        lua.create_function(|lua, opts: Value| {
-            const F: &str = "lur.validate.number";
-            let t = opts_of(opts, F, 1, &["min", "max", "default", "clamp"])?;
-            let min = opt_f64(t.as_ref(), F, "min")?;
-            let max = opt_f64(t.as_ref(), F, "max")?;
-            range_check(F, ("min", min), ("max", max))?;
-            schema(
-                lua,
-                Node::Number {
-                    min,
-                    max,
-                    default: opt_f64(t.as_ref(), F, "default")?,
-                    clamp: opt_bool(t.as_ref(), F, "clamp")?.unwrap_or(false),
-                },
-                F,
-            )
-        })
-        .map_err(RunError::Init)?,
-    )
-    .map_err(RunError::Init)?;
-
-    v.set(
-        "bool",
-        lua.create_function(|lua, opts: Value| {
-            const F: &str = "lur.validate.bool";
-            let t = opts_of(opts, F, 1, &["default"])?;
-            schema(
-                lua,
-                Node::Bool {
-                    default: opt_bool(t.as_ref(), F, "default")?,
-                },
-                F,
-            )
-        })
-        .map_err(RunError::Init)?,
-    )
-    .map_err(RunError::Init)?;
-
-    v.set(
-        "one_of",
-        lua.create_function(|lua, values: Value| {
-            const F: &str = "lur.validate.one_of";
-            let Value::Table(t) = values else {
-                return Err(Error::runtime(format!(
-                    "{F}: argument #1 must be table, got {}",
-                    tname(&values)
-                )));
-            };
-            let items = sequence(&t)?.ok_or_else(|| {
-                Error::runtime(format!("{F}: argument #1 must be an array of values"))
-            })?;
-            if items.is_empty() {
-                return Err(Error::runtime(format!(
-                    "{F}: argument #1 must not be empty"
-                )));
-            }
-            let mut lits = Vec::with_capacity(items.len());
-            for item in items {
-                lits.push(match item {
-                    Value::String(s) => Lit::Str(s.as_bytes().to_vec()),
-                    Value::Boolean(b) => Lit::Bool(b),
-                    other => match lua_number(&other) {
-                        Some(n) if !n.is_nan() => Lit::Num(n),
-                        _ => {
-                            return Err(Error::runtime(format!(
-                                "{F}: values must be strings, numbers or booleans, got {}",
-                                tname(&other)
-                            )));
-                        }
-                    },
-                });
-            }
-            schema(lua, Node::OneOf(lits), F)
-        })
-        .map_err(RunError::Init)?,
-    )
-    .map_err(RunError::Init)?;
-
-    v.set(
-        "list",
-        lua.create_function(|lua, (item, opts): (Value, Value)| {
-            const F: &str = "lur.validate.list";
-            let item = to_node(item, F, "argument #1")?;
-            let t = opts_of(opts, F, 2, &["min_items", "max_items"])?;
-            let min_items = opt_count(t.as_ref(), F, "min_items")?;
-            let max_items = opt_count(t.as_ref(), F, "max_items")?;
-            range_check(F, ("min_items", min_items), ("max_items", max_items))?;
-            schema(
-                lua,
-                Node::List {
-                    item,
-                    min_items,
-                    max_items,
-                },
-                F,
-            )
-        })
-        .map_err(RunError::Init)?,
-    )
-    .map_err(RunError::Init)?;
-
-    v.set(
-        "object",
-        lua.create_function(|lua, (fields, opts): (Value, Value)| {
-            const F: &str = "lur.validate.object";
-            let Value::Table(t) = fields else {
-                return Err(Error::runtime(format!(
-                    "{F}: argument #1 must be table, got {}",
-                    tname(&fields)
-                )));
-            };
-            let o = opts_of(opts, F, 2, &["strict"])?;
-            let strict = opt_bool(o.as_ref(), F, "strict")?.unwrap_or(false);
-            let mut list = Vec::new();
-            for pair in t.pairs::<Value, Value>() {
-                let (k, v) = pair?;
-                let Value::String(k) = k else {
-                    return Err(Error::runtime(format!(
-                        "{F}: field names must be strings, got {}",
-                        tname(&k)
-                    )));
-                };
-                let name = k
-                    .to_str()
-                    .map_err(|_e| Error::runtime(format!("{F}: field names must be valid UTF-8")))?
-                    .to_owned();
-                let node = to_node(v, F, &format!("field '{name}'"))?;
-                list.push((name, node));
-            }
-            list.sort_by(|a, b| a.0.cmp(&b.0));
-            schema(
-                lua,
-                Node::Object {
-                    fields: list,
-                    strict,
-                },
-                F,
-            )
-        })
-        .map_err(RunError::Init)?,
-    )
-    .map_err(RunError::Init)?;
-
+    v.set("str", lua.create_function(str_schema).map_err(init)?)
+        .map_err(init)?;
+    v.set("int", lua.create_function(int_schema).map_err(init)?)
+        .map_err(init)?;
+    v.set("number", lua.create_function(number_schema).map_err(init)?)
+        .map_err(init)?;
+    v.set("bool", lua.create_function(bool_schema).map_err(init)?)
+        .map_err(init)?;
+    v.set("one_of", lua.create_function(one_of_schema).map_err(init)?)
+        .map_err(init)?;
+    v.set("list", lua.create_function(list_schema).map_err(init)?)
+        .map_err(init)?;
+    v.set("object", lua.create_function(object_schema).map_err(init)?)
+        .map_err(init)?;
     v.set(
         "optional",
-        lua.create_function(|lua, inner: Value| {
-            const F: &str = "lur.validate.optional";
-            let inner = to_node(inner, F, "argument #1")?;
-            schema(lua, Node::Optional(inner), F)
-        })
-        .map_err(RunError::Init)?,
+        lua.create_function(optional_schema).map_err(init)?,
     )
-    .map_err(RunError::Init)?;
+    .map_err(init)
+}
 
-    Ok(())
+fn str_schema(lua: &Lua, opts: Value) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.str";
+    let t = opts_of(opts, F, 1, &["pattern", "min_len", "max_len", "default"])?;
+    let min_len = opt_count(t.as_ref(), F, "min_len")?;
+    let max_len = opt_count(t.as_ref(), F, "max_len")?;
+    range_check(F, ("min_len", min_len), ("max_len", max_len))?;
+    let pattern = opt_string(t.as_ref(), F, "pattern")?;
+    if let Some(p) = &pattern {
+        check_lua_pattern(lua, p, F)?;
+    }
+    let default = opt_string(t.as_ref(), F, "default")?;
+    schema(
+        lua,
+        Node::Str {
+            pattern,
+            min_len,
+            max_len,
+            default,
+        },
+        F,
+    )
+}
+
+/// Reject malformed patterns up front, with string.find's own message.
+fn check_lua_pattern(lua: &Lua, pattern: &mlua::LuaString, fname: &str) -> mlua::Result<()> {
+    let find: Function = lua.globals().get::<Table>("string")?.get("find")?;
+    let Err(e) = find.call::<Value>((lua.create_string("")?, pattern.clone())) else {
+        return Ok(());
+    };
+    let msg = validator_message(&e).unwrap_or_else(|()| e.to_string());
+    Err(Error::runtime(format!(
+        "{fname}: opts.pattern is not a valid Lua pattern: {msg}"
+    )))
+}
+
+fn int_schema(lua: &Lua, opts: Value) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.int";
+    let t = opts_of(opts, F, 1, &["min", "max", "default", "clamp"])?;
+    let min = opt_i64(t.as_ref(), F, "min")?;
+    let max = opt_i64(t.as_ref(), F, "max")?;
+    range_check(F, ("min", min), ("max", max))?;
+    schema(
+        lua,
+        Node::Int {
+            min,
+            max,
+            default: opt_i64(t.as_ref(), F, "default")?,
+            clamp: opt_bool(t.as_ref(), F, "clamp")?.unwrap_or(false),
+        },
+        F,
+    )
+}
+
+fn number_schema(lua: &Lua, opts: Value) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.number";
+    let t = opts_of(opts, F, 1, &["min", "max", "default", "clamp"])?;
+    let min = opt_f64(t.as_ref(), F, "min")?;
+    let max = opt_f64(t.as_ref(), F, "max")?;
+    range_check(F, ("min", min), ("max", max))?;
+    schema(
+        lua,
+        Node::Number {
+            min,
+            max,
+            default: opt_f64(t.as_ref(), F, "default")?,
+            clamp: opt_bool(t.as_ref(), F, "clamp")?.unwrap_or(false),
+        },
+        F,
+    )
+}
+
+fn bool_schema(lua: &Lua, opts: Value) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.bool";
+    let t = opts_of(opts, F, 1, &["default"])?;
+    schema(
+        lua,
+        Node::Bool {
+            default: opt_bool(t.as_ref(), F, "default")?,
+        },
+        F,
+    )
+}
+
+fn one_of_schema(lua: &Lua, values: Value) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.one_of";
+    let Value::Table(t) = values else {
+        return Err(Error::runtime(format!(
+            "{F}: argument #1 must be table, got {}",
+            tname(&values)
+        )));
+    };
+    let items = sequence(&t)?
+        .ok_or_else(|| Error::runtime(format!("{F}: argument #1 must be an array of values")))?;
+    if items.is_empty() {
+        return Err(Error::runtime(format!(
+            "{F}: argument #1 must not be empty"
+        )));
+    }
+    let lits = items
+        .into_iter()
+        .map(|item| one_of_literal(item, F))
+        .collect::<mlua::Result<Vec<Lit>>>()?;
+    schema(lua, Node::OneOf(lits), F)
+}
+
+fn one_of_literal(item: Value, fname: &str) -> mlua::Result<Lit> {
+    match item {
+        Value::String(s) => Ok(Lit::Str(s.as_bytes().to_vec())),
+        Value::Boolean(b) => Ok(Lit::Bool(b)),
+        other => match lua_number(&other) {
+            Some(n) if !n.is_nan() => Ok(Lit::Num(n)),
+            _ => Err(Error::runtime(format!(
+                "{fname}: values must be strings, numbers or booleans, got {}",
+                tname(&other)
+            ))),
+        },
+    }
+}
+
+fn list_schema(lua: &Lua, (item, opts): (Value, Value)) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.list";
+    let item = to_node(item, F, "argument #1")?;
+    let t = opts_of(opts, F, 2, &["min_items", "max_items"])?;
+    let min_items = opt_count(t.as_ref(), F, "min_items")?;
+    let max_items = opt_count(t.as_ref(), F, "max_items")?;
+    range_check(F, ("min_items", min_items), ("max_items", max_items))?;
+    schema(
+        lua,
+        Node::List {
+            item,
+            min_items,
+            max_items,
+        },
+        F,
+    )
+}
+
+fn object_schema(lua: &Lua, (fields, opts): (Value, Value)) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.object";
+    let Value::Table(t) = fields else {
+        return Err(Error::runtime(format!(
+            "{F}: argument #1 must be table, got {}",
+            tname(&fields)
+        )));
+    };
+    let o = opts_of(opts, F, 2, &["strict"])?;
+    let strict = opt_bool(o.as_ref(), F, "strict")?.unwrap_or(false);
+    let mut list = object_fields(&t, F)?;
+    list.sort_by(|a, b| a.0.cmp(&b.0));
+    schema(
+        lua,
+        Node::Object {
+            fields: list,
+            strict,
+        },
+        F,
+    )
+}
+
+fn object_fields(fields: &Table, fname: &str) -> mlua::Result<Vec<(String, Arc<Node>)>> {
+    let mut list = Vec::new();
+    for pair in fields.clone().pairs::<Value, Value>() {
+        let (k, v) = pair?;
+        let Value::String(k) = k else {
+            return Err(Error::runtime(format!(
+                "{fname}: field names must be strings, got {}",
+                tname(&k)
+            )));
+        };
+        let name = k
+            .to_str()
+            .map_err(|_e| Error::runtime(format!("{fname}: field names must be valid UTF-8")))?
+            .to_owned();
+        let node = to_node(v, fname, &format!("field '{name}'"))?;
+        list.push((name, node));
+    }
+    Ok(list)
+}
+
+fn optional_schema(lua: &Lua, inner: Value) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.optional";
+    let inner = to_node(inner, F, "argument #1")?;
+    schema(lua, Node::Optional(inner), F)
 }
 
 // ---------------------------------------------------------------- entry points
@@ -1152,7 +1321,11 @@ pub fn install(lua: &Lua, lur: &Table, factory: &Function) -> Result<(), RunErro
                     truncated: false,
                 };
                 let value = absent_if_null(&node, value);
-                let out = check(&mut cx, &node, value, String::new(), 0).await?;
+                let root = At {
+                    path: String::new(),
+                    depth: 0,
+                };
+                let out = check(&mut cx, &node, value, root).await?;
                 match out {
                     Some(v) if cx.issues.is_empty() => Ok((true, v)),
                     _ => Ok((false, Value::Table(build_error(&lua, &meta, &cx)?))),
