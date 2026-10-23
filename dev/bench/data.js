@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792733778971,
+  "lastUpdate": 1792734162358,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -7889,6 +7889,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1202539,
             "range": "± 13087",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c7542e8581abe29daf720af58f16aebe76f0df59",
+          "message": "refactor(http): split install into Shared and per-function builders (#213)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-23T13:38:36+08:00",
+          "tree_id": "634ada0c241c8149e4e28413dc235bf29f03096f",
+          "url": "https://github.com/henry40408/lur/commit/c7542e8581abe29daf720af58f16aebe76f0df59"
+        },
+        "date": 1792734161448,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 366734,
+            "range": "± 3011",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5584,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 189113,
+            "range": "± 5359",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 19347160,
+            "range": "± 157561",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3300922,
+            "range": "± 17402",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1889490,
+            "range": "± 15373",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 2026993,
+            "range": "± 9285",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2218411,
+            "range": "± 40394",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1387145,
+            "range": "± 9474",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1533788,
+            "range": "± 23215",
             "unit": "ns/iter"
           }
         ]
