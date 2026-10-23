@@ -614,25 +614,47 @@ fn cacheable(raw: &RawResponse) -> bool {
     (200..300).contains(&raw.status) && !raw.headers.iter().any(|(k, _)| k == "set-cookie")
 }
 
-fn apply_opts(
+fn apply_opts(req: reqwest::RequestBuilder, opts: &Table) -> mlua::Result<reqwest::RequestBuilder> {
+    let req = apply_headers(req, opts)?;
+    let req = apply_query(req, opts)?;
+    let mut req = apply_body(req, opts)?;
+    if let Some(ms) = opts.get::<Option<u64>>("timeout")? {
+        req = req.timeout(Duration::from_millis(ms));
+    }
+    Ok(req)
+}
+
+fn apply_headers(
     mut req: reqwest::RequestBuilder,
     opts: &Table,
 ) -> mlua::Result<reqwest::RequestBuilder> {
-    if let Some(headers) = opts.get::<Option<Table>>("headers")? {
-        for pair in headers.pairs::<String, mlua::LuaString>() {
-            let (k, v) = pair?;
-            req = req.header(k.as_str(), v.as_bytes().as_ref());
-        }
+    let Some(headers) = opts.get::<Option<Table>>("headers")? else {
+        return Ok(req);
+    };
+    for pair in headers.pairs::<String, mlua::LuaString>() {
+        let (k, v) = pair?;
+        req = req.header(k.as_str(), v.as_bytes().as_ref());
     }
-    if let Some(query) = opts.get::<Option<Table>>("query")? {
-        let mut pairs = Vec::new();
-        for pair in query.pairs::<String, Value>() {
-            let (k, v) = pair?;
-            pairs.push((k, value_to_string(&v)?));
-        }
-        req = req.query(&pairs);
-    }
+    Ok(req)
+}
 
+fn apply_query(
+    req: reqwest::RequestBuilder,
+    opts: &Table,
+) -> mlua::Result<reqwest::RequestBuilder> {
+    let Some(query) = opts.get::<Option<Table>>("query")? else {
+        return Ok(req);
+    };
+    let mut pairs = Vec::new();
+    for pair in query.pairs::<String, Value>() {
+        let (k, v) = pair?;
+        pairs.push((k, value_to_string(&v)?));
+    }
+    Ok(req.query(&pairs))
+}
+
+/// Applies whichever of `opts.body`, `opts.json` or `opts.form` is given.
+fn apply_body(req: reqwest::RequestBuilder, opts: &Table) -> mlua::Result<reqwest::RequestBuilder> {
     let body = opts.get::<Option<mlua::LuaString>>("body")?;
     let json_val = opts.get::<Option<Value>>("json")?;
     let form = match opts.get::<Value>("form")? {
@@ -652,25 +674,25 @@ fn apply_opts(
         ));
     }
     if let Some(b) = body {
-        req = req.body(b.as_bytes().to_vec());
-    } else if let Some(v) = json_val {
+        return Ok(req.body(b.as_bytes().to_vec()));
+    }
+    if let Some(v) = json_val {
         let json = json::lua_to_json(&v)?;
         let bytes = serde_json::to_vec(&json)
             .map_err(|e| Error::runtime(format!("lur.http: encoding opts.json: {e}")))?;
-        req = req.header("content-type", "application/json").body(bytes);
-    } else if let Some(form) = form {
-        let encoded = encode_form(&form)?;
-        // Unlike `json`, an explicit Content-Type from the caller is kept.
-        if !has_content_type(opts)? {
-            req = req.header("content-type", "application/x-www-form-urlencoded");
-        }
-        req = req.body(encoded.into_bytes());
+        return Ok(req.header("content-type", "application/json").body(bytes));
     }
-
-    if let Some(ms) = opts.get::<Option<u64>>("timeout")? {
-        req = req.timeout(Duration::from_millis(ms));
-    }
-    Ok(req)
+    let Some(form) = form else {
+        return Ok(req);
+    };
+    let encoded = encode_form(&form)?;
+    // Unlike `json`, an explicit Content-Type from the caller is kept.
+    let req = if has_content_type(opts)? {
+        req
+    } else {
+        req.header("content-type", "application/x-www-form-urlencoded")
+    };
+    Ok(req.body(encoded.into_bytes()))
 }
 
 /// Whether `opts.headers` already names `Content-Type` (any case).
