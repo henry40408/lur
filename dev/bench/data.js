@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792740748149,
+  "lastUpdate": 1792741585202,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -8645,6 +8645,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1350349,
             "range": "± 104126",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bc583225a1ba326ea53cca8f0a902e200ffffd46",
+          "message": "refactor(io): split install_stdin into read and lines builders (#222)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-23T15:42:25+08:00",
+          "tree_id": "ac99882d9b2c105142beac5d9951346d0beb412e",
+          "url": "https://github.com/henry40408/lur/commit/bc583225a1ba326ea53cca8f0a902e200ffffd46"
+        },
+        "date": 1792741584478,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 352994,
+            "range": "± 2204",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5672,
+            "range": "± 97",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 392420,
+            "range": "± 21167",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 21748913,
+            "range": "± 107892",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3387931,
+            "range": "± 60647",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1935396,
+            "range": "± 33254",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 2122737,
+            "range": "± 24321",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2192669,
+            "range": "± 47675",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1658952,
+            "range": "± 39126",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1967289,
+            "range": "± 9533",
             "unit": "ns/iter"
           }
         ]
