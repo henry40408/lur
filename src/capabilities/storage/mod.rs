@@ -33,6 +33,23 @@ pub(crate) fn expiry_at(now: i64, ttl_ms: Option<i64>) -> Option<i64> {
     ttl_ms.map(|t| now.saturating_add(t))
 }
 
+/// Maps the `RETURNING` row of an incr upsert to the new count. The upsert's
+/// `WHERE` filters out non-integer live values, so no row means "not an integer".
+pub(crate) fn incr_result<R>(row: Option<R>, voice: &str) -> mlua::Result<i64>
+where
+    R: sqlx::Row,
+    usize: sqlx::ColumnIndex<R>,
+    i64: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+{
+    let Some(row) = row else {
+        return Err(Error::runtime(format!(
+            "{voice}: existing value is not an integer"
+        )));
+    };
+    row.try_get::<i64, usize>(0)
+        .map_err(|e| Error::runtime(format!("{voice}: {e}")))
+}
+
 /// Rate-limits the expired-row sweep that piggybacks on kv writes.
 #[derive(Clone, Default)]
 pub(crate) struct PurgeClock(Arc<AtomicI64>);

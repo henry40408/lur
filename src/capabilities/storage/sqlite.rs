@@ -15,7 +15,7 @@ use sqlx::sqlite::{
 };
 use sqlx::{Column, Row, Sqlite, TypeInfo, ValueRef};
 
-use super::{PurgeClock, Ttl, expiry_at, now_ms};
+use super::{PurgeClock, Ttl, expiry_at, incr_result, now_ms};
 use crate::capabilities::null;
 
 /// A dynamically-bound `SQLite` query.
@@ -505,16 +505,7 @@ impl SqliteBackend {
         })
         .await
         .map_err(|e| Error::runtime(format!("{voice}: {e}")))?;
-        let n = match row {
-            Some(r) => r
-                .try_get::<i64, usize>(0)
-                .map_err(|e| Error::runtime(format!("{voice}: {e}")))?,
-            None => {
-                return Err(Error::runtime(format!(
-                    "{voice}: existing value is not an integer"
-                )));
-            }
-        };
+        let n = incr_result(row, voice)?;
         self.maybe_purge().await;
         Ok(n)
     }
