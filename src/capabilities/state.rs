@@ -457,8 +457,21 @@ impl Inner {
             self.drop_dead(now);
             self.last_sweep = Some(now);
         }
+        let meta = self.write_meta(&key, w, now);
+        let size = key.len() + value.size() + ENTRY_OVERHEAD;
+        if limits.max_bytes != 0 && size > limits.max_bytes {
+            return Err(Full);
+        }
+        self.make_room(&key, size, limits, now)?;
+        self.insert_fresh(key, value, meta, size);
+        Ok(())
+    }
+
+    /// Expiry, stale window and evictability a write gives `key`, resolved
+    /// against the live entry it replaces.
+    fn write_meta(&mut self, key: &[u8], w: Write, now: Instant) -> WriteMeta {
         let (prev_expires, prev_evictable, prev_stale) =
-            self.live(&key, now).map_or((None, false, None), |e| {
+            self.live(key, now).map_or((None, false, None), |e| {
                 (e.expires, e.evictable, e.stale_for)
             });
         let (expires, inherited) = match w.expiry {
@@ -470,64 +483,90 @@ impl Inner {
                 None => (Some(add_ms(now, ms)), false),
             },
         };
-        let evictable = w.evictable.unwrap_or(prev_evictable);
         // A write that keeps the expiry keeps its stale window too.
         let stale_for = match (expires, w.stale_ms) {
             (Some(_), Some(ms)) => Some(Duration::from_millis(ms.cast_unsigned())),
             (Some(_), None) if inherited => prev_stale,
             _ => None,
         };
-        let size = key.len() + value.size() + ENTRY_OVERHEAD;
-        if limits.max_bytes != 0 && size > limits.max_bytes {
-            return Err(Full);
+        WriteMeta {
+            expires,
+            stale_for,
+            evictable: w.evictable.unwrap_or(prev_evictable),
         }
-        let over = |this: &Self| {
-            let (present, old) = this.map.get(&key).map_or((0, 0), |e| (1, e.size));
-            let entries = this.map.len() + 1 - present;
-            let bytes = this.bytes - old + size;
-            (limits.max_entries != 0 && entries > limits.max_entries)
-                || (limits.max_bytes != 0 && bytes > limits.max_bytes)
-        };
-        if over(self) {
+    }
+
+    /// Would writing `size` bytes under `key` break `limits`?
+    fn over(&self, key: &[u8], size: usize, limits: Limits) -> bool {
+        let (present, old) = self.map.get(key).map_or((0, 0), |e| (1, e.size));
+        let entries = self.map.len() + 1 - present;
+        let bytes = self.bytes - old + size;
+        !limits.allows(entries, bytes)
+    }
+
+    /// Make the write of `size` bytes under `key` fit, or fail changing nothing.
+    fn make_room(
+        &mut self,
+        key: &[u8],
+        size: usize,
+        limits: Limits,
+        now: Instant,
+    ) -> Result<(), Full> {
+        if self.over(key, size, limits) {
             // Expired entries are free to drop; only then evict live ones.
             self.drop_expired(now);
         }
-        // Evict into a scratch plan first so a write that cannot fit changes
-        // nothing: collect victims, and only apply them if the write then fits.
-        if over(self) {
-            let mut victims = Vec::new();
-            let (mut entries, mut bytes) = (self.map.len(), self.bytes);
-            if let Some(e) = self.map.get(&key) {
-                entries -= 1;
-                bytes -= e.size;
-            }
-            entries += 1;
-            bytes += size;
-            for (tick, k) in &self.order {
-                if (limits.max_entries == 0 || entries <= limits.max_entries)
-                    && (limits.max_bytes == 0 || bytes <= limits.max_bytes)
-                {
-                    break;
-                }
-                if k.as_slice() == key.as_slice() {
-                    continue;
-                }
-                let e = &self.map[k];
-                entries -= 1;
-                bytes -= e.size;
-                victims.push((*tick, k.clone()));
-            }
-            let fits = (limits.max_entries == 0 || entries <= limits.max_entries)
-                && (limits.max_bytes == 0 || bytes <= limits.max_bytes);
-            if !fits {
-                return Err(Full);
-            }
-            for (tick, victim) in victims {
-                self.order.remove(&tick);
-                self.remove(&victim);
-                self.evictions += 1;
-            }
+        if !self.over(key, size, limits) {
+            return Ok(());
         }
+        let victims = self.plan_evictions(key, size, limits).ok_or(Full)?;
+        for (tick, victim) in victims {
+            self.order.remove(&tick);
+            self.remove(&victim);
+            self.evictions += 1;
+        }
+        Ok(())
+    }
+
+    /// Evictable entries, least recently used first, whose removal lets the
+    /// write fit; `None` if even evicting all of them would not. Plans into a
+    /// scratch list so a write that cannot fit changes nothing.
+    fn plan_evictions(
+        &self,
+        key: &[u8],
+        size: usize,
+        limits: Limits,
+    ) -> Option<Vec<(u64, Vec<u8>)>> {
+        let mut victims = Vec::new();
+        let (mut entries, mut bytes) = (self.map.len(), self.bytes);
+        if let Some(e) = self.map.get(key) {
+            entries -= 1;
+            bytes -= e.size;
+        }
+        entries += 1;
+        bytes += size;
+        for (tick, k) in &self.order {
+            if limits.allows(entries, bytes) {
+                break;
+            }
+            if k.as_slice() == key {
+                continue;
+            }
+            let e = &self.map[k];
+            entries -= 1;
+            bytes -= e.size;
+            victims.push((*tick, k.clone()));
+        }
+        limits.allows(entries, bytes).then_some(victims)
+    }
+
+    /// Store `value` under `key` with a fresh version, replacing any old entry.
+    fn insert_fresh(&mut self, key: Vec<u8>, value: Prim, meta: WriteMeta, size: usize) {
+        let WriteMeta {
+            expires,
+            stale_for,
+            evictable,
+        } = meta;
         self.remove(&key);
         self.last_version += 1;
         let tick = if evictable {
@@ -553,8 +592,14 @@ impl Inner {
                 tick,
             },
         );
-        Ok(())
     }
+}
+
+/// What a write decides about the entry it stores.
+struct WriteMeta {
+    expires: Option<Instant>,
+    stale_for: Option<Duration>,
+    evictable: bool,
 }
 
 #[derive(Debug)]
@@ -570,6 +615,14 @@ enum IncrError {
 pub struct Limits {
     pub max_entries: usize,
     pub max_bytes: usize,
+}
+
+impl Limits {
+    /// Do `entries` and `bytes` respect the caps?
+    fn allows(self, entries: usize, bytes: usize) -> bool {
+        (self.max_entries == 0 || entries <= self.max_entries)
+            && (self.max_bytes == 0 || bytes <= self.max_bytes)
+    }
 }
 
 /// What a `fetch` lookup found.
