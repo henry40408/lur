@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792759844228,
+  "lastUpdate": 1792761303895,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -9149,6 +9149,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1462100,
             "range": "± 29057",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d2f6a2f5329554c3bae093778abd31150637c96e",
+          "message": "refactor(storage): share the kv_incr result mapping between backends (#242)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-23T21:10:29+08:00",
+          "tree_id": "a31b1b76db6c3199cd4f6f75a751a4513f22333b",
+          "url": "https://github.com/henry40408/lur/commit/d2f6a2f5329554c3bae093778abd31150637c96e"
+        },
+        "date": 1792761303125,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 178669,
+            "range": "± 10657",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3351,
+            "range": "± 91",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 265837,
+            "range": "± 22014",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 13989722,
+            "range": "± 479276",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 2075157,
+            "range": "± 37927",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1255650,
+            "range": "± 62216",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1303899,
+            "range": "± 28827",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2157405,
+            "range": "± 41777",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1105258,
+            "range": "± 74707",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1422790,
+            "range": "± 16953",
             "unit": "ns/iter"
           }
         ]
