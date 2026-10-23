@@ -256,18 +256,40 @@ fn default_config_path() -> Option<PathBuf> {
 /// Flags override the config's profile; allowlists are the union of config
 /// and flags.
 fn build_policy(flags: &CommonFlags, config: &Config) -> Result<Policy, String> {
-    let profile = if flags.allow_all || flags.loose {
-        Profile::Loose
-    } else if flags.strict {
-        Profile::Strict
-    } else {
-        config.default_profile.unwrap_or(Profile::Strict)
-    };
-
-    if profile == Profile::Loose {
+    if resolve_profile(flags, config) == Profile::Loose {
         return Policy::loose().map_err(|e| e.to_string());
     }
 
+    let allow = collect_allowlists(flags, config);
+    let mut policy = Policy::from_roots(&allow.read, &allow.write)
+        .map_err(|e| format!("invalid fs allowlist path: {e}"))?
+        .with_env(allow.env)
+        .with_net(allow.net);
+    if flags.allow_private {
+        policy = policy.allow_private();
+    }
+    Ok(policy)
+}
+
+/// Flags win over the config; with neither, the profile is strict.
+fn resolve_profile(flags: &CommonFlags, config: &Config) -> Profile {
+    if flags.allow_all || flags.loose {
+        return Profile::Loose;
+    }
+    if flags.strict {
+        return Profile::Strict;
+    }
+    config.default_profile.unwrap_or(Profile::Strict)
+}
+
+struct Allowlists {
+    read: Vec<PathBuf>,
+    write: Vec<PathBuf>,
+    env: Vec<String>,
+    net: Vec<String>,
+}
+
+fn collect_allowlists(flags: &CommonFlags, config: &Config) -> Allowlists {
     // Config fs paths may use `~`.
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let home = home.as_deref();
@@ -293,14 +315,12 @@ fn build_policy(flags: &CommonFlags, config: &Config) -> Result<Policy, String> 
     let mut net = config.net.clone();
     net.extend(flags.allow_net.iter().cloned());
 
-    let mut policy = Policy::from_roots(&read, &write)
-        .map_err(|e| format!("invalid fs allowlist path: {e}"))?
-        .with_env(env)
-        .with_net(net);
-    if flags.allow_private {
-        policy = policy.allow_private();
+    Allowlists {
+        read,
+        write,
+        env,
+        net,
     }
-    Ok(policy)
 }
 
 fn build_config(flags: &CommonFlags, args: Vec<String>) -> Result<RuntimeConfig, String> {
