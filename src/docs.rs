@@ -153,37 +153,60 @@ fn track_style(s: &str, active: &mut String) {
 /// each line end and reopened on the next, so styled spans survive a wrap.
 fn wrap_cell(cell: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
-    let mut lines = Vec::new();
-    let mut cur = String::new();
-    let mut curw = 0;
-    let mut active = String::new();
-    let flush = |lines: &mut Vec<String>, cur: &mut String, curw: &mut usize, active: &str| {
-        let mut line = std::mem::replace(cur, active.to_string());
-        if !active.is_empty() {
-            line.push_str(RESET);
-        }
-        lines.push(line);
-        *curw = 0;
-    };
+    let mut out = Wrapped::default();
     for word in cell.split_whitespace() {
         let w = visible_len(word);
-        if curw > 0 && curw + 1 + w > width {
-            flush(&mut lines, &mut cur, &mut curw, &active);
+        if out.curw > 0 && out.curw + 1 + w > width {
+            out.flush();
         }
         if w <= width {
-            if curw > 0 {
-                cur.push(' ');
-                curw += 1;
-            }
-            cur.push_str(word);
-            curw += w;
-            track_style(word, &mut active);
+            out.push_word(word, w);
             continue;
         }
-        // Longer than a whole line: break by character.
-        if curw > 0 {
-            flush(&mut lines, &mut cur, &mut curw, &active);
+        if out.curw > 0 {
+            out.flush();
         }
+        out.break_long_word(word, width);
+    }
+    if out.curw > 0 || out.lines.is_empty() {
+        out.lines.push(out.cur);
+    }
+    out.lines
+}
+
+/// Lines built by `wrap_cell`, plus the open line and its SGR state.
+#[derive(Default)]
+struct Wrapped {
+    lines: Vec<String>,
+    cur: String,
+    curw: usize,
+    active: String,
+}
+
+impl Wrapped {
+    /// Close the open line and start the next one with the colour reopened.
+    fn flush(&mut self) {
+        let mut line = std::mem::replace(&mut self.cur, self.active.clone());
+        if !self.active.is_empty() {
+            line.push_str(RESET);
+        }
+        self.lines.push(line);
+        self.curw = 0;
+    }
+
+    fn push_word(&mut self, word: &str, w: usize) {
+        if self.curw > 0 {
+            self.cur.push(' ');
+            self.curw += 1;
+        }
+        self.cur.push_str(word);
+        self.curw += w;
+        track_style(word, &mut self.active);
+    }
+
+    /// Break a word longer than a whole line by character. Escape sequences
+    /// pass through without counting toward the width.
+    fn break_long_word(&mut self, word: &str, width: usize) {
         let mut chars = word.chars();
         while let Some(c) = chars.next() {
             if c == '\x1b' {
@@ -194,22 +217,18 @@ fn wrap_cell(cell: &str, width: usize) -> Vec<String> {
                         break;
                     }
                 }
-                track_style(&seq, &mut active);
-                cur.push_str(&seq);
+                track_style(&seq, &mut self.active);
+                self.cur.push_str(&seq);
                 continue;
             }
             let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-            if curw > 0 && curw + cw > width {
-                flush(&mut lines, &mut cur, &mut curw, &active);
+            if self.curw > 0 && self.curw + cw > width {
+                self.flush();
             }
-            cur.push(c);
-            curw += cw;
+            self.cur.push(c);
+            self.curw += cw;
         }
     }
-    if curw > 0 || lines.is_empty() {
-        lines.push(cur);
-    }
-    lines
 }
 
 /// Smallest width a column is shrunk to when fitting a table to the terminal.
