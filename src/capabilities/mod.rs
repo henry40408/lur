@@ -67,9 +67,11 @@ pub fn install(
     http::install(
         lua,
         &lur,
-        config.policy.clone(),
-        config.max_http_body,
-        config.http_cache.clone(),
+        http::HttpConfig {
+            policy: config.policy.clone(),
+            max_body: config.max_http_body,
+            cache: config.http_cache.clone(),
+        },
     )?;
     env::install(lua, &lur, config.policy.clone())?;
     let shared = db::install(lua, &lur, config.db_path.clone())?;
