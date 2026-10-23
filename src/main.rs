@@ -420,8 +420,12 @@ fn run_one_shot(cli: Cli) -> ExitCode {
         }
     };
 
-    let timeout = cli.timeout;
-    match rt.run_to_exit_code(&source, timeout) {
+    let outcome = rt.run_to_exit_code(&source, cli.timeout);
+    one_shot_exit_code(outcome, &source, &cli.script.display().to_string())
+}
+
+fn one_shot_exit_code(outcome: Result<i32, RunError>, source: &str, chunk: &str) -> ExitCode {
+    match outcome {
         #[allow(
             clippy::cast_sign_loss,
             reason = "process exit codes are u8; truncation is the intended Unix semantics"
@@ -436,15 +440,9 @@ fn run_one_shot(cli: Cli) -> ExitCode {
             ExitCode::from(137)
         }
         Err(RunError::Script(e)) => {
-            let chunk = cli.script.display().to_string();
             eprintln!(
                 "{}",
-                lur::diagnostics::render(
-                    &source,
-                    &chunk,
-                    &e.to_string(),
-                    lur::color::stderr_color()
-                )
+                lur::diagnostics::render(source, chunk, &e.to_string(), lur::color::stderr_color())
             );
             ExitCode::FAILURE
         }
