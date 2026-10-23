@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792719873380,
+  "lastUpdate": 1792720650689,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -6713,6 +6713,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1413924,
             "range": "± 38515",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "25e347c6dcd647181e9d2e6395c4a61b01aac8df",
+          "message": "refactor(docs): move markdown renderer state into a Renderer struct (#193)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-23T09:53:40+08:00",
+          "tree_id": "9161c2e8e5725fdd27771ca080e7a47a76fdcdb9",
+          "url": "https://github.com/henry40408/lur/commit/25e347c6dcd647181e9d2e6395c4a61b01aac8df"
+        },
+        "date": 1792720650084,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 395012,
+            "range": "± 8481",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 6007,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 185364,
+            "range": "± 1059",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 21083705,
+            "range": "± 334368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3522032,
+            "range": "± 18536",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1903224,
+            "range": "± 50393",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1981125,
+            "range": "± 34419",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2201152,
+            "range": "± 47488",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1312841,
+            "range": "± 19057",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1427506,
+            "range": "± 47203",
             "unit": "ns/iter"
           }
         ]
