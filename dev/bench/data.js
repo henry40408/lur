@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792734528123,
+  "lastUpdate": 1792735912837,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -8057,6 +8057,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1932334,
             "range": "± 33654",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ac0c71e63863c14c209e055bc8055bc169846b9d",
+          "message": "refactor(validate): shorten check and check_object with helpers (#215)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-23T14:08:09+08:00",
+          "tree_id": "39b47a27cbe9a60bb6a9c27bd04a403c0e3b7087",
+          "url": "https://github.com/henry40408/lur/commit/ac0c71e63863c14c209e055bc8055bc169846b9d"
+        },
+        "date": 1792735911833,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 281953,
+            "range": "± 3845",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4354,
+            "range": "± 202",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 145660,
+            "range": "± 320",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 16170592,
+            "range": "± 292052",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 2788666,
+            "range": "± 29799",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1542874,
+            "range": "± 18211",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1684561,
+            "range": "± 16001",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2188397,
+            "range": "± 38114",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1056346,
+            "range": "± 16505",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1210306,
+            "range": "± 12329",
             "unit": "ns/iter"
           }
         ]
