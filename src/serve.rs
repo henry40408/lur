@@ -886,50 +886,17 @@ fn build_req(
     let table = lua.create_table()?;
     table.set("method", req.method.to_uppercase())?;
     table.set("path", req.path.as_str())?;
-
-    // Both come from client-controlled headers: fine for building links,
-    // not for access decisions.
-    if let Some(origin) = request_origin(&req.headers) {
-        let mut url = format!("{origin}{}", req.path);
-        if !req.query.is_empty() {
-            url.push('?');
-            url.push_str(&req.query);
-        }
-        table.set("origin", origin)?;
-        table.set("url", url)?;
-    }
-
-    let params_table = lua.create_table()?;
-    for (name, value) in params {
-        params_table.set(name.as_str(), lua.create_string(value)?)?;
-    }
-    table.set("params", params_table)?;
+    set_origin_and_url(&table, req)?;
+    table.set("params", params_table(lua, params)?)?;
 
     // Query: `query` keeps the last value per key, `query_all` the full list.
     let pairs = parse_query(&req.query);
-    let query = last_table(lua, &pairs)?;
-    let query_all = all_table(lua, &pairs)?;
-    table.set("query", query)?;
-    table.set("query_all", query_all)?;
+    table.set("query", last_table(lua, &pairs)?)?;
+    table.set("query_all", all_table(lua, &pairs)?)?;
 
-    // Lower-cased names; last value wins.
-    let headers = lua.create_table()?;
-    for (name, value) in &req.headers {
-        headers.set(name.to_lowercase(), value.as_str())?;
-    }
+    let headers = headers_table(lua, req)?;
     table.set("headers", headers.clone())?;
-
-    // All `Cookie` headers fold into one table (later wins; never `nil`).
-    // Cookie names are case-sensitive, so not lowered.
-    let cookies = lua.create_table()?;
-    for (name, value) in &req.headers {
-        if name.eq_ignore_ascii_case("cookie") {
-            for (cname, cvalue) in crate::capabilities::cookie::cookie_pairs(value.as_bytes()) {
-                cookies.set(lua.create_string(cname)?, lua.create_string(cvalue)?)?;
-            }
-        }
-    }
-    table.set("cookies", cookies)?;
+    table.set("cookies", cookies_table(lua, req)?)?;
 
     // `req.body` / `req.json()` become unavailable once `req.read(n)` has run.
     // The mutex makes the closures `Send`.
@@ -938,40 +905,94 @@ fn build_req(
         cursor: 0,
         streamed: false,
     }));
+    table.set("read", read_fn(lua, &state)?)?;
+    table.set("json", json_fn(lua, &state)?)?;
 
-    let read_state = Arc::clone(&state);
-    let read = lua.create_function(move |lua, n: Option<usize>| {
-        let mut st = read_state.lock().expect("body stream mutex poisoned");
-        match n {
-            // No arg: drain the rest; does not count as streaming.
-            None => {
-                let chunk = lua.create_string(&st.body[st.cursor..])?;
-                st.cursor = st.body.len();
-                Ok(Value::String(chunk))
-            }
-            // nil once exhausted.
-            Some(n) => {
-                st.streamed = true;
-                if st.cursor >= st.body.len() && n > 0 {
-                    return Ok(Value::Nil);
-                }
-                let end = (st.cursor + n).min(st.body.len());
-                let chunk = lua.create_string(&st.body[st.cursor..end])?;
-                st.cursor = end;
-                Ok(Value::String(chunk))
-            }
+    let meta = lua.create_table()?;
+    meta.set("__index", index_fn(lua, state, headers)?)?;
+    table.set_metatable(Some(meta))?;
+
+    Ok(table)
+}
+
+/// Both come from client-controlled headers: fine for building links, not for
+/// access decisions.
+fn set_origin_and_url(table: &mlua::Table, req: &RawRequest) -> mlua::Result<()> {
+    let Some(origin) = request_origin(&req.headers) else {
+        return Ok(());
+    };
+    let mut url = format!("{origin}{}", req.path);
+    if !req.query.is_empty() {
+        url.push('?');
+        url.push_str(&req.query);
+    }
+    table.set("origin", origin)?;
+    table.set("url", url)
+}
+
+fn params_table(lua: &mlua::Lua, params: &[(String, Vec<u8>)]) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table()?;
+    for (name, value) in params {
+        table.set(name.as_str(), lua.create_string(value)?)?;
+    }
+    Ok(table)
+}
+
+/// Lower-cased names; last value wins.
+fn headers_table(lua: &mlua::Lua, req: &RawRequest) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table()?;
+    for (name, value) in &req.headers {
+        table.set(name.to_lowercase(), value.as_str())?;
+    }
+    Ok(table)
+}
+
+/// All `Cookie` headers fold into one table (later wins; never `nil`).
+/// Cookie names are case-sensitive, so not lowered.
+fn cookies_table(lua: &mlua::Lua, req: &RawRequest) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table()?;
+    for (name, value) in &req.headers {
+        if !name.eq_ignore_ascii_case("cookie") {
+            continue;
         }
-    })?;
-    table.set("read", read)?;
+        for (cname, cvalue) in crate::capabilities::cookie::cookie_pairs(value.as_bytes()) {
+            table.set(lua.create_string(cname)?, lua.create_string(cvalue)?)?;
+        }
+    }
+    Ok(table)
+}
 
+/// `req.read(n?)`: with no argument, drain the rest (not counted as
+/// streaming); with `n`, return up to `n` bytes, or `nil` once exhausted.
+fn read_fn(lua: &mlua::Lua, state: &Arc<Mutex<BodyStream>>) -> mlua::Result<mlua::Function> {
+    let state = Arc::clone(state);
+    lua.create_function(move |lua, n: Option<usize>| {
+        let mut st = state.lock().expect("body stream mutex poisoned");
+        let Some(n) = n else {
+            let chunk = lua.create_string(&st.body[st.cursor..])?;
+            st.cursor = st.body.len();
+            return Ok(Value::String(chunk));
+        };
+        st.streamed = true;
+        if st.cursor >= st.body.len() && n > 0 {
+            return Ok(Value::Nil);
+        }
+        let end = (st.cursor + n).min(st.body.len());
+        let chunk = lua.create_string(&st.body[st.cursor..end])?;
+        st.cursor = end;
+        Ok(Value::String(chunk))
+    })
+}
+
+fn json_fn(lua: &mlua::Lua, state: &Arc<Mutex<BodyStream>>) -> mlua::Result<mlua::Function> {
     let decode: mlua::Function = lua
         .globals()
         .get::<mlua::Table>("lur")?
         .get::<mlua::Table>("json")?
         .get("decode")?;
-    let json_state = Arc::clone(&state);
-    let json = lua.create_function(move |lua, ()| {
-        let st = json_state.lock().expect("body stream mutex poisoned");
+    let state = Arc::clone(state);
+    lua.create_function(move |lua, ()| {
+        let st = state.lock().expect("body stream mutex poisoned");
         if st.streamed {
             return Err(mlua::Error::runtime(
                 "req.json() is unavailable after req.read(n) consumed part of the body",
@@ -979,56 +1000,60 @@ fn build_req(
         }
         let raw = lua.create_string(&st.body)?;
         decode.call::<Value>(raw)
-    })?;
-    table.set("json", json)?;
+    })
+}
 
-    // Served via `__index` so the streamed guard can fire.
-    let index_state = Arc::clone(&state);
-    let index = lua.create_function(move |lua, (t, key): (mlua::Table, Value)| {
+/// `req.form()` / `req.form_all()`, returned as a function by `__index`.
+fn form_fn(
+    lua: &mlua::Lua,
+    state: Arc<Mutex<BodyStream>>,
+    headers: mlua::Table,
+    all: bool,
+) -> mlua::Result<mlua::Function> {
+    lua.create_function(move |lua, ()| {
+        let label = if all { "req.form_all()" } else { "req.form()" };
+        let pairs = form_pairs(&state, &headers, label)?;
+        if all {
+            all_table(lua, &pairs)
+        } else {
+            last_table(lua, &pairs)
+        }
+    })
+}
+
+/// Served via `__index` so the streamed guard can fire.
+fn index_fn(
+    lua: &mlua::Lua,
+    state: Arc<Mutex<BodyStream>>,
+    headers: mlua::Table,
+) -> mlua::Result<mlua::Function> {
+    lua.create_function(move |lua, (t, key): (mlua::Table, Value)| {
+        let Value::String(s) = &key else {
+            return Ok(Value::Nil);
+        };
         // `req.valid_*` and `req.form*` are built on first access, so requests
         // that never use them pay nothing.
-        if let Value::String(s) = &key {
-            match &*s.as_bytes() {
-                b"valid_query" => return valid_fn(lua, &t, true),
-                b"valid_params" => return valid_fn(lua, &t, false),
-                b"valid_body" => return valid_body_fn(lua, &index_state, &headers),
-                b"form" | b"form_all" => {
-                    let all = &*s.as_bytes() == b"form_all";
-                    let state = Arc::clone(&index_state);
-                    let headers = headers.clone();
-                    let f = lua.create_function(move |lua, ()| {
-                        let pairs = form_pairs(
-                            &state,
-                            &headers,
-                            if all { "req.form_all()" } else { "req.form()" },
-                        )?;
-                        if all {
-                            all_table(lua, &pairs)
-                        } else {
-                            last_table(lua, &pairs)
-                        }
-                    })?;
-                    return Ok(Value::Function(f));
+        match &*s.as_bytes() {
+            b"valid_query" => valid_fn(lua, &t, true),
+            b"valid_params" => valid_fn(lua, &t, false),
+            b"valid_body" => valid_body_fn(lua, &state, &headers),
+            b"form" | b"form_all" => {
+                let all = &*s.as_bytes() == b"form_all";
+                let f = form_fn(lua, Arc::clone(&state), headers.clone(), all)?;
+                Ok(Value::Function(f))
+            }
+            b"body" => {
+                let st = state.lock().expect("body stream mutex poisoned");
+                if st.streamed {
+                    return Err(mlua::Error::runtime(
+                        "req.body is unavailable after req.read(n) consumed part of the body",
+                    ));
                 }
-                _ => {}
+                Ok(Value::String(lua.create_string(&st.body)?))
             }
+            _ => Ok(Value::Nil),
         }
-        if matches!(&key, Value::String(s) if s.as_bytes() == b"body") {
-            let st = index_state.lock().expect("body stream mutex poisoned");
-            if st.streamed {
-                return Err(mlua::Error::runtime(
-                    "req.body is unavailable after req.read(n) consumed part of the body",
-                ));
-            }
-            return Ok(Value::String(lua.create_string(&st.body)?));
-        }
-        Ok(Value::Nil)
-    })?;
-    let meta = lua.create_table()?;
-    meta.set("__index", index)?;
-    table.set_metatable(Some(meta))?;
-
-    Ok(table)
+    })
 }
 
 /// `req.valid_query(schema, opts?)` / `req.valid_params(schema, opts?)`:
