@@ -478,7 +478,11 @@ struct Call<'a> {
     opts: Option<Table>,
 }
 
-async fn do_request(lua: &Lua, ctx: &Ctx<'_>, call: Call<'_>) -> mlua::Result<Table> {
+/// Validates the call (url, policy, method, cache opts) and builds the request.
+fn build_request(
+    ctx: &Ctx<'_>,
+    call: Call<'_>,
+) -> mlua::Result<(reqwest::Request, Option<CacheOpts>)> {
     let Call {
         method,
         url: url_str,
@@ -510,6 +514,11 @@ async fn do_request(lua: &Lua, ctx: &Ctx<'_>, call: Call<'_>) -> mlua::Result<Ta
     let req = req
         .build()
         .map_err(|e| Error::runtime(format!("lur.http: {e}")))?;
+    Ok((req, cache))
+}
+
+async fn do_request(lua: &Lua, ctx: &Ctx<'_>, call: Call<'_>) -> mlua::Result<Table> {
+    let (req, cache) = build_request(ctx, call)?;
 
     // `None` also when the request carries credentials the script didn't allow.
     let wants_cache = cache.is_some();
@@ -771,10 +780,11 @@ async fn read_response(mut resp: reqwest::Response, max_body: usize) -> mlua::Re
     })
 }
 
-fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
+/// Builds the `headers` (last value wins) and `headers_all` (every value) tables.
+fn header_tables(lua: &Lua, raw_headers: &[(String, Vec<u8>)]) -> mlua::Result<(Table, Table)> {
     let headers = lua.create_table()?;
     let headers_all = lua.create_table()?;
-    for (key, value) in &raw.headers {
+    for (key, value) in raw_headers {
         let val = lua.create_string(value)?;
         headers.set(key.as_str(), &val)?; // last value wins
         let arr = if let Some(t) = headers_all.get::<Option<Table>>(key.as_str())? {
@@ -787,16 +797,12 @@ fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
         let next = arr.raw_len() + 1;
         arr.raw_set(next as i64, &val)?;
     }
-    let body = lua.create_string(&raw.body)?;
+    Ok((headers, headers_all))
+}
 
-    let res = lua.create_table()?;
-    res.set("status", raw.status)?;
-    res.set("body", &body)?;
-    res.set("headers", headers)?;
-    res.set("headers_all", headers_all)?;
-
-    let body_for_json = body.clone();
-    let json_fn = lua.create_function(move |lua, opts: Value| {
+/// `res.json(opts)`: decodes the body as JSON.
+fn json_fn(lua: &Lua, body: mlua::LuaString) -> mlua::Result<mlua::Function> {
+    lua.create_function(move |lua, opts: Value| {
         // Options are checked first so a bad `opts` is reported even for a bad body.
         // `r:json(...)` passes the response table itself as the first argument.
         if let Value::Table(t) = &opts
@@ -806,12 +812,19 @@ fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
             return Err(Error::runtime("res.json: call with a dot, not a colon"));
         }
         let drop_null = json::parse_decode_opts(lua, opts, "res.json", 1)?;
-        let parsed: serde_json::Value = serde_json::from_slice(&body_for_json.as_bytes())
+        let parsed: serde_json::Value = serde_json::from_slice(&body.as_bytes())
             .map_err(|e| Error::runtime(format!("res.json: {e}")))?;
         json::json_to_lua(lua, &parsed, drop_null)
-    })?;
-    res.set("json", json_fn)?;
+    })
+}
 
+/// Sets `res.text` and `res.html`, both decoding the body by the response charset.
+fn set_text_fns(
+    lua: &Lua,
+    res: &Table,
+    raw: &RawResponse,
+    body: &mlua::LuaString,
+) -> mlua::Result<()> {
     // Decoded with the Content-Type charset hint (last header wins, like
     // `headers`); same rules as `lur.charset.decode`.
     let content_type = raw
@@ -831,7 +844,20 @@ fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
         lua.create_userdata(html::parse_document(text_of(&body_h)))
     })?;
     res.set("html", html_fn)?;
+    Ok(())
+}
 
+fn raw_to_table(lua: &Lua, raw: &RawResponse) -> mlua::Result<Table> {
+    let (headers, headers_all) = header_tables(lua, &raw.headers)?;
+    let body = lua.create_string(&raw.body)?;
+
+    let res = lua.create_table()?;
+    res.set("status", raw.status)?;
+    res.set("body", &body)?;
+    res.set("headers", headers)?;
+    res.set("headers_all", headers_all)?;
+    res.set("json", json_fn(lua, body.clone())?)?;
+    set_text_fns(lua, &res, raw, &body)?;
     Ok(res)
 }
 
