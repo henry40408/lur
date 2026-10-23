@@ -219,7 +219,6 @@ impl Server {
     /// Run `app.lua` once per pooled VM to collect handlers. Fails if VMs
     /// register differently or a route is duplicated.
     pub fn load(source: &str, config: RuntimeConfig) -> Result<Self, RunError> {
-        let pool_size = config.pool_size.max(1);
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -228,56 +227,7 @@ impl Server {
         // Warm up inside the runtime so top-level awaits in app.lua work.
         let bare_chunk_name = config.chunk_name.as_deref().unwrap_or("script").to_owned();
         let chunk_name = format!("@{bare_chunk_name}");
-        let (vms, routes, crons) = rt.block_on(async {
-            let mut vms = Vec::with_capacity(pool_size);
-            let mut routes: Option<Vec<(String, String)>> = None;
-            let mut crons: Option<Vec<CronMeta>> = None;
-            for _ in 0..pool_size {
-                let registry = Registry::default();
-                let (lua, deadline) = build_lua(&config, Some(&registry))?;
-                let top = lua.load(source).set_name(&chunk_name).exec_async();
-                // No timeout here, but the same end-of-run cleanup.
-                crate::runtime::with_timeout(&lua, &deadline, None, top)
-                    .await
-                    .unwrap_or_else(|()| unreachable!("no timeout set"))
-                    .map_err(RunError::Script)?;
-
-                let regs = registry.take();
-                let handlers = regs.iter().map(|r| r.handler.clone()).collect();
-                let route_sig: Vec<(String, String)> =
-                    regs.into_iter().map(|r| (r.method, r.path)).collect();
-
-                let cron_regs = registry.take_crons();
-                let cron_handlers = cron_regs.iter().map(|r| r.handler.clone()).collect();
-                let cron_meta: Vec<CronMeta> = cron_regs
-                    .into_iter()
-                    .map(|r| CronMeta {
-                        spec: r.spec,
-                        name: r.name,
-                        overlap: r.overlap,
-                        timeout_ms: r.timeout_ms,
-                    })
-                    .collect();
-
-                // Every VM must register the same routes and jobs in the same
-                // order, or the shared handler ids would not line up.
-                if routes.get_or_insert_with(|| route_sig.clone()) != &route_sig
-                    || crons.get_or_insert_with(|| cron_meta.clone()) != &cron_meta
-                {
-                    return Err(RunError::Script(mlua::Error::RuntimeError(
-                        "lur.serve: app.lua registered differently across VMs".into(),
-                    )));
-                }
-                vms.push(Vm {
-                    lua,
-                    deadline,
-                    handlers,
-                    cron_handlers,
-                    abort: registry.abort_slot(),
-                });
-            }
-            Ok((vms, routes.unwrap_or_default(), crons.unwrap_or_default()))
-        })?;
+        let (vms, routes, crons) = rt.block_on(warm_up(&config, source, &chunk_name))?;
 
         let router = Router::build(&routes)?;
         let cron_jobs = build_cron_jobs(&crons)?;
@@ -588,6 +538,86 @@ fn abort_response(a: PendingAbort) -> Response {
     }
 }
 
+/// The routes and cron jobs `app.lua` registered, in order.
+#[derive(Clone, Default, PartialEq)]
+struct Registrations {
+    routes: Vec<(String, String)>,
+    crons: Vec<CronMeta>,
+}
+
+/// A VM that has run `app.lua`, with what it registered.
+struct Warmed {
+    vm: Vm,
+    registered: Registrations,
+}
+
+/// Run `app.lua` in a fresh VM and collect its handlers.
+async fn warm_up_vm(
+    config: &RuntimeConfig,
+    source: &str,
+    chunk_name: &str,
+) -> Result<Warmed, RunError> {
+    let registry = Registry::default();
+    let (lua, deadline) = build_lua(config, Some(&registry))?;
+    let top = lua.load(source).set_name(chunk_name).exec_async();
+    // No timeout here, but the same end-of-run cleanup.
+    crate::runtime::with_timeout(&lua, &deadline, None, top)
+        .await
+        .unwrap_or_else(|()| unreachable!("no timeout set"))
+        .map_err(RunError::Script)?;
+
+    let regs = registry.take();
+    let handlers = regs.iter().map(|r| r.handler.clone()).collect();
+    let routes = regs.into_iter().map(|r| (r.method, r.path)).collect();
+
+    let cron_regs = registry.take_crons();
+    let cron_handlers = cron_regs.iter().map(|r| r.handler.clone()).collect();
+    let crons = cron_regs
+        .into_iter()
+        .map(|r| CronMeta {
+            spec: r.spec,
+            name: r.name,
+            overlap: r.overlap,
+            timeout_ms: r.timeout_ms,
+        })
+        .collect();
+
+    Ok(Warmed {
+        vm: Vm {
+            lua,
+            deadline,
+            handlers,
+            cron_handlers,
+            abort: registry.abort_slot(),
+        },
+        registered: Registrations { routes, crons },
+    })
+}
+
+/// Warm every pooled VM. Warm up inside the runtime so top-level awaits in
+/// app.lua work. Every VM must register the same routes and jobs in the same
+/// order, or the shared handler ids would not line up.
+async fn warm_up(
+    config: &RuntimeConfig,
+    source: &str,
+    chunk_name: &str,
+) -> Result<(Vec<Vm>, Vec<(String, String)>, Vec<CronMeta>), RunError> {
+    let pool_size = config.pool_size.max(1);
+    let mut vms = Vec::with_capacity(pool_size);
+    let mut expected: Option<Registrations> = None;
+    for _ in 0..pool_size {
+        let Warmed { vm, registered } = warm_up_vm(config, source, chunk_name).await?;
+        if *expected.get_or_insert_with(|| registered.clone()) != registered {
+            return Err(RunError::Script(mlua::Error::RuntimeError(
+                "lur.serve: app.lua registered differently across VMs".into(),
+            )));
+        }
+        vms.push(vm);
+    }
+    let Registrations { routes, crons } = expected.unwrap_or_default();
+    Ok((vms, routes, crons))
+}
+
 /// How `call_handler` runs a handler: its time budget, and whether
 /// `lur.serve.abort` is allowed (only inside an HTTP request).
 struct Run {
@@ -608,17 +638,7 @@ async fn call_handler(
         timeout,
         in_request,
     } = run;
-    {
-        // Drop any abort left by a previous run (e.g. one `pcall` caught).
-        let mut abort = vm.abort.lock().expect("abort slot poisoned");
-        abort.in_request = in_request;
-        abort.pending = None;
-    }
-    // ...and any error table a previous run left for `lur.async` to recover.
-    raise::reset(&vm.lua);
-    handler
-        .set_environment(fresh_env(&vm.lua).map_err(CallError::Lua)?)
-        .map_err(CallError::Lua)?;
+    arm_vm(vm, handler, in_request)?;
 
     let at = timeout.map(|d| Instant::now() + d);
     *vm.deadline.lock().expect("deadline mutex poisoned") = at;
@@ -636,7 +656,38 @@ async fn call_handler(
         abort.pending.take()
     };
 
-    let result = match outcome {
+    let result = classify_outcome(outcome, at, pending);
+    if needs_reclaim(&result) {
+        crate::runtime::reclaim(&vm.lua);
+    }
+    result
+}
+
+/// Reset what a previous run left on the pooled VM and give `handler` a fresh
+/// environment.
+fn arm_vm(vm: &Vm, handler: &Function, in_request: bool) -> Result<(), CallError> {
+    {
+        // Drop any abort left by a previous run (e.g. one `pcall` caught).
+        let mut abort = vm.abort.lock().expect("abort slot poisoned");
+        abort.in_request = in_request;
+        abort.pending = None;
+    }
+    // ...and any error table a previous run left for `lur.async` to recover.
+    raise::reset(&vm.lua);
+    handler
+        .set_environment(fresh_env(&vm.lua).map_err(CallError::Lua)?)
+        .map_err(CallError::Lua)?;
+    Ok(())
+}
+
+/// `outcome` of `with_timeout`: `Err(())` is the async timeout; a script error
+/// past `at` is the deadline interrupt; one matching `pending` is an abort.
+fn classify_outcome(
+    outcome: Result<mlua::Result<MultiValue>, ()>,
+    at: Option<Instant>,
+    pending: Option<PendingAbort>,
+) -> Result<MultiValue, CallError> {
+    match outcome {
         Err(()) => Err(CallError::TimedOut),
         Ok(Ok(values)) => Ok(values),
         Ok(Err(e)) => {
@@ -650,15 +701,16 @@ async fn call_handler(
                 Err(CallError::Lua(e))
             }
         }
-    };
-    if match &result {
+    }
+}
+
+/// A timeout or out-of-memory error leaves garbage worth collecting now.
+fn needs_reclaim(result: &Result<MultiValue, CallError>) -> bool {
+    match result {
         Err(CallError::TimedOut) => true,
         Err(CallError::Lua(e)) => crate::runtime::is_memory_error(e),
         _ => false,
-    } {
-        crate::runtime::reclaim(&vm.lua);
     }
-    result
 }
 
 /// Sleep to each next fire and run the job. Single-flight by default (a tick
