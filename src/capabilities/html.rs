@@ -115,6 +115,74 @@ impl Node {
     }
 }
 
+impl Node {
+    /// `node:text()`, `node:text({ trim = true })` or `node:text(css)`.
+    fn text(&self, lua: &Lua, args: Variadic<Value>) -> mlua::Result<Option<String>> {
+        if args.len() > 1 {
+            return Err(Error::runtime(format!(
+                "lur.html.text: expected at most 1 argument, got {}",
+                args.len()
+            )));
+        }
+        let opts = args.into_iter().next().unwrap_or(Value::Nil);
+        // `text(css)`: shorthand for `select_one(css)` then `:text()`;
+        // `nil` when nothing matches, `""` when the match has no text.
+        if matches!(opts, Value::String(_)) {
+            let css = css_arg(lua, opts, "lur.html.text")?;
+            let Some(found) = self.select(&css, true)?.into_iter().next() else {
+                return Ok(None);
+            };
+            return found
+                .with_element(|html, el| {
+                    el.unwrap_or_else(|| html.root_element())
+                        .text()
+                        .collect::<String>()
+                })
+                .map(Some);
+        }
+        let trim = text_opts(lua, opts)?;
+        self.with_element(|html, el| {
+            let el = el.unwrap_or_else(|| html.root_element());
+            let text = el.text().collect::<String>();
+            if trim { text.trim().to_owned() } else { text }
+        })
+        .map(Some)
+    }
+
+    fn attr(&self, lua: &Lua, name: Value) -> mlua::Result<Option<String>> {
+        let name: mlua::LuaString = argcheck::arg(
+            lua,
+            name,
+            argcheck::ArgSpec {
+                fname: "lur.html.attr",
+                n: 1,
+                expected: "string",
+            },
+        )?;
+        let name = name
+            .to_str()
+            .map_err(|e| Error::runtime(format!("lur.html.attr: {e}")))?;
+        self.with_element(|_, el| el.and_then(|e| e.value().attr(&name).map(str::to_owned)))
+    }
+
+    fn attrs(&self, lua: &Lua) -> mlua::Result<Table> {
+        let pairs: Vec<(String, String)> = self.with_element(|_, el| {
+            el.map(|e| {
+                e.value()
+                    .attrs()
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect()
+            })
+            .unwrap_or_default()
+        })?;
+        let out = lua.create_table()?;
+        for (k, v) in pairs {
+            out.set(k, v)?;
+        }
+        Ok(out)
+    }
+}
+
 impl UserData for Node {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("select", |lua, this, css: Value| {
@@ -126,35 +194,7 @@ impl UserData for Node {
             Ok(this.select(&css, true)?.into_iter().next())
         });
         methods.add_method("text", |lua, this, args: Variadic<Value>| {
-            if args.len() > 1 {
-                return Err(Error::runtime(format!(
-                    "lur.html.text: expected at most 1 argument, got {}",
-                    args.len()
-                )));
-            }
-            let opts = args.into_iter().next().unwrap_or(Value::Nil);
-            // `text(css)`: shorthand for `select_one(css)` then `:text()`;
-            // `nil` when nothing matches, `""` when the match has no text.
-            if matches!(opts, Value::String(_)) {
-                let css = css_arg(lua, opts, "lur.html.text")?;
-                let Some(found) = this.select(&css, true)?.into_iter().next() else {
-                    return Ok(None);
-                };
-                return found
-                    .with_element(|html, el| {
-                        el.unwrap_or_else(|| html.root_element())
-                            .text()
-                            .collect::<String>()
-                    })
-                    .map(Some);
-            }
-            let trim = text_opts(lua, opts)?;
-            this.with_element(|html, el| {
-                let el = el.unwrap_or_else(|| html.root_element());
-                let text = el.text().collect::<String>();
-                if trim { text.trim().to_owned() } else { text }
-            })
-            .map(Some)
+            this.text(lua, args)
         });
         methods.add_method("html", |_, this, ()| {
             this.with_element(|html, el| el.map_or_else(|| html.html(), |e| e.html()))
@@ -165,37 +205,8 @@ impl UserData for Node {
         methods.add_method("tag", |_, this, ()| {
             this.with_element(|_, el| el.map(|e| e.value().name().to_owned()))
         });
-        methods.add_method("attr", |lua, this, name: Value| {
-            let name: mlua::LuaString = argcheck::arg(
-                lua,
-                name,
-                argcheck::ArgSpec {
-                    fname: "lur.html.attr",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
-            let name = name
-                .to_str()
-                .map_err(|e| Error::runtime(format!("lur.html.attr: {e}")))?;
-            this.with_element(|_, el| el.and_then(|e| e.value().attr(&name).map(str::to_owned)))
-        });
-        methods.add_method("attrs", |lua, this, ()| {
-            let pairs: Vec<(String, String)> = this.with_element(|_, el| {
-                el.map(|e| {
-                    e.value()
-                        .attrs()
-                        .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                        .collect()
-                })
-                .unwrap_or_default()
-            })?;
-            let out = lua.create_table()?;
-            for (k, v) in pairs {
-                out.set(k, v)?;
-            }
-            Ok(out)
-        });
+        methods.add_method("attr", |lua, this, name: Value| this.attr(lua, name));
+        methods.add_method("attrs", |lua, this, ()| this.attrs(lua));
         methods.add_method("parent", |_, this, ()| {
             this.with_element(|_, el| {
                 el.and_then(|e| e.parent())
