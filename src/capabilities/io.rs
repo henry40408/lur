@@ -3,7 +3,7 @@
 
 use std::io::{BufRead, Read, Write};
 
-use mlua::{Error, Lua, Table, Value};
+use mlua::{Error, Function, Lua, Table, Value};
 
 use crate::capabilities::argcheck;
 use crate::runtime::RunError;
@@ -16,69 +16,67 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 
 fn install_stdin(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     let stdin = lua.create_table().map_err(RunError::Init)?;
-
-    // read() → rest of stdin ("" at EOF); read(n) → up to n bytes, nil at EOF.
-    let read = lua
-        .create_function(|lua, n: Value| {
-            let n: Option<usize> = argcheck::arg(
-                lua,
-                n,
-                argcheck::ArgSpec {
-                    fname: "lur.stdin.read",
-                    n: 1,
-                    expected: "number",
-                },
-            )?;
-            let stdin = std::io::stdin();
-            match n {
-                None => {
-                    let mut buf = Vec::new();
-                    stdin
-                        .lock()
-                        .read_to_end(&mut buf)
-                        .map_err(|e| Error::runtime(e.to_string()))?;
-                    Ok(Value::String(lua.create_string(&buf)?))
-                }
-                Some(n) => {
-                    let buf = read_up_to(&mut stdin.lock(), n)
-                        .map_err(|e| Error::runtime(e.to_string()))?;
-                    if buf.is_empty() && n > 0 {
-                        return Ok(Value::Nil);
-                    }
-                    Ok(Value::String(lua.create_string(&buf)?))
-                }
-            }
-        })
+    stdin
+        .set("read", stdin_read_fn(lua).map_err(RunError::Init)?)
         .map_err(RunError::Init)?;
-    stdin.set("read", read).map_err(RunError::Init)?;
-
-    // lines() → iterator of lines with `\n` / `\r\n` stripped.
-    let lines = lua
-        .create_function(|lua, ()| {
-            let iter = lua.create_function(|lua, ()| {
-                let mut buf = Vec::new();
-                let n = std::io::stdin()
-                    .lock()
-                    .read_until(b'\n', &mut buf)
-                    .map_err(|e| Error::runtime(e.to_string()))?;
-                if n == 0 {
-                    return Ok(Value::Nil);
-                }
-                if buf.last() == Some(&b'\n') {
-                    buf.pop();
-                    if buf.last() == Some(&b'\r') {
-                        buf.pop();
-                    }
-                }
-                Ok(Value::String(lua.create_string(&buf)?))
-            })?;
-            Ok(iter)
-        })
+    stdin
+        .set("lines", stdin_lines_fn(lua).map_err(RunError::Init)?)
         .map_err(RunError::Init)?;
-    stdin.set("lines", lines).map_err(RunError::Init)?;
-
     lur.set("stdin", stdin).map_err(RunError::Init)?;
     Ok(())
+}
+
+/// `read()` → rest of stdin ("" at EOF); `read(n)` → up to n bytes, nil at EOF.
+fn stdin_read_fn(lua: &Lua) -> mlua::Result<Function> {
+    lua.create_function(|lua, n: Value| {
+        let n: Option<usize> = argcheck::arg(
+            lua,
+            n,
+            argcheck::ArgSpec {
+                fname: "lur.stdin.read",
+                n: 1,
+                expected: "number",
+            },
+        )?;
+        let stdin = std::io::stdin();
+        let Some(n) = n else {
+            let mut buf = Vec::new();
+            stdin
+                .lock()
+                .read_to_end(&mut buf)
+                .map_err(|e| Error::runtime(e.to_string()))?;
+            return Ok(Value::String(lua.create_string(&buf)?));
+        };
+        let buf = read_up_to(&mut stdin.lock(), n).map_err(|e| Error::runtime(e.to_string()))?;
+        if buf.is_empty() && n > 0 {
+            return Ok(Value::Nil);
+        }
+        Ok(Value::String(lua.create_string(&buf)?))
+    })
+}
+
+/// `lines()` → iterator of lines with `\n` / `\r\n` stripped.
+fn stdin_lines_fn(lua: &Lua) -> mlua::Result<Function> {
+    lua.create_function(|lua, ()| lua.create_function(|lua, ()| read_stdin_line(lua)))
+}
+
+/// The next line of stdin without its line ending, nil at EOF.
+fn read_stdin_line(lua: &Lua) -> mlua::Result<Value> {
+    let mut buf = Vec::new();
+    let n = std::io::stdin()
+        .lock()
+        .read_until(b'\n', &mut buf)
+        .map_err(|e| Error::runtime(e.to_string()))?;
+    if n == 0 {
+        return Ok(Value::Nil);
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+    }
+    Ok(Value::String(lua.create_string(&buf)?))
 }
 
 /// Read up to `n` bytes, across short reads, until `n` or EOF. The buffer
