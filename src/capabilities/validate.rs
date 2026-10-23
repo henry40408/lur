@@ -294,14 +294,10 @@ fn check<'a>(cx: &'a mut Ctx<'_>, node: &'a Node, value: Value, at: At) -> Check
         match node {
             Node::Func(f) => check_func(cx, f, value, &path).await,
             Node::Optional(inner) => {
-                // `optional` only waives "required"; a `default` still fills.
-                let skip = (inner.is_missing(&value) && !inner.has_default())
-                    || (value.is_nil() && matches!(**inner, Node::Func(_)));
-                if skip {
-                    Ok(Some(Value::Nil))
-                } else {
-                    check(cx, inner, value, At { path, depth }).await
+                if optional_skips(inner, &value) {
+                    return Ok(Some(Value::Nil));
                 }
+                check(cx, inner, value, At { path, depth }).await
             }
             Node::Str {
                 pattern,
@@ -309,12 +305,7 @@ fn check<'a>(cx: &'a mut Ctx<'_>, node: &'a Node, value: Value, at: At) -> Check
                 max_len,
                 default,
             } => {
-                let rule = StrRule {
-                    pattern: pattern.as_ref(),
-                    min_len: *min_len,
-                    max_len: *max_len,
-                    default: default.as_ref(),
-                };
+                let rule = StrRule::new(pattern.as_ref(), *min_len, *max_len, default.as_ref());
                 check_str_node(cx, &rule, value, &path)
             }
             Node::Int {
@@ -323,12 +314,7 @@ fn check<'a>(cx: &'a mut Ctx<'_>, node: &'a Node, value: Value, at: At) -> Check
                 default,
                 clamp,
             } => {
-                let limits = Limits {
-                    min: *min,
-                    max: *max,
-                    default: *default,
-                    clamp: *clamp,
-                };
+                let limits = Limits::new(*min, *max, *default, *clamp);
                 Ok(check_int(cx, &value, limits, &path))
             }
             Node::Number {
@@ -337,12 +323,7 @@ fn check<'a>(cx: &'a mut Ctx<'_>, node: &'a Node, value: Value, at: At) -> Check
                 default,
                 clamp,
             } => {
-                let limits = Limits {
-                    min: *min,
-                    max: *max,
-                    default: *default,
-                    clamp: *clamp,
-                };
+                let limits = Limits::new(*min, *max, *default, *clamp);
                 Ok(check_number(cx, &value, limits, &path))
             }
             Node::Bool { default } => Ok(check_bool(cx, *default, value, &path)),
@@ -352,18 +333,11 @@ fn check<'a>(cx: &'a mut Ctx<'_>, node: &'a Node, value: Value, at: At) -> Check
                 min_items,
                 max_items,
             } => {
-                let rule = ListRule {
-                    item,
-                    min_items: *min_items,
-                    max_items: *max_items,
-                };
+                let rule = ListRule::new(item, *min_items, *max_items);
                 check_list(cx, &rule, value, At { path, depth }).await
             }
             Node::Object { fields, strict } => {
-                let rule = ObjectRule {
-                    fields,
-                    strict: *strict,
-                };
+                let rule = ObjectRule::new(fields, *strict);
                 check_object(cx, &rule, value, At { path, depth }).await
             }
         }
@@ -384,6 +358,12 @@ fn absent_if_null(node: &Node, value: Value) -> Value {
     } else {
         value
     }
+}
+
+/// `optional` only waives "required"; a `default` still fills.
+fn optional_skips(inner: &Node, value: &Value) -> bool {
+    (inner.is_missing(value) && !inner.has_default())
+        || (value.is_nil() && matches!(inner, Node::Func(_)))
 }
 
 fn required(cx: &mut Ctx<'_>, path: &str) -> Option<Value> {
@@ -517,6 +497,22 @@ struct StrRule<'a> {
     default: Option<&'a mlua::LuaString>,
 }
 
+impl<'a> StrRule<'a> {
+    fn new(
+        pattern: Option<&'a mlua::LuaString>,
+        min_len: Option<usize>,
+        max_len: Option<usize>,
+        default: Option<&'a mlua::LuaString>,
+    ) -> Self {
+        Self {
+            pattern,
+            min_len,
+            max_len,
+            default,
+        }
+    }
+}
+
 fn check_str(
     cx: &mut Ctx<'_>,
     s: &mlua::LuaString,
@@ -563,6 +559,17 @@ struct Limits<T> {
     max: Option<T>,
     default: Option<T>,
     clamp: bool,
+}
+
+impl<T> Limits<T> {
+    fn new(min: Option<T>, max: Option<T>, default: Option<T>, clamp: bool) -> Self {
+        Self {
+            min,
+            max,
+            default,
+            clamp,
+        }
+    }
 }
 
 fn check_int(cx: &mut Ctx<'_>, value: &Value, limits: Limits<i64>, path: &str) -> Option<Value> {
@@ -691,6 +698,16 @@ struct ListRule<'a> {
     max_items: Option<usize>,
 }
 
+impl<'a> ListRule<'a> {
+    fn new(item: &'a Node, min_items: Option<usize>, max_items: Option<usize>) -> Self {
+        Self {
+            item,
+            min_items,
+            max_items,
+        }
+    }
+}
+
 async fn check_list(
     cx: &mut Ctx<'_>,
     rule: &ListRule<'_>,
@@ -756,6 +773,12 @@ struct ObjectRule<'a> {
     strict: bool,
 }
 
+impl<'a> ObjectRule<'a> {
+    fn new(fields: &'a [(String, Arc<Node>)], strict: bool) -> Self {
+        Self { fields, strict }
+    }
+}
+
 async fn check_object(
     cx: &mut Ctx<'_>,
     rule: &ObjectRule<'_>,
@@ -796,28 +819,39 @@ async fn check_object(
         }
     }
     if strict {
-        for pair in t.pairs::<Value, Value>() {
-            if cx.full() {
-                break;
-            }
-            let (key, _) = pair?;
-            let known = match &key {
-                Value::String(k) => fields.iter().any(|(n, _)| n.as_bytes() == &*k.as_bytes()),
-                _ => false,
-            };
-            if known {
-                continue;
-            }
-            let at = match &key {
-                Value::String(k) => child_key(&path, &String::from_utf8_lossy(&k.as_bytes())),
-                Value::Integer(i) => format!("{path}[{i}]"),
-                Value::Number(n) => format!("{path}[{}]", fmt_num(*n)),
-                other => format!("{path}[<{}>]", tname(other)),
-            };
-            cx.fail(&at, "is not a known key");
-        }
+        reject_unknown_keys(cx, fields, &t, &path)?;
     }
     Ok((cx.issues.len() == before && !cx.truncated).then_some(Value::Table(out)))
+}
+
+/// Fail every key of `t` that is not a field name.
+fn reject_unknown_keys(
+    cx: &mut Ctx<'_>,
+    fields: &[(String, Arc<Node>)],
+    t: &Table,
+    path: &str,
+) -> mlua::Result<()> {
+    for pair in t.pairs::<Value, Value>() {
+        if cx.full() {
+            break;
+        }
+        let (key, _) = pair?;
+        let known = match &key {
+            Value::String(k) => fields.iter().any(|(n, _)| n.as_bytes() == &*k.as_bytes()),
+            _ => false,
+        };
+        if known {
+            continue;
+        }
+        let at = match &key {
+            Value::String(k) => child_key(path, &String::from_utf8_lossy(&k.as_bytes())),
+            Value::Integer(i) => format!("{path}[{i}]"),
+            Value::Number(n) => format!("{path}[{}]", fmt_num(*n)),
+            other => format!("{path}[<{}>]", tname(other)),
+        };
+        cx.fail(&at, "is not a known key");
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- constructors
