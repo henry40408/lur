@@ -716,39 +716,52 @@ impl<'a> ListRule<'a> {
     }
 }
 
+/// The elements of a `list` value, or `None` after recording the shape or
+/// length failure.
+fn list_items(
+    cx: &mut Ctx<'_>,
+    rule: &ListRule<'_>,
+    value: &Value,
+    path: &str,
+) -> mlua::Result<Option<Vec<Value>>> {
+    let items = match value {
+        Value::Nil => {
+            cx.fail(path, "is required");
+            return Ok(None);
+        }
+        Value::Table(t) => sequence(t)?,
+        _ => None,
+    };
+    let Some(items) = items else {
+        cx.fail(path, "must be a list");
+        return Ok(None);
+    };
+    if let Some(min) = rule.min_items
+        && items.len() < min
+    {
+        cx.fail(path, format!("must have at least {min} items"));
+        return Ok(None);
+    }
+    if let Some(max) = rule.max_items
+        && items.len() > max
+    {
+        cx.fail(path, format!("must have at most {max} items"));
+        return Ok(None);
+    }
+    Ok(Some(items))
+}
+
 async fn check_list(
     cx: &mut Ctx<'_>,
     rule: &ListRule<'_>,
     value: Value,
     at: At,
 ) -> mlua::Result<Option<Value>> {
-    let ListRule {
-        item,
-        min_items,
-        max_items,
-    } = *rule;
+    let item = rule.item;
     let At { path, depth } = at;
-    let items = match &value {
-        Value::Nil => return Ok(required(cx, &path)),
-        Value::Table(t) => sequence(t)?,
-        _ => None,
-    };
-    let Some(items) = items else {
-        cx.fail(&path, "must be a list");
+    let Some(items) = list_items(cx, rule, &value, &path)? else {
         return Ok(None);
     };
-    if let Some(min) = min_items
-        && items.len() < min
-    {
-        cx.fail(&path, format!("must have at least {min} items"));
-        return Ok(None);
-    }
-    if let Some(max) = max_items
-        && items.len() > max
-    {
-        cx.fail(&path, format!("must have at most {max} items"));
-        return Ok(None);
-    }
     let out = cx.lua.create_table_with_capacity(items.len(), 0)?;
     let before = cx.issues.len();
     let mut n = 0;
@@ -787,6 +800,21 @@ impl<'a> ObjectRule<'a> {
     }
 }
 
+/// The table behind an `object` value, or `None` after recording the failure.
+fn object_table(cx: &mut Ctx<'_>, value: Value, path: &str) -> Option<Table> {
+    match value {
+        Value::Table(t) => Some(t),
+        Value::Nil => {
+            cx.fail(path, "is required");
+            None
+        }
+        _ => {
+            cx.fail(path, "must be an object");
+            None
+        }
+    }
+}
+
 async fn check_object(
     cx: &mut Ctx<'_>,
     rule: &ObjectRule<'_>,
@@ -795,13 +823,8 @@ async fn check_object(
 ) -> mlua::Result<Option<Value>> {
     let ObjectRule { fields, strict } = *rule;
     let At { path, depth } = at;
-    let t = match value {
-        Value::Nil => return Ok(required(cx, &path)),
-        Value::Table(t) => t,
-        _ => {
-            cx.fail(&path, "must be an object");
-            return Ok(None);
-        }
+    let Some(t) = object_table(cx, value, &path) else {
+        return Ok(None);
     };
     let out = cx.lua.create_table()?;
     let before = cx.issues.len();
