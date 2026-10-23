@@ -469,7 +469,17 @@ impl Server {
         let handler = &vm.handlers[id];
         let req_table = build_req(&vm.lua, req, &params).map_err(RunError::Script)?;
 
-        match call_handler(vm, handler, req_table, self.per_event_timeout, true).await {
+        match call_handler(
+            vm,
+            handler,
+            req_table,
+            Run {
+                timeout: self.per_event_timeout,
+                in_request: true,
+            },
+        )
+        .await
+        {
             Ok(values) => response_from(values),
             Err(CallError::TimedOut) => Ok(timeout_response()),
             Err(CallError::Aborted(a)) => Ok(abort_response(a)),
@@ -483,7 +493,17 @@ impl Server {
         let vm = checked.vm();
         let handler = &vm.cron_handlers[job.id];
         let timeout = job.timeout.or(self.per_event_timeout);
-        match call_handler(vm, handler, (), timeout, false).await {
+        match call_handler(
+            vm,
+            handler,
+            (),
+            Run {
+                timeout,
+                in_request: false,
+            },
+        )
+        .await
+        {
             Ok(_) => {}
             Err(CallError::TimedOut) => {
                 warn!("cron[{}]: timed out", job.name);
@@ -548,6 +568,13 @@ fn abort_response(a: PendingAbort) -> Response {
     }
 }
 
+/// How `call_handler` runs a handler: its time budget, and whether
+/// `lur.serve.abort` is allowed (only inside an HTTP request).
+struct Run {
+    timeout: Option<Duration>,
+    in_request: bool,
+}
+
 /// Run `handler` in a fresh environment under the two-layer timeout:
 /// the deadline interrupt stops CPU-bound code, `tokio::time::timeout` drops
 /// code parked on async I/O.
@@ -555,9 +582,12 @@ async fn call_handler(
     vm: &Vm,
     handler: &Function,
     args: impl IntoLuaMulti,
-    timeout: Option<Duration>,
-    in_request: bool,
+    run: Run,
 ) -> Result<MultiValue, CallError> {
+    let Run {
+        timeout,
+        in_request,
+    } = run;
     {
         // Drop any abort left by a previous run (e.g. one `pcall` caught).
         let mut abort = vm.abort.lock().expect("abort slot poisoned");
@@ -1061,7 +1091,7 @@ fn index_fn(
 /// `opts.fail_status` (default 400) and `data = issues`. Anything else `try`
 /// raises (bad schema, a validator's real error) propagates unchanged.
 fn valid_fn(lua: &Lua, req: &mlua::Table, query: bool) -> mlua::Result<Value> {
-    use crate::capabilities::serve::{ServeCtx, abort_table, status_arg};
+    use crate::capabilities::serve::{Abort, ServeCtx, abort_table, status_arg};
 
     let fname = if query {
         "req.valid_query"
@@ -1117,7 +1147,15 @@ fn valid_fn(lua: &Lua, req: &mlua::Table, query: bool) -> mlua::Result<Value> {
                 Value::Table(e) => e.get::<Value>("issues")?,
                 _ => Value::Nil,
             };
-            let err = abort_table(&lua, &ctx, fail_status, "validation failed", issues)?;
+            let err = abort_table(
+                &lua,
+                &ctx,
+                Abort {
+                    status: fail_status,
+                    message: "validation failed",
+                    data: issues,
+                },
+            )?;
             Ok((false, Value::Table(err)))
         }
     })?;
@@ -1236,7 +1274,7 @@ fn valid_body_fn(
     state: &Arc<Mutex<BodyStream>>,
     headers: &mlua::Table,
 ) -> mlua::Result<Value> {
-    use crate::capabilities::serve::{ServeCtx, abort_table, status_arg};
+    use crate::capabilities::serve::{Abort, ServeCtx, abort_table, status_arg};
     const F: &str = "req.valid_body";
 
     let ctx = lua
@@ -1299,9 +1337,11 @@ fn valid_body_fn(
                                     let err = abort_table(
                                         &lua,
                                         &ctx,
-                                        400,
-                                        "invalid JSON body",
-                                        Value::Nil,
+                                        Abort {
+                                            status: 400,
+                                            message: "invalid JSON body",
+                                            data: Value::Nil,
+                                        },
                                     )?;
                                     return Ok((false, Value::Table(err)));
                                 }
@@ -1323,7 +1363,15 @@ fn valid_body_fn(
                             }
                             None => Value::Nil,
                         };
-                        let err = abort_table(&lua, &ctx, 415, "unsupported content type", data)?;
+                        let err = abort_table(
+                            &lua,
+                            &ctx,
+                            Abort {
+                                status: 415,
+                                message: "unsupported content type",
+                                data,
+                            },
+                        )?;
                         return Ok((false, Value::Table(err)));
                     }
                 }
@@ -1343,7 +1391,15 @@ fn valid_body_fn(
                 };
                 (fail_status, "validation failed", issues)
             };
-            let err = abort_table(&lua, &ctx, status, message, issues)?;
+            let err = abort_table(
+                &lua,
+                &ctx,
+                Abort {
+                    status,
+                    message,
+                    data: issues,
+                },
+            )?;
             Ok((false, Value::Table(err)))
         }
     })?;
