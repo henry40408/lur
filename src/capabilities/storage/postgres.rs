@@ -19,7 +19,7 @@ use mlua::{Error, Function, Lua, Table, Value};
 use sqlx::postgres::{PgArguments, PgConnectOptions, PgPool, PgPoolOptions, PgRow};
 use sqlx::{Column, Postgres, Row, TypeInfo, ValueRef};
 
-use super::{PurgeClock, Ttl, expiry_at, now_ms};
+use super::{PurgeClock, Ttl, expiry_at, incr_result, now_ms};
 use crate::capabilities::null;
 
 /// SQLSTATE `40001`. Matched by code: the message is localized, the code isn't.
@@ -381,16 +381,7 @@ impl PgBackend {
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| Error::runtime(format!("{voice}: {e}")))?;
-        let n = match row {
-            Some(r) => r
-                .try_get::<i64, usize>(0)
-                .map_err(|e| Error::runtime(format!("{voice}: {e}")))?,
-            None => {
-                return Err(Error::runtime(format!(
-                    "{voice}: existing value is not an integer"
-                )));
-            }
-        };
+        let n = incr_result(row, voice)?;
         self.maybe_purge().await;
         Ok(n)
     }
