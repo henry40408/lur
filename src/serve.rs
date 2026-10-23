@@ -42,7 +42,9 @@ use tokio_util::task::TaskTracker;
 use tracing::{error, info, warn};
 
 use crate::capabilities::raise;
-use crate::capabilities::serve::{AbortSlot, PendingAbort, Registry};
+use crate::capabilities::serve::{
+    Abort, AbortSlot, PendingAbort, Registry, ServeCtx, abort_table, status_arg,
+};
 use crate::runtime::{Deadline, RunError, RuntimeConfig, build_lua};
 
 /// A loaded app: VM pool, route table, cron jobs, and the tokio runtime.
@@ -1086,24 +1088,56 @@ fn index_fn(
     })
 }
 
+/// `ServeCtx` for a `req.valid_*` accessor, or the "only under serve" error.
+fn serve_ctx(lua: &Lua, fname: &str) -> mlua::Result<ServeCtx> {
+    lua.app_data_ref::<ServeCtx>()
+        .map(|c| c.clone())
+        .ok_or_else(|| mlua::Error::runtime(format!("{fname} is only available under `lur serve`")))
+}
+
+/// `opts.fail_status` of `req.valid_*` (default 400).
+fn fail_status_opt(opts: Value, fname: &str) -> mlua::Result<u16> {
+    let opts = match opts {
+        Value::Nil => return Ok(400),
+        Value::Table(o) => o,
+        other => {
+            return Err(mlua::Error::runtime(format!(
+                "{fname}: argument #2 must be table, got {}",
+                other.type_name()
+            )));
+        }
+    };
+    match opts.get::<Value>("fail_status")? {
+        Value::Nil => Ok(400),
+        v => status_arg(&v, fname, "opts.fail_status"),
+    }
+}
+
+/// The `issues` of a failed `lur.validate.try`, or `nil`.
+fn issues_of(error: &Value) -> mlua::Result<Value> {
+    match error {
+        Value::Table(e) => e.get::<Value>("issues"),
+        _ => Ok(Value::Nil),
+    }
+}
+
+/// The `(false, err)` result of a `req.valid_*` call that aborts.
+fn aborted(lua: &Lua, ctx: &ServeCtx, abort: Abort<'_>) -> mlua::Result<(bool, Value)> {
+    let err = abort_table(lua, ctx, abort)?;
+    Ok((false, Value::Table(err)))
+}
+
 /// `req.valid_query(schema, opts?)` / `req.valid_params(schema, opts?)`:
 /// `lur.validate.try` over `req.query` / `req.params`; on issues, abort with
 /// `opts.fail_status` (default 400) and `data = issues`. Anything else `try`
 /// raises (bad schema, a validator's real error) propagates unchanged.
 fn valid_fn(lua: &Lua, req: &mlua::Table, query: bool) -> mlua::Result<Value> {
-    use crate::capabilities::serve::{Abort, ServeCtx, abort_table, status_arg};
-
     let fname = if query {
         "req.valid_query"
     } else {
         "req.valid_params"
     };
-    let ctx = lua
-        .app_data_ref::<ServeCtx>()
-        .map(|c| c.clone())
-        .ok_or_else(|| {
-            mlua::Error::runtime(format!("{fname} is only available under `lur serve`"))
-        })?;
+    let ctx = serve_ctx(lua, fname)?;
     let factory = ctx.factory.clone();
     let try_fn = ctx.try_fn.clone();
     let source: mlua::Table = req.raw_get(if query { "query" } else { "params" })?;
@@ -1119,19 +1153,7 @@ fn valid_fn(lua: &Lua, req: &mlua::Table, query: bool) -> mlua::Result<Value> {
         let source = source.clone();
         let query_all = query_all.clone();
         async move {
-            let fail_status = match opts {
-                Value::Nil => 400,
-                Value::Table(o) => match o.get::<Value>("fail_status")? {
-                    Value::Nil => 400,
-                    v => status_arg(&v, fname, "opts.fail_status")?,
-                },
-                other => {
-                    return Err(mlua::Error::runtime(format!(
-                        "{fname}: argument #2 must be table, got {}",
-                        other.type_name()
-                    )));
-                }
-            };
+            let fail_status = fail_status_opt(opts, fname)?;
 
             // Lists read every value (`query_all`); other fields the last one.
             let input = match &query_all {
@@ -1143,20 +1165,12 @@ fn valid_fn(lua: &Lua, req: &mlua::Table, query: bool) -> mlua::Result<Value> {
             if ok {
                 return Ok((true, value));
             }
-            let issues = match &value {
-                Value::Table(e) => e.get::<Value>("issues")?,
-                _ => Value::Nil,
+            let abort = Abort {
+                status: fail_status,
+                message: "validation failed",
+                data: issues_of(&value)?,
             };
-            let err = abort_table(
-                &lua,
-                &ctx,
-                Abort {
-                    status: fail_status,
-                    message: "validation failed",
-                    data: issues,
-                },
-            )?;
-            Ok((false, Value::Table(err)))
+            aborted(&lua, &ctx, abort)
         }
     })?;
     // Fresh `error(tbl, 0)` wrapper so `pcall` sees the table.
@@ -1267,6 +1281,90 @@ fn form_pairs(
     Ok(parse_query(&String::from_utf8_lossy(&st.body)))
 }
 
+/// What `req.valid_body` reads its body from.
+#[derive(Clone)]
+struct BodyReq {
+    state: Arc<Mutex<BodyStream>>,
+    headers: mlua::Table,
+    decode: Function,
+}
+
+/// The body as `lur.validate.try` input, or the abort that rejects it.
+enum BodyInput {
+    /// `empty_json`: an empty JSON body, which only a `nil`-taking schema accepts.
+    Ready {
+        input: Value,
+        empty_json: bool,
+    },
+    Rejected(Abort<'static>),
+}
+
+impl BodyReq {
+    /// Synchronous on purpose: the body lock must not be held across an await.
+    fn read(&self, lua: &Lua, schema: &Value) -> mlua::Result<BodyInput> {
+        let st = self.state.lock().expect("body stream mutex poisoned");
+        if st.streamed {
+            return Err(mlua::Error::runtime(
+                "req.valid_body is unavailable after req.read(n) consumed part of the body",
+            ));
+        }
+        let mt = media_type(&self.headers)?;
+        match mt.as_deref() {
+            Some(mt) if is_json_type(mt) => json_input(lua, &self.decode, &st.body),
+            Some(FORM_TYPE) => form_input(lua, &st.body, schema),
+            other => unsupported_input(lua, other),
+        }
+    }
+}
+
+fn json_input(lua: &Lua, decode: &Function, body: &[u8]) -> mlua::Result<BodyInput> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(BodyInput::Ready {
+            input: Value::Nil,
+            empty_json: true,
+        });
+    }
+    let raw = lua.create_string(body)?;
+    match decode.call::<Value>(raw) {
+        Ok(input) => Ok(BodyInput::Ready {
+            input,
+            empty_json: false,
+        }),
+        Err(mlua::Error::MemoryError(m)) => Err(mlua::Error::MemoryError(m)),
+        Err(_) => Ok(BodyInput::Rejected(Abort {
+            status: 400,
+            message: "invalid JSON body",
+            data: Value::Nil,
+        })),
+    }
+}
+
+fn form_input(lua: &Lua, body: &[u8], schema: &Value) -> mlua::Result<BodyInput> {
+    let pairs = parse_query(&String::from_utf8_lossy(body));
+    let source = last_table(lua, &pairs)?;
+    let input = feed_lists(lua, source, schema, || all_table(lua, &pairs))?;
+    Ok(BodyInput::Ready {
+        input: Value::Table(input),
+        empty_json: false,
+    })
+}
+
+fn unsupported_input(lua: &Lua, media_type: Option<&str>) -> mlua::Result<BodyInput> {
+    let data = match media_type {
+        Some(mt) => {
+            let data = lua.create_table()?;
+            data.set("content_type", mt)?;
+            Value::Table(data)
+        }
+        None => Value::Nil,
+    };
+    Ok(BodyInput::Rejected(Abort {
+        status: 415,
+        message: "unsupported content type",
+        data,
+    }))
+}
+
 /// `req.valid_body(schema, opts?)`: decode the body by `Content-Type` (JSON or
 /// urlencoded), then `lur.validate.try`; failures abort like `req.valid_query`.
 fn valid_body_fn(
@@ -1274,107 +1372,31 @@ fn valid_body_fn(
     state: &Arc<Mutex<BodyStream>>,
     headers: &mlua::Table,
 ) -> mlua::Result<Value> {
-    use crate::capabilities::serve::{Abort, ServeCtx, abort_table, status_arg};
     const F: &str = "req.valid_body";
 
-    let ctx = lua
-        .app_data_ref::<ServeCtx>()
-        .map(|c| c.clone())
-        .ok_or_else(|| mlua::Error::runtime(format!("{F} is only available under `lur serve`")))?;
+    let ctx = serve_ctx(lua, F)?;
     let factory = ctx.factory.clone();
     let try_fn = ctx.try_fn.clone();
-    let decode: mlua::Function = lua
+    let decode: Function = lua
         .globals()
         .get::<mlua::Table>("lur")?
         .get::<mlua::Table>("json")?
         .get("decode")?;
-    let state = Arc::clone(state);
-    let headers = headers.clone();
+    let body = BodyReq {
+        state: Arc::clone(state),
+        headers: headers.clone(),
+        decode,
+    };
 
     let inner = lua.create_async_function(move |lua, (schema, opts): (Value, Value)| {
         let ctx = ctx.clone();
         let try_fn = try_fn.clone();
-        let decode = decode.clone();
-        let state = Arc::clone(&state);
-        let headers = headers.clone();
+        let body = body.clone();
         async move {
-            let fail_status = match opts {
-                Value::Nil => 400,
-                Value::Table(o) => match o.get::<Value>("fail_status")? {
-                    Value::Nil => 400,
-                    v => status_arg(&v, F, "opts.fail_status")?,
-                },
-                other => {
-                    return Err(mlua::Error::runtime(format!(
-                        "{F}: argument #2 must be table, got {}",
-                        other.type_name()
-                    )));
-                }
-            };
-
-            // Everything before the await is synchronous: the lock must not
-            // be held across it.
-            let (input, empty_json) = {
-                let st = state.lock().expect("body stream mutex poisoned");
-                if st.streamed {
-                    return Err(mlua::Error::runtime(
-                        "req.valid_body is unavailable after req.read(n) consumed part of the body",
-                    ));
-                }
-                let mt = media_type(&headers)?;
-                match mt.as_deref() {
-                    Some(mt) if is_json_type(mt) => {
-                        if st.body.iter().all(u8::is_ascii_whitespace) {
-                            (Value::Nil, true)
-                        } else {
-                            let raw = lua.create_string(&st.body)?;
-                            match decode.call::<Value>(raw) {
-                                Ok(v) => (v, false),
-                                Err(mlua::Error::MemoryError(m)) => {
-                                    return Err(mlua::Error::MemoryError(m));
-                                }
-                                Err(_) => {
-                                    let err = abort_table(
-                                        &lua,
-                                        &ctx,
-                                        Abort {
-                                            status: 400,
-                                            message: "invalid JSON body",
-                                            data: Value::Nil,
-                                        },
-                                    )?;
-                                    return Ok((false, Value::Table(err)));
-                                }
-                            }
-                        }
-                    }
-                    Some(FORM_TYPE) => {
-                        let pairs = parse_query(&String::from_utf8_lossy(&st.body));
-                        let source = last_table(&lua, &pairs)?;
-                        let input = feed_lists(&lua, source, &schema, || all_table(&lua, &pairs))?;
-                        (Value::Table(input), false)
-                    }
-                    _ => {
-                        let data = match &mt {
-                            Some(mt) => {
-                                let data = lua.create_table()?;
-                                data.set("content_type", mt.as_str())?;
-                                Value::Table(data)
-                            }
-                            None => Value::Nil,
-                        };
-                        let err = abort_table(
-                            &lua,
-                            &ctx,
-                            Abort {
-                                status: 415,
-                                message: "unsupported content type",
-                                data,
-                            },
-                        )?;
-                        return Ok((false, Value::Table(err)));
-                    }
-                }
+            let fail_status = fail_status_opt(opts, F)?;
+            let (input, empty_json) = match body.read(&lua, &schema)? {
+                BodyInput::Ready { input, empty_json } => (input, empty_json),
+                BodyInput::Rejected(abort) => return aborted(&lua, &ctx, abort),
             };
 
             let (ok, value): (bool, Value) = try_fn.call_async((schema, input)).await?;
@@ -1382,25 +1404,20 @@ fn valid_body_fn(
                 return Ok((true, value));
             }
             // An empty JSON body is only acceptable to a schema taking `nil`.
-            let (status, message, issues) = if empty_json {
-                (400, "invalid JSON body", Value::Nil)
-            } else {
-                let issues = match &value {
-                    Value::Table(e) => e.get::<Value>("issues")?,
-                    _ => Value::Nil,
-                };
-                (fail_status, "validation failed", issues)
-            };
-            let err = abort_table(
-                &lua,
-                &ctx,
+            let abort = if empty_json {
                 Abort {
-                    status,
-                    message,
-                    data: issues,
-                },
-            )?;
-            Ok((false, Value::Table(err)))
+                    status: 400,
+                    message: "invalid JSON body",
+                    data: Value::Nil,
+                }
+            } else {
+                Abort {
+                    status: fail_status,
+                    message: "validation failed",
+                    data: issues_of(&value)?,
+                }
+            };
+            aborted(&lua, &ctx, abort)
         }
     })?;
     Ok(Value::Function(crate::capabilities::raise::raising(
