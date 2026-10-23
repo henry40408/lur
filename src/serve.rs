@@ -371,52 +371,32 @@ impl Server {
         &self,
         req: Request<Incoming>,
     ) -> Result<HyperResponse<Full<Bytes>>, Infallible> {
-        let method = req.method().as_str().to_owned();
-        let path = req.uri().path().to_owned();
-        let query = req.uri().query().unwrap_or("").to_owned();
-        let headers = req
-            .headers()
-            .iter()
-            .map(|(k, v)| (k.as_str().to_owned(), v.to_str().unwrap_or("").to_owned()))
-            .collect();
-        // `Limited` stops reading at the cap, so an oversized body is never buffered.
-        let limit = self.max_body.unwrap_or(usize::MAX);
-        let body = match Limited::new(req.into_body(), limit).collect().await {
-            Ok(c) => c.to_bytes().to_vec(),
-            Err(e) if e.downcast_ref::<LengthLimitError>().is_some() => {
-                return Ok(to_hyper(oversize_response()));
-            }
-            Err(_) => Vec::new(),
-        };
-
-        let raw = RawRequest {
-            method,
-            path,
-            query,
-            headers,
-            body,
+        let raw = match raw_request_from(req, self.max_body).await {
+            Ok(raw) => raw,
+            Err(response) => return Ok(to_hyper(response)),
         };
         let response = match self.dispatch_async(&raw).await {
-            Ok(r) => r,
-            Err(e) => {
-                error!(
-                    "handler error:\n{}",
-                    crate::diagnostics::render(
-                        &self.source,
-                        &self.chunk_name,
-                        &e.to_string(),
-                        crate::color::stderr_color(),
-                    )
-                );
-                Response {
-                    status: 500,
-                    headers: Vec::new(),
-                    body: b"Internal Server Error".to_vec(),
-                }
-            }
+            Ok(response) => response,
+            Err(e) => self.dispatch_error_response(&e),
         };
-
         Ok(to_hyper(response))
+    }
+
+    fn dispatch_error_response(&self, e: &RunError) -> Response {
+        error!(
+            "handler error:\n{}",
+            crate::diagnostics::render(
+                &self.source,
+                &self.chunk_name,
+                &e.to_string(),
+                crate::color::stderr_color(),
+            )
+        );
+        Response {
+            status: 500,
+            headers: Vec::new(),
+            body: b"Internal Server Error".to_vec(),
+        }
     }
 
     async fn dispatch_async(&self, req: &RawRequest) -> Result<Response, RunError> {
@@ -496,6 +476,37 @@ impl Server {
             }
         }
     }
+}
+
+/// Collects the request parts and body; `Err` carries the response to send instead.
+async fn raw_request_from(
+    req: Request<Incoming>,
+    max_body: Option<usize>,
+) -> Result<RawRequest, Response> {
+    let method = req.method().as_str().to_owned();
+    let path = req.uri().path().to_owned();
+    let query = req.uri().query().unwrap_or("").to_owned();
+    let headers = req
+        .headers()
+        .iter()
+        .map(|(k, v)| (k.as_str().to_owned(), v.to_str().unwrap_or("").to_owned()))
+        .collect();
+    // `Limited` stops reading at the cap, so an oversized body is never buffered.
+    let limit = max_body.unwrap_or(usize::MAX);
+    let body = match Limited::new(req.into_body(), limit).collect().await {
+        Ok(c) => c.to_bytes().to_vec(),
+        Err(e) if e.downcast_ref::<LengthLimitError>().is_some() => {
+            return Err(oversize_response());
+        }
+        Err(_) => Vec::new(),
+    };
+    Ok(RawRequest {
+        method,
+        path,
+        query,
+        headers,
+        body,
+    })
 }
 
 fn to_hyper(response: Response) -> HyperResponse<Full<Bytes>> {
