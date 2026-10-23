@@ -548,46 +548,54 @@ fn render_json(meta: &Meta, items: &[Item]) -> mlua::Result<String> {
             .as_deref()
             .or(item.link.as_deref())
             .ok_or_else(|| Error::runtime(format!("items[{}] needs guid or link", i + 1)))?;
-        let mut o = Map::new();
-        o.insert("id".into(), json!(id));
-        o.insert("title".into(), json!(item.title));
-        if let Some(v) = &item.link {
-            o.insert("url".into(), json!(v));
-        }
-        if let Some(v) = &item.content {
-            o.insert("content_html".into(), json!(v));
-        }
-        if let Some(v) = &item.summary {
-            o.insert("summary".into(), json!(v));
-        }
-        if let Some(ms) = item.date {
-            o.insert("date_published".into(), json!(rfc3339(ms)));
-        }
-        if let Some(ms) = item.updated {
-            o.insert("date_modified".into(), json!(rfc3339(ms)));
-        }
-        if let Some(a) = &item.author {
-            o.insert("authors".into(), json!([{ "name": a }]));
-        }
-        if !item.categories.is_empty() {
-            o.insert("tags".into(), json!(item.categories));
-        }
-        if let Some(e) = &item.enclosure {
-            let mut att = Map::new();
-            att.insert("url".into(), json!(e.url));
-            att.insert(
-                "mime_type".into(),
-                json!(e.mime.as_deref().unwrap_or("application/octet-stream")),
-            );
-            if let Some(n) = e.length {
-                att.insert("size_in_bytes".into(), json!(n));
-            }
-            o.insert("attachments".into(), json!([att]));
-        }
-        out_items.push(serde_json::Value::Object(o));
+        out_items.push(json_item(item, id));
     }
     feed.insert("items".into(), serde_json::Value::Array(out_items));
     serde_json::to_string(&feed).map_err(|e| Error::runtime(e.to_string()))
+}
+
+fn json_item(item: &Item, id: &str) -> serde_json::Value {
+    let mut o = Map::new();
+    o.insert("id".into(), json!(id));
+    o.insert("title".into(), json!(item.title));
+    if let Some(v) = &item.link {
+        o.insert("url".into(), json!(v));
+    }
+    if let Some(v) = &item.content {
+        o.insert("content_html".into(), json!(v));
+    }
+    if let Some(v) = &item.summary {
+        o.insert("summary".into(), json!(v));
+    }
+    if let Some(ms) = item.date {
+        o.insert("date_published".into(), json!(rfc3339(ms)));
+    }
+    if let Some(ms) = item.updated {
+        o.insert("date_modified".into(), json!(rfc3339(ms)));
+    }
+    if let Some(a) = &item.author {
+        o.insert("authors".into(), json!([{ "name": a }]));
+    }
+    if !item.categories.is_empty() {
+        o.insert("tags".into(), json!(item.categories));
+    }
+    if let Some(e) = &item.enclosure {
+        o.insert("attachments".into(), json!([json_attachment(e)]));
+    }
+    serde_json::Value::Object(o)
+}
+
+fn json_attachment(e: &Enclosure) -> Map<String, serde_json::Value> {
+    let mut att = Map::new();
+    att.insert("url".into(), json!(e.url));
+    att.insert(
+        "mime_type".into(),
+        json!(e.mime.as_deref().unwrap_or("application/octet-stream")),
+    );
+    if let Some(n) = e.length {
+        att.insert("size_in_bytes".into(), json!(n));
+    }
+    att
 }
 
 #[cfg(test)]
