@@ -162,112 +162,115 @@ pub fn install(
     registry: Option<&Registry>,
 ) -> Result<(), RunError> {
     let serve = lua.create_table().map_err(RunError::Init)?;
-
-    let abort = match registry {
-        Some(registry) => {
-            let ctx = ServeCtx {
-                slot: registry.abort_slot(),
-                factory: factory.clone(),
-                meta: raise::error_meta(lua).map_err(RunError::Init)?,
-                try_fn: lur
-                    .get::<Table>("validate")
-                    .and_then(|v| v.get::<Function>("try"))
-                    .map_err(RunError::Init)?,
-            };
-            let inner = {
-                let ctx = ctx.clone();
-                lua.create_function(move |lua, (status, message, data): (Value, Value, Value)| {
-                    const F: &str = "lur.serve.abort";
-                    let status = status_arg(&status, F, "argument #1 (status)")?;
-                    let message: mlua::LuaString = argcheck::arg(lua, message, F, 2, "string")?;
-                    let message = message.to_str().map_err(|e| {
-                        mlua::Error::runtime(format!("{F}: argument #2 must be valid UTF-8: {e}"))
-                    })?;
-                    let err = abort_table(lua, &ctx, status, &message, data)?;
-                    Ok((false, Value::Table(err)))
-                })
-                .map_err(RunError::Init)?
-            };
-            let wrapped = raise::raising(&ctx.factory, inner).map_err(RunError::Init)?;
-            lua.set_app_data(ctx);
-            wrapped
-        }
-        None => lua
-            .create_function(|_, _args: (Value, Value, Value)| -> mlua::Result<()> {
-                Err(mlua::Error::RuntimeError(
-                    "lur.serve.abort is only available under `lur serve`".into(),
-                ))
-            })
-            .map_err(RunError::Init)?,
-    };
-    serve.set("abort", abort).map_err(RunError::Init)?;
-
-    let http = match registry {
-        Some(registry) => {
-            let registry = registry.clone();
-            lua.create_function(
-                move |_, (method, path, handler): (String, String, Function)| {
-                    registry
-                        .routes
-                        .lock()
-                        .expect("registry mutex poisoned")
-                        .push(Registration {
-                            method: method.to_uppercase(),
-                            path,
-                            handler,
-                        });
-                    Ok(())
-                },
-            )
-        }
-        None => lua.create_function(|_, _args: (Value, Value, Value)| -> mlua::Result<()> {
-            Err(mlua::Error::RuntimeError(
-                "lur.serve.http is only available under `lur serve`".into(),
-            ))
-        }),
-    }
-    .map_err(RunError::Init)?;
-
-    serve.set("http", http).map_err(RunError::Init)?;
-
-    let cron = match registry {
-        Some(registry) => {
-            let registry = registry.clone();
-            lua.create_function(
-                move |_, (spec, handler, opts): (String, Function, Option<Table>)| {
-                    let (name, overlap, timeout_ms) = match opts {
-                        Some(opts) => (
-                            opts.get::<Option<String>>("name")?,
-                            opts.get::<Option<bool>>("overlap")?.unwrap_or(false),
-                            opts.get::<Option<u64>>("timeout")?,
-                        ),
-                        None => (None, false, None),
-                    };
-                    let name = name.unwrap_or_else(|| format!("cron[{spec}]"));
-                    registry
-                        .crons
-                        .lock()
-                        .expect("registry mutex poisoned")
-                        .push(CronRegistration {
-                            spec,
-                            name,
-                            overlap,
-                            timeout_ms,
-                            handler,
-                        });
-                    Ok(())
-                },
-            )
-        }
-        None => lua.create_function(|_, _args: (Value, Value, Value)| -> mlua::Result<()> {
-            Err(mlua::Error::RuntimeError(
-                "lur.serve.cron is only available under `lur serve`".into(),
-            ))
-        }),
-    }
-    .map_err(RunError::Init)?;
-
-    serve.set("cron", cron).map_err(RunError::Init)?;
+    serve
+        .set(
+            "abort",
+            abort_fn(lua, lur, factory, registry).map_err(RunError::Init)?,
+        )
+        .map_err(RunError::Init)?;
+    serve
+        .set("http", http_fn(lua, registry).map_err(RunError::Init)?)
+        .map_err(RunError::Init)?;
+    serve
+        .set("cron", cron_fn(lua, registry).map_err(RunError::Init)?)
+        .map_err(RunError::Init)?;
     lur.set("serve", serve).map_err(RunError::Init)?;
     Ok(())
+}
+
+/// Stands in for `lur.serve.<name>` in one-shot mode, where there is no
+/// registry to record into.
+fn unavailable_fn(lua: &Lua, name: &str) -> mlua::Result<Function> {
+    let message = format!("lur.serve.{name} is only available under `lur serve`");
+    lua.create_function(move |_, _args: (Value, Value, Value)| -> mlua::Result<()> {
+        Err(mlua::Error::RuntimeError(message.clone()))
+    })
+}
+
+fn abort_fn(
+    lua: &Lua,
+    lur: &Table,
+    factory: &Function,
+    registry: Option<&Registry>,
+) -> mlua::Result<Function> {
+    let Some(registry) = registry else {
+        return unavailable_fn(lua, "abort");
+    };
+    let ctx = ServeCtx {
+        slot: registry.abort_slot(),
+        factory: factory.clone(),
+        meta: raise::error_meta(lua)?,
+        try_fn: lur
+            .get::<Table>("validate")
+            .and_then(|v| v.get::<Function>("try"))?,
+    };
+    let inner = {
+        let ctx = ctx.clone();
+        lua.create_function(move |lua, (status, message, data): (Value, Value, Value)| {
+            const F: &str = "lur.serve.abort";
+            let status = status_arg(&status, F, "argument #1 (status)")?;
+            let message: mlua::LuaString = argcheck::arg(lua, message, F, 2, "string")?;
+            let message = message.to_str().map_err(|e| {
+                mlua::Error::runtime(format!("{F}: argument #2 must be valid UTF-8: {e}"))
+            })?;
+            let err = abort_table(lua, &ctx, status, &message, data)?;
+            Ok((false, Value::Table(err)))
+        })?
+    };
+    let wrapped = raise::raising(&ctx.factory, inner)?;
+    lua.set_app_data(ctx);
+    Ok(wrapped)
+}
+
+fn http_fn(lua: &Lua, registry: Option<&Registry>) -> mlua::Result<Function> {
+    let Some(registry) = registry else {
+        return unavailable_fn(lua, "http");
+    };
+    let registry = registry.clone();
+    lua.create_function(
+        move |_, (method, path, handler): (String, String, Function)| {
+            registry
+                .routes
+                .lock()
+                .expect("registry mutex poisoned")
+                .push(Registration {
+                    method: method.to_uppercase(),
+                    path,
+                    handler,
+                });
+            Ok(())
+        },
+    )
+}
+
+fn cron_fn(lua: &Lua, registry: Option<&Registry>) -> mlua::Result<Function> {
+    let Some(registry) = registry else {
+        return unavailable_fn(lua, "cron");
+    };
+    let registry = registry.clone();
+    lua.create_function(
+        move |_, (spec, handler, opts): (String, Function, Option<Table>)| {
+            let (name, overlap, timeout_ms) = match opts {
+                Some(opts) => (
+                    opts.get::<Option<String>>("name")?,
+                    opts.get::<Option<bool>>("overlap")?.unwrap_or(false),
+                    opts.get::<Option<u64>>("timeout")?,
+                ),
+                None => (None, false, None),
+            };
+            let name = name.unwrap_or_else(|| format!("cron[{spec}]"));
+            registry
+                .crons
+                .lock()
+                .expect("registry mutex poisoned")
+                .push(CronRegistration {
+                    spec,
+                    name,
+                    overlap,
+                    timeout_ms,
+                    handler,
+                });
+            Ok(())
+        },
+    )
 }
