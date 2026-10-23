@@ -84,7 +84,15 @@ fn parse_offset(text: &str) -> Option<FixedOffset> {
 }
 
 fn str_arg(lua: &Lua, value: Value, fname: &str, n: usize) -> mlua::Result<String> {
-    let s: mlua::LuaString = argcheck::arg(lua, value, fname, n, "string")?;
+    let s: mlua::LuaString = argcheck::arg(
+        lua,
+        value,
+        argcheck::ArgSpec {
+            fname,
+            n,
+            expected: "string",
+        },
+    )?;
     s.to_str()
         .map(|s| s.to_string())
         .map_err(|e| Error::runtime(format!("{fname}: {e}")))

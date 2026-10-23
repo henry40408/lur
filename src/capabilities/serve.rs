@@ -215,7 +215,15 @@ fn abort_fn(
         lua.create_function(move |lua, (status, message, data): (Value, Value, Value)| {
             const F: &str = "lur.serve.abort";
             let status = status_arg(&status, F, "argument #1 (status)")?;
-            let message: mlua::LuaString = argcheck::arg(lua, message, F, 2, "string")?;
+            let message: mlua::LuaString = argcheck::arg(
+                lua,
+                message,
+                argcheck::ArgSpec {
+                    fname: F,
+                    n: 2,
+                    expected: "string",
+                },
+            )?;
             let message = message.to_str().map_err(|e| {
                 mlua::Error::runtime(format!("{F}: argument #2 must be valid UTF-8: {e}"))
             })?;

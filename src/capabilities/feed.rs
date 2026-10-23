@@ -76,8 +76,24 @@ fn install_format(
     let f = lua
         .create_function(move |lua, (meta, items, opts): (Value, Value, Value)| {
             let fname = format!("lur.feed.{name}");
-            let meta: Table = argcheck::arg(lua, meta, &fname, 1, "table")?;
-            let items: Table = argcheck::arg(lua, items, &fname, 2, "table")?;
+            let meta: Table = argcheck::arg(
+                lua,
+                meta,
+                argcheck::ArgSpec {
+                    fname: &fname,
+                    n: 1,
+                    expected: "table",
+                },
+            )?;
+            let items: Table = argcheck::arg(
+                lua,
+                items,
+                argcheck::ArgSpec {
+                    fname: &fname,
+                    n: 2,
+                    expected: "table",
+                },
+            )?;
             let skip_invalid = skip_invalid_opt(lua, opts, &fname)?;
             let meta = read_meta(&meta, &fname)?;
             let items = read_items(&items, &fname, skip_invalid)?;
@@ -133,7 +149,16 @@ fn read_meta(t: &Table, fname: &str) -> mlua::Result<Meta> {
 /// `opts.skip_invalid` (third argument): skip items with no usable title
 /// instead of raising.
 fn skip_invalid_opt(lua: &Lua, opts: Value, fname: &str) -> mlua::Result<bool> {
-    let Some(opts) = argcheck::arg::<Option<Table>>(lua, opts, fname, 3, "table")? else {
+    let Some(opts) = argcheck::arg::<Option<Table>>(
+        lua,
+        opts,
+        argcheck::ArgSpec {
+            fname,
+            n: 3,
+            expected: "table",
+        },
+    )?
+    else {
         return Ok(false);
     };
     match opts.get::<Value>("skip_invalid")? {

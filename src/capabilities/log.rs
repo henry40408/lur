@@ -14,7 +14,15 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
         let fname = format!("lur.log.{level}");
         let f = lua
             .create_function(move |lua, msg: Value| {
-                let msg: mlua::LuaString = argcheck::arg(lua, msg, &fname, 1, "string")?;
+                let msg: mlua::LuaString = argcheck::arg(
+                    lua,
+                    msg,
+                    argcheck::ArgSpec {
+                        fname: &fname,
+                        n: 1,
+                        expected: "string",
+                    },
+                )?;
                 // Bytes pass through verbatim; no UTF-8 validation.
                 let mut err = std::io::stderr().lock();
                 let _ = write!(err, "{level}: ");

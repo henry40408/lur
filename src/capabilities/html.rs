@@ -166,7 +166,15 @@ impl UserData for Node {
             this.with_element(|_, el| el.map(|e| e.value().name().to_owned()))
         });
         methods.add_method("attr", |lua, this, name: Value| {
-            let name: mlua::LuaString = argcheck::arg(lua, name, "lur.html.attr", 1, "string")?;
+            let name: mlua::LuaString = argcheck::arg(
+                lua,
+                name,
+                argcheck::ArgSpec {
+                    fname: "lur.html.attr",
+                    n: 1,
+                    expected: "string",
+                },
+            )?;
             let name = name
                 .to_str()
                 .map_err(|e| Error::runtime(format!("lur.html.attr: {e}")))?;
@@ -208,8 +216,15 @@ impl UserData for Node {
 
 /// `node:text({ trim = true })`; returns whether to trim.
 fn text_opts(lua: &Lua, opts: Value) -> mlua::Result<bool> {
-    let Some(opts) =
-        argcheck::arg::<Option<Table>>(lua, opts, "lur.html.text", 1, "string or table")?
+    let Some(opts) = argcheck::arg::<Option<Table>>(
+        lua,
+        opts,
+        argcheck::ArgSpec {
+            fname: "lur.html.text",
+            n: 1,
+            expected: "string or table",
+        },
+    )?
     else {
         return Ok(false);
     };
@@ -224,7 +239,15 @@ fn text_opts(lua: &Lua, opts: Value) -> mlua::Result<bool> {
 }
 
 fn css_arg(lua: &Lua, value: Value, fname: &str) -> mlua::Result<String> {
-    let s: mlua::LuaString = argcheck::arg(lua, value, fname, 1, "string")?;
+    let s: mlua::LuaString = argcheck::arg(
+        lua,
+        value,
+        argcheck::ArgSpec {
+            fname,
+            n: 1,
+            expected: "string",
+        },
+    )?;
     s.to_str()
         .map(|s| s.to_string())
         .map_err(|e| Error::runtime(format!("{fname}: {e}")))
@@ -246,7 +269,15 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     // Input is often a raw HTTP body, so invalid UTF-8 is replaced, not rejected.
     let parse = lua
         .create_function(|lua, text: Value| {
-            let text: mlua::LuaString = argcheck::arg(lua, text, "lur.html.parse", 1, "string")?;
+            let text: mlua::LuaString = argcheck::arg(
+                lua,
+                text,
+                argcheck::ArgSpec {
+                    fname: "lur.html.parse",
+                    n: 1,
+                    expected: "string",
+                },
+            )?;
             let text = String::from_utf8_lossy(&text.as_bytes()).into_owned();
             Ok(parse_document(text))
         })

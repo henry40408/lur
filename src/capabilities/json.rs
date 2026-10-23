@@ -29,7 +29,15 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 
     let decode = lua
         .create_function(|lua, (text, opts): (Value, Value)| {
-            let text: mlua::LuaString = argcheck::arg(lua, text, "lur.json.decode", 1, "string")?;
+            let text: mlua::LuaString = argcheck::arg(
+                lua,
+                text,
+                argcheck::ArgSpec {
+                    fname: "lur.json.decode",
+                    n: 1,
+                    expected: "string",
+                },
+            )?;
             let drop_null = parse_decode_opts(lua, opts, "lur.json.decode", 2)?;
             let parsed: Json = serde_json::from_slice(&text.as_bytes())
                 .map_err(|e| Error::runtime(e.to_string()))?;
@@ -50,7 +58,16 @@ pub(crate) fn parse_decode_opts(
     fname: &str,
     pos: usize,
 ) -> mlua::Result<bool> {
-    let Some(opts) = argcheck::arg::<Option<Table>>(lua, opts, fname, pos, "table")? else {
+    let Some(opts) = argcheck::arg::<Option<Table>>(
+        lua,
+        opts,
+        argcheck::ArgSpec {
+            fname,
+            n: pos,
+            expected: "table",
+        },
+    )?
+    else {
         return Ok(false);
     };
     match opts.get::<Value>("null")? {

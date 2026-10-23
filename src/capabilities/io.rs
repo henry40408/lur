@@ -20,7 +20,15 @@ fn install_stdin(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     // read() → rest of stdin ("" at EOF); read(n) → up to n bytes, nil at EOF.
     let read = lua
         .create_function(|lua, n: Value| {
-            let n: Option<usize> = argcheck::arg(lua, n, "lur.stdin.read", 1, "number")?;
+            let n: Option<usize> = argcheck::arg(
+                lua,
+                n,
+                argcheck::ArgSpec {
+                    fname: "lur.stdin.read",
+                    n: 1,
+                    expected: "number",
+                },
+            )?;
             let stdin = std::io::stdin();
             match n {
                 None => {
@@ -87,7 +95,15 @@ fn install_stdout(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 
     let write = lua
         .create_function(|lua, data: Value| {
-            let data: mlua::LuaString = argcheck::arg(lua, data, "lur.stdout.write", 1, "string")?;
+            let data: mlua::LuaString = argcheck::arg(
+                lua,
+                data,
+                argcheck::ArgSpec {
+                    fname: "lur.stdout.write",
+                    n: 1,
+                    expected: "string",
+                },
+            )?;
             std::io::stdout()
                 .lock()
                 .write_all(&data.as_bytes())
