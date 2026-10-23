@@ -573,40 +573,48 @@ impl<T> Limits<T> {
 }
 
 fn check_int(cx: &mut Ctx<'_>, value: &Value, limits: Limits<i64>, path: &str) -> Option<Value> {
-    let Limits {
-        min,
-        max,
-        default,
-        clamp,
-    } = limits;
     if is_blank(value) {
-        return default_or_required(cx, default.map(|d| Value::Number(d as f64)), path);
+        return default_or_required(cx, limits.default.map(|d| Value::Number(d as f64)), path);
     }
-    let n: i64 = match value {
-        Value::String(s) => match parse_int_str(&s.as_bytes()).map(str::parse::<i64>) {
-            Some(Ok(n)) if n.abs() <= MAX_SAFE_INT => n,
+    let n = parse_int_value(cx, value, path)?;
+    let n = apply_bounds(cx, n, limits, path)?;
+    Some(Value::Number(n as f64))
+}
+
+/// Reads an integer out of a string or number, recording a failure otherwise.
+fn parse_int_value(cx: &mut Ctx<'_>, value: &Value, path: &str) -> Option<i64> {
+    if let Value::String(s) = value {
+        return match parse_int_str(&s.as_bytes()).map(str::parse::<i64>) {
+            Some(Ok(n)) if n.abs() <= MAX_SAFE_INT => Some(n),
             Some(_) => {
                 cx.fail(path, "is out of range (must be within +/-2^53)");
-                return None;
+                None
             }
             None => {
                 cx.fail(path, format!("must be an integer{}", describe(value)));
-                return None;
+                None
             }
-        },
-        v => match lua_number(v) {
-            Some(f) if f.fract() == 0.0 && f.abs() <= MAX_SAFE_INT as f64 => f as i64,
-            Some(f) if f.fract() == 0.0 => {
-                cx.fail(path, "is out of range (must be within +/-2^53)");
-                return None;
-            }
-            _ => {
-                cx.fail(path, "must be an integer");
-                return None;
-            }
-        },
-    };
-    let mut n = n;
+        };
+    }
+    match lua_number(value) {
+        Some(f) if f.fract() == 0.0 && f.abs() <= MAX_SAFE_INT as f64 => Some(f as i64),
+        Some(f) if f.fract() == 0.0 => {
+            cx.fail(path, "is out of range (must be within +/-2^53)");
+            None
+        }
+        _ => {
+            cx.fail(path, "must be an integer");
+            None
+        }
+    }
+}
+
+/// Enforces `min` then `max`; an out-of-range value is clamped or rejected
+/// depending on `clamp`.
+fn apply_bounds(cx: &mut Ctx<'_>, mut n: i64, limits: Limits<i64>, path: &str) -> Option<i64> {
+    let Limits {
+        min, max, clamp, ..
+    } = limits;
     if let Some(lo) = min
         && n < lo
     {
@@ -627,7 +635,7 @@ fn check_int(cx: &mut Ctx<'_>, value: &Value, limits: Limits<i64>, path: &str) -
             return None;
         }
     }
-    Some(Value::Number(n as f64))
+    Some(n)
 }
 
 fn check_number(cx: &mut Ctx<'_>, value: &Value, limits: Limits<f64>, path: &str) -> Option<Value> {
