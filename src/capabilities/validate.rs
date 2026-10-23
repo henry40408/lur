@@ -292,16 +292,7 @@ fn check<'a>(cx: &'a mut Ctx<'_>, node: &'a Node, value: Value, at: At) -> Check
             return Ok(None);
         }
         match node {
-            Node::Func(f) => match f.call_async::<Value>(value).await {
-                Ok(v) => Ok(Some(v)),
-                Err(e) => match validator_message(&e) {
-                    Ok(message) => {
-                        cx.fail(&path, message);
-                        Ok(None)
-                    }
-                    Err(()) => Err(e),
-                },
-            },
+            Node::Func(f) => check_func(cx, f, value, &path).await,
             Node::Optional(inner) => {
                 // `optional` only waives "required"; a `default` still fills.
                 let skip = (inner.is_missing(&value) && !inner.has_default())
@@ -317,51 +308,28 @@ fn check<'a>(cx: &'a mut Ctx<'_>, node: &'a Node, value: Value, at: At) -> Check
                 min_len,
                 max_len,
                 default,
-            } => match value {
-                Value::Nil => match default {
-                    Some(d) => Ok(Some(Value::String(d.clone()))),
-                    None => Ok(required(cx, &path)),
-                },
-                Value::String(s) => {
-                    let ok = check_str(
-                        cx,
-                        &s,
-                        &StrRule {
-                            pattern: pattern.as_ref(),
-                            min_len: *min_len,
-                            max_len: *max_len,
-                        },
-                        &path,
-                    )?;
-                    Ok(ok.then_some(Value::String(s)))
-                }
-                _ => {
-                    cx.fail(&path, "must be a string");
-                    Ok(None)
-                }
-            },
+            } => {
+                let rule = StrRule {
+                    pattern: pattern.as_ref(),
+                    min_len: *min_len,
+                    max_len: *max_len,
+                    default: default.as_ref(),
+                };
+                check_str_node(cx, &rule, value, &path)
+            }
             Node::Int {
                 min,
                 max,
                 default,
                 clamp,
             } => {
-                if node.is_missing(&value) {
-                    return Ok(match default {
-                        Some(d) => Some(Value::Number(*d as f64)),
-                        None => required(cx, &path),
-                    });
-                }
-                Ok(check_int(
-                    cx,
-                    &value,
-                    Limits {
-                        min: *min,
-                        max: *max,
-                        clamp: *clamp,
-                    },
-                    &path,
-                ))
+                let limits = Limits {
+                    min: *min,
+                    max: *max,
+                    default: *default,
+                    clamp: *clamp,
+                };
+                Ok(check_int(cx, &value, limits, &path))
             }
             Node::Number {
                 min,
@@ -369,58 +337,16 @@ fn check<'a>(cx: &'a mut Ctx<'_>, node: &'a Node, value: Value, at: At) -> Check
                 default,
                 clamp,
             } => {
-                if node.is_missing(&value) {
-                    return Ok(match default {
-                        Some(d) => Some(Value::Number(*d)),
-                        None => required(cx, &path),
-                    });
-                }
-                Ok(check_number(
-                    cx,
-                    &value,
-                    Limits {
-                        min: *min,
-                        max: *max,
-                        clamp: *clamp,
-                    },
-                    &path,
-                ))
+                let limits = Limits {
+                    min: *min,
+                    max: *max,
+                    default: *default,
+                    clamp: *clamp,
+                };
+                Ok(check_number(cx, &value, limits, &path))
             }
-            Node::Bool { default } => {
-                if node.is_missing(&value) {
-                    return Ok(match default {
-                        Some(d) => Some(Value::Boolean(*d)),
-                        None => required(cx, &path),
-                    });
-                }
-                Ok(match &value {
-                    Value::Boolean(_) => Some(value),
-                    Value::String(s) if &*s.as_bytes() == b"true" => Some(Value::Boolean(true)),
-                    Value::String(s) if &*s.as_bytes() == b"false" => Some(Value::Boolean(false)),
-                    other => {
-                        let got = describe(other);
-                        cx.fail(&path, format!("must be a boolean{got}"));
-                        None
-                    }
-                })
-            }
-            Node::OneOf(options) => {
-                if value.is_nil() {
-                    return Ok(required(cx, &path));
-                }
-                let hit = options.iter().any(|lit| match (lit, &value) {
-                    (Lit::Str(a), Value::String(b)) => a.as_slice() == &*b.as_bytes(),
-                    (Lit::Bool(a), Value::Boolean(b)) => a == b,
-                    (Lit::Num(a), v) => lua_number(v) == Some(*a),
-                    _ => false,
-                });
-                if hit {
-                    Ok(Some(value))
-                } else {
-                    cx.fail(&path, format!("must be one of: {}", list_options(options)));
-                    Ok(None)
-                }
-            }
+            Node::Bool { default } => Ok(check_bool(cx, *default, value, &path)),
+            Node::OneOf(options) => Ok(check_one_of(cx, options, value, &path)),
             Node::List {
                 item,
                 min_items,
@@ -465,6 +391,97 @@ fn required(cx: &mut Ctx<'_>, path: &str) -> Option<Value> {
     None
 }
 
+/// `nil` (and `""` for scalars parsed from text) counts as not provided.
+fn is_blank(value: &Value) -> bool {
+    match value {
+        Value::Nil => true,
+        Value::String(s) => s.as_bytes().is_empty(),
+        _ => false,
+    }
+}
+
+/// The node's `default` for a missing value, or an "is required" issue.
+fn default_or_required(cx: &mut Ctx<'_>, default: Option<Value>, path: &str) -> Option<Value> {
+    match default {
+        Some(d) => Some(d),
+        None => required(cx, path),
+    }
+}
+
+async fn check_func(
+    cx: &mut Ctx<'_>,
+    f: &Function,
+    value: Value,
+    path: &str,
+) -> mlua::Result<Option<Value>> {
+    match f.call_async::<Value>(value).await {
+        Ok(v) => Ok(Some(v)),
+        Err(e) => match validator_message(&e) {
+            Ok(message) => {
+                cx.fail(path, message);
+                Ok(None)
+            }
+            Err(()) => Err(e),
+        },
+    }
+}
+
+fn check_str_node(
+    cx: &mut Ctx<'_>,
+    rule: &StrRule<'_>,
+    value: Value,
+    path: &str,
+) -> mlua::Result<Option<Value>> {
+    match value {
+        Value::Nil => Ok(default_or_required(
+            cx,
+            rule.default.map(|d| Value::String(d.clone())),
+            path,
+        )),
+        Value::String(s) => {
+            let ok = check_str(cx, &s, rule, path)?;
+            Ok(ok.then_some(Value::String(s)))
+        }
+        _ => {
+            cx.fail(path, "must be a string");
+            Ok(None)
+        }
+    }
+}
+
+fn check_bool(cx: &mut Ctx<'_>, default: Option<bool>, value: Value, path: &str) -> Option<Value> {
+    if is_blank(&value) {
+        return default_or_required(cx, default.map(Value::Boolean), path);
+    }
+    match &value {
+        Value::Boolean(_) => Some(value),
+        Value::String(s) if &*s.as_bytes() == b"true" => Some(Value::Boolean(true)),
+        Value::String(s) if &*s.as_bytes() == b"false" => Some(Value::Boolean(false)),
+        other => {
+            let got = describe(other);
+            cx.fail(path, format!("must be a boolean{got}"));
+            None
+        }
+    }
+}
+
+fn check_one_of(cx: &mut Ctx<'_>, options: &[Lit], value: Value, path: &str) -> Option<Value> {
+    if value.is_nil() {
+        return required(cx, path);
+    }
+    let hit = options.iter().any(|lit| match (lit, &value) {
+        (Lit::Str(a), Value::String(b)) => a.as_slice() == &*b.as_bytes(),
+        (Lit::Bool(a), Value::Boolean(b)) => a == b,
+        (Lit::Num(a), v) => lua_number(v) == Some(*a),
+        _ => false,
+    });
+    if hit {
+        return Some(value);
+    }
+    cx.fail(path, format!("must be one of: {}", list_options(options)));
+    None
+}
+
 /// ` (got "abc")` for string input, nothing otherwise.
 fn describe(value: &Value) -> String {
     match value {
@@ -497,6 +514,7 @@ struct StrRule<'a> {
     pattern: Option<&'a mlua::LuaString>,
     min_len: Option<usize>,
     max_len: Option<usize>,
+    default: Option<&'a mlua::LuaString>,
 }
 
 fn check_str(
@@ -509,6 +527,7 @@ fn check_str(
         pattern,
         min_len,
         max_len,
+        ..
     } = *rule;
     let mut ok = true;
     if min_len.is_some() || max_len.is_some() {
@@ -542,11 +561,20 @@ fn check_str(
 struct Limits<T> {
     min: Option<T>,
     max: Option<T>,
+    default: Option<T>,
     clamp: bool,
 }
 
 fn check_int(cx: &mut Ctx<'_>, value: &Value, limits: Limits<i64>, path: &str) -> Option<Value> {
-    let Limits { min, max, clamp } = limits;
+    let Limits {
+        min,
+        max,
+        default,
+        clamp,
+    } = limits;
+    if is_blank(value) {
+        return default_or_required(cx, default.map(|d| Value::Number(d as f64)), path);
+    }
     let n: i64 = match value {
         Value::String(s) => match parse_int_str(&s.as_bytes()).map(str::parse::<i64>) {
             Some(Ok(n)) if n.abs() <= MAX_SAFE_INT => n,
@@ -596,7 +624,15 @@ fn check_int(cx: &mut Ctx<'_>, value: &Value, limits: Limits<i64>, path: &str) -
 }
 
 fn check_number(cx: &mut Ctx<'_>, value: &Value, limits: Limits<f64>, path: &str) -> Option<Value> {
-    let Limits { min, max, clamp } = limits;
+    let Limits {
+        min,
+        max,
+        default,
+        clamp,
+    } = limits;
+    if is_blank(value) {
+        return default_or_required(cx, default.map(Value::Number), path);
+    }
     let parsed = match value {
         Value::String(s) => parse_float_str(&s.as_bytes()),
         v => lua_number(v).filter(|n| n.is_finite()),
