@@ -278,14 +278,15 @@ fn looks_like_position(s: &str) -> bool {
     }
 }
 
-fn check<'a>(
-    cx: &'a mut Ctx<'_>,
-    node: &'a Node,
-    value: Value,
+/// Where a value sits: its path for messages and its nesting depth.
+struct At {
     path: String,
     depth: usize,
-) -> Checked<'a> {
+}
+
+fn check<'a>(cx: &'a mut Ctx<'_>, node: &'a Node, value: Value, at: At) -> Checked<'a> {
     Box::pin(async move {
+        let At { path, depth } = at;
         if depth > MAX_DEPTH {
             cx.fail(&path, "is nested too deeply");
             return Ok(None);
@@ -308,7 +309,7 @@ fn check<'a>(
                 if skip {
                     Ok(Some(Value::Nil))
                 } else {
-                    check(cx, inner, value, path, depth).await
+                    check(cx, inner, value, At { path, depth }).await
                 }
             }
             Node::Str {
@@ -322,7 +323,16 @@ fn check<'a>(
                     None => Ok(required(cx, &path)),
                 },
                 Value::String(s) => {
-                    let ok = check_str(cx, &s, pattern.as_ref(), *min_len, *max_len, &path)?;
+                    let ok = check_str(
+                        cx,
+                        &s,
+                        &StrRule {
+                            pattern: pattern.as_ref(),
+                            min_len: *min_len,
+                            max_len: *max_len,
+                        },
+                        &path,
+                    )?;
                     Ok(ok.then_some(Value::String(s)))
                 }
                 _ => {
@@ -342,7 +352,16 @@ fn check<'a>(
                         None => required(cx, &path),
                     });
                 }
-                Ok(check_int(cx, &value, *min, *max, *clamp, &path))
+                Ok(check_int(
+                    cx,
+                    &value,
+                    Limits {
+                        min: *min,
+                        max: *max,
+                        clamp: *clamp,
+                    },
+                    &path,
+                ))
             }
             Node::Number {
                 min,
@@ -356,7 +375,16 @@ fn check<'a>(
                         None => required(cx, &path),
                     });
                 }
-                Ok(check_number(cx, &value, *min, *max, *clamp, &path))
+                Ok(check_number(
+                    cx,
+                    &value,
+                    Limits {
+                        min: *min,
+                        max: *max,
+                        clamp: *clamp,
+                    },
+                    &path,
+                ))
             }
             Node::Bool { default } => {
                 if node.is_missing(&value) {
@@ -397,9 +425,20 @@ fn check<'a>(
                 item,
                 min_items,
                 max_items,
-            } => check_list(cx, item, *min_items, *max_items, value, path, depth).await,
+            } => {
+                let rule = ListRule {
+                    item,
+                    min_items: *min_items,
+                    max_items: *max_items,
+                };
+                check_list(cx, &rule, value, At { path, depth }).await
+            }
             Node::Object { fields, strict } => {
-                check_object(cx, fields, *strict, value, path, depth).await
+                let rule = ObjectRule {
+                    fields,
+                    strict: *strict,
+                };
+                check_object(cx, &rule, value, At { path, depth }).await
             }
         }
     })
@@ -453,14 +492,24 @@ fn list_options(options: &[Lit]) -> String {
     out
 }
 
+/// Constraints of a `str` node, borrowed from it.
+struct StrRule<'a> {
+    pattern: Option<&'a mlua::LuaString>,
+    min_len: Option<usize>,
+    max_len: Option<usize>,
+}
+
 fn check_str(
     cx: &mut Ctx<'_>,
     s: &mlua::LuaString,
-    pattern: Option<&mlua::LuaString>,
-    min_len: Option<usize>,
-    max_len: Option<usize>,
+    rule: &StrRule<'_>,
     path: &str,
 ) -> mlua::Result<bool> {
+    let StrRule {
+        pattern,
+        min_len,
+        max_len,
+    } = *rule;
     let mut ok = true;
     if min_len.is_some() || max_len.is_some() {
         let len = String::from_utf8_lossy(&s.as_bytes()).chars().count();
@@ -487,14 +536,17 @@ fn check_str(
     Ok(ok)
 }
 
-fn check_int(
-    cx: &mut Ctx<'_>,
-    value: &Value,
-    min: Option<i64>,
-    max: Option<i64>,
+/// Bounds of an `int` or `number` node; `clamp` pulls an out-of-range value
+/// to the bound instead of failing.
+#[derive(Clone, Copy)]
+struct Limits<T> {
+    min: Option<T>,
+    max: Option<T>,
     clamp: bool,
-    path: &str,
-) -> Option<Value> {
+}
+
+fn check_int(cx: &mut Ctx<'_>, value: &Value, limits: Limits<i64>, path: &str) -> Option<Value> {
+    let Limits { min, max, clamp } = limits;
     let n: i64 = match value {
         Value::String(s) => match parse_int_str(&s.as_bytes()).map(str::parse::<i64>) {
             Some(Ok(n)) if n.abs() <= MAX_SAFE_INT => n,
@@ -543,14 +595,8 @@ fn check_int(
     Some(Value::Number(n as f64))
 }
 
-fn check_number(
-    cx: &mut Ctx<'_>,
-    value: &Value,
-    min: Option<f64>,
-    max: Option<f64>,
-    clamp: bool,
-    path: &str,
-) -> Option<Value> {
+fn check_number(cx: &mut Ctx<'_>, value: &Value, limits: Limits<f64>, path: &str) -> Option<Value> {
+    let Limits { min, max, clamp } = limits;
     let parsed = match value {
         Value::String(s) => parse_float_str(&s.as_bytes()),
         v => lua_number(v).filter(|n| n.is_finite()),
@@ -602,15 +648,25 @@ fn sequence(t: &Table) -> mlua::Result<Option<Vec<Value>>> {
         .map(Some)
 }
 
-async fn check_list(
-    cx: &mut Ctx<'_>,
-    item: &Node,
+/// Constraints of a `list` node, borrowed from it.
+struct ListRule<'a> {
+    item: &'a Node,
     min_items: Option<usize>,
     max_items: Option<usize>,
+}
+
+async fn check_list(
+    cx: &mut Ctx<'_>,
+    rule: &ListRule<'_>,
     value: Value,
-    path: String,
-    depth: usize,
+    at: At,
 ) -> mlua::Result<Option<Value>> {
+    let ListRule {
+        item,
+        min_items,
+        max_items,
+    } = *rule;
+    let At { path, depth } = at;
     let items = match &value {
         Value::Nil => return Ok(required(cx, &path)),
         Value::Table(t) => sequence(t)?,
@@ -639,7 +695,16 @@ async fn check_list(
         if cx.full() {
             break;
         }
-        if let Some(v) = check(cx, item, v, child_index(&path, i + 1), depth + 1).await?
+        if let Some(v) = check(
+            cx,
+            item,
+            v,
+            At {
+                path: child_index(&path, i + 1),
+                depth: depth + 1,
+            },
+        )
+        .await?
             && !v.is_nil()
         {
             n += 1;
@@ -649,14 +714,20 @@ async fn check_list(
     Ok((cx.issues.len() == before && !cx.truncated).then_some(Value::Table(out)))
 }
 
+/// Constraints of an `object` node, borrowed from it.
+struct ObjectRule<'a> {
+    fields: &'a [(String, Arc<Node>)],
+    strict: bool,
+}
+
 async fn check_object(
     cx: &mut Ctx<'_>,
-    fields: &[(String, Arc<Node>)],
-    strict: bool,
+    rule: &ObjectRule<'_>,
     value: Value,
-    path: String,
-    depth: usize,
+    at: At,
 ) -> mlua::Result<Option<Value>> {
+    let ObjectRule { fields, strict } = *rule;
+    let At { path, depth } = at;
     let t = match value {
         Value::Nil => return Ok(required(cx, &path)),
         Value::Table(t) => t,
@@ -673,7 +744,16 @@ async fn check_object(
         }
         let raw: Value = absent_if_null(node, t.raw_get(name.as_str())?);
         let at = child_key(&path, name);
-        if let Some(v) = check(cx, node, raw, at, depth + 1).await?
+        if let Some(v) = check(
+            cx,
+            node,
+            raw,
+            At {
+                path: at,
+                depth: depth + 1,
+            },
+        )
+        .await?
             && !v.is_nil()
         {
             out.raw_set(name.as_str(), v)?;
@@ -1140,7 +1220,11 @@ pub fn install(lua: &Lua, lur: &Table, factory: &Function) -> Result<(), RunErro
                     truncated: false,
                 };
                 let value = absent_if_null(&node, value);
-                let out = check(&mut cx, &node, value, String::new(), 0).await?;
+                let root = At {
+                    path: String::new(),
+                    depth: 0,
+                };
+                let out = check(&mut cx, &node, value, root).await?;
                 match out {
                     Some(v) if cx.issues.is_empty() => Ok((true, v)),
                     _ => Ok((false, Value::Table(build_error(&lua, &meta, &cx)?))),
