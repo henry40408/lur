@@ -64,16 +64,22 @@ pub(crate) fn status_arg(value: &Value, fname: &str, what: &str) -> mlua::Result
     }
 }
 
+/// What `lur.serve.abort` was asked to send.
+pub(crate) struct Abort<'a> {
+    pub status: u16,
+    pub message: &'a str,
+    pub data: Value,
+}
+
 /// Stash the response and build the error table to raise. `data` must be
 /// JSON-encodable (checked here, so a bad value is an ordinary error at the
 /// call site rather than a surprise when the response is written).
-pub(crate) fn abort_table(
-    lua: &Lua,
-    ctx: &ServeCtx,
-    status: u16,
-    message: &str,
-    data: Value,
-) -> mlua::Result<Table> {
+pub(crate) fn abort_table(lua: &Lua, ctx: &ServeCtx, abort: Abort<'_>) -> mlua::Result<Table> {
+    let Abort {
+        status,
+        message,
+        data,
+    } = abort;
     let in_request = ctx.slot.lock().expect("abort slot poisoned").in_request;
     if !in_request {
         return Err(mlua::Error::runtime(
@@ -213,7 +219,12 @@ fn abort_fn(
             let message = message.to_str().map_err(|e| {
                 mlua::Error::runtime(format!("{F}: argument #2 must be valid UTF-8: {e}"))
             })?;
-            let err = abort_table(lua, &ctx, status, &message, data)?;
+            let abort = Abort {
+                status,
+                message: &message,
+                data,
+            };
+            let err = abort_table(lua, &ctx, abort)?;
             Ok((false, Value::Table(err)))
         })?
     };
