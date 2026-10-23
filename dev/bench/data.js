@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792739558390,
+  "lastUpdate": 1792740252206,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -8477,6 +8477,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1370119,
             "range": "± 47153",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a1a44c077e59784dd74762352397a947c2409c9d",
+          "message": "refactor(diagnostics): split caret padding and traceback out of render (#220)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-23T15:17:57+08:00",
+          "tree_id": "9ea06c8e598edee72afff372a21f8c87d204c30a",
+          "url": "https://github.com/henry40408/lur/commit/a1a44c077e59784dd74762352397a947c2409c9d"
+        },
+        "date": 1792740251741,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 389628,
+            "range": "± 7584",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5943,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 185929,
+            "range": "± 717",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 20609073,
+            "range": "± 274711",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3313893,
+            "range": "± 24848",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1837296,
+            "range": "± 20535",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 2042281,
+            "range": "± 20290",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2188642,
+            "range": "± 39009",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1301576,
+            "range": "± 11493",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1434573,
+            "range": "± 17050",
             "unit": "ns/iter"
           }
         ]
