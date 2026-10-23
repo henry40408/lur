@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792761303895,
+  "lastUpdate": 1792762922239,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -9233,6 +9233,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1422790,
             "range": "± 16953",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5df4dc6fc2c455693a09520a14cd4108c05264b9",
+          "message": "chore(deps): bump rust-toolchain from 1.99.0 to 1.99.1 (#182)\n\nBumps [rust-toolchain](https://github.com/rust-lang/rust) from 1.99.0 to 1.99.1.\n- [Release notes](https://github.com/rust-lang/rust/releases)\n- [Changelog](https://github.com/rust-lang/rust/blob/main/RELEASES.md)\n- [Commits](https://github.com/rust-lang/rust/compare/1.99.0...1.99.1)\n\n---\nupdated-dependencies:\n- dependency-name: rust-toolchain\n  dependency-version: 1.99.1\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nCo-authored-by: Heng-Yi Wu <2316687+henry40408@users.noreply.github.com>",
+          "timestamp": "2026-10-23T21:36:29+08:00",
+          "tree_id": "27f511ed517dadeb58fdd393f9c21ef77a806127",
+          "url": "https://github.com/henry40408/lur/commit/5df4dc6fc2c455693a09520a14cd4108c05264b9"
+        },
+        "date": 1792762921705,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 286552,
+            "range": "± 11388",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4305,
+            "range": "± 145",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 146306,
+            "range": "± 1083",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 15795676,
+            "range": "± 503006",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 2626120,
+            "range": "± 8983",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1442179,
+            "range": "± 18366",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1563837,
+            "range": "± 16893",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2194525,
+            "range": "± 43029",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1089518,
+            "range": "± 21197",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1174826,
+            "range": "± 23824",
             "unit": "ns/iter"
           }
         ]
