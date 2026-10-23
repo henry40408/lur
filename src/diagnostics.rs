@@ -65,9 +65,21 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> S
     let pad = " ".repeat(gutter.len());
     let _ = writeln!(out, "{g}{pad} |{r}");
     let _ = writeln!(out, "{g}{gutter} |{r} {src_line}");
-    // Caret under `col`, else the first non-whitespace char. The pad keeps the
-    // prefix's tabs and turns every other char into one space, so the caret
-    // lines up at the terminal's tab stops and past multibyte chars.
+    let caret_pad = caret_padding(src_line, col);
+    let _ = writeln!(out, "{g}{pad} |{r} {caret_pad}{e}^{r}");
+
+    if let Some(tb) = traceback {
+        push_traceback(&mut out, tb);
+    }
+
+    out.trim_end().to_string()
+}
+
+/// Whitespace that puts a caret under `col`, else under the first
+/// non-whitespace char. It keeps the prefix's tabs and turns every other char
+/// into one space, so the caret lines up at the terminal's tab stops and past
+/// multibyte chars.
+fn caret_padding(src_line: &str, col: Option<usize>) -> String {
     let prefix_end = match col {
         Some(c) => src_line
             .char_indices()
@@ -75,28 +87,28 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> S
             .map_or(src_line.len(), |(i, _)| i),
         None => src_line.len() - src_line.trim_start().len(),
     };
-    let caret_pad: String = src_line[..prefix_end]
+    src_line[..prefix_end]
         .chars()
         .map(|ch| if ch == '\t' { '\t' } else { ' ' })
+        .collect()
+}
+
+/// Append the traceback without blank lines or bare `[C]: in ?` frames, and
+/// nothing at all when no frame is left.
+fn push_traceback(out: &mut String, traceback: &str) {
+    let kept: Vec<&str> = traceback
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter(|l| l.trim() != "[C]: in ?")
         .collect();
-    let _ = writeln!(out, "{g}{pad} |{r} {caret_pad}{e}^{r}");
-
-    if let Some(tb) = traceback {
-        let kept: Vec<&str> = tb
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .filter(|l| l.trim() != "[C]: in ?")
-            .collect();
-        if !kept.is_empty() {
-            out.push_str("stack traceback:\n");
-            for l in kept {
-                out.push_str(l);
-                out.push('\n');
-            }
-        }
+    if kept.is_empty() {
+        return;
     }
-
-    out.trim_end().to_string()
+    out.push_str("stack traceback:\n");
+    for l in kept {
+        out.push_str(l);
+        out.push('\n');
+    }
 }
 
 /// Parse `<chunk_name>:<line>[:<col>]: <message>`, anchored on `chunk_name` so
