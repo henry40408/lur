@@ -390,64 +390,87 @@ fn map_opts(opts: Value) -> mlua::Result<MapOpts> {
 fn map_fn(lua: &Lua, limits: &Limits, sentinel: &Arc<raise::Sentinel>) -> mlua::Result<Function> {
     let limits = limits.clone();
     let sentinel = Arc::clone(sentinel);
-    lua.create_async_function(move |lua, (list, func, opts): (Value, Value, Value)| {
-        let global = limits.sem.clone();
-        let cap = limits.cap;
+    lua.create_async_function(move |lua, args: (Value, Value, Value)| {
+        let limits = limits.clone();
         let sentinel = sentinel.clone();
-        async move {
-            let list: Table = argcheck::arg(
-                &lua,
-                list,
-                argcheck::ArgSpec {
-                    fname: MAP,
-                    n: 1,
-                    expected: "table",
-                },
-            )?;
-            let func: Function = argcheck::arg(
-                &lua,
-                func,
-                argcheck::ArgSpec {
-                    fname: MAP,
-                    n: 2,
-                    expected: "function",
-                },
-            )?;
-            let MapOpts { limit, drop_errors } = map_opts(opts)?;
-            let items = array_items(&list)?.ok_or_else(|| {
-                mlua::Error::RuntimeError(format!(
-                    "{MAP}: argument #1 must be an array, got a table with holes or non-array keys"
-                ))
-            })?;
-            let window = limit
-                .map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX))
-                .min(cap);
-            let mut slots: Vec<Option<Value>> = vec![None; items.len()];
-            let failed = drive(
-                items,
-                window,
-                |i, item| map_task(func.clone(), item, i + 1, global.clone()),
-                |i, result| match result {
-                    Ok(v) => {
-                        slots[i] = Some(v);
-                        ControlFlow::Continue(())
-                    }
-                    Err(e) if !drop_errors => ControlFlow::Break(fail(&lua, e)),
-                    Err(e) => {
-                        raise::recover(&lua, &e);
-                        ControlFlow::Continue(())
-                    }
-                },
-            )
-            .await;
-            if let Some(f) = failed {
-                return outcome(&sentinel, f);
-            }
-            let arr = lua.create_table()?;
-            for (n, v) in slots.into_iter().flatten().enumerate() {
-                arr.set(n + 1, v)?;
-            }
-            Ok(Value::Table(arr))
-        }
+        async move { run_map(&lua, &limits, &sentinel, args).await }
     })
+}
+
+/// A checked `map` call: the array's items, the mapper and the options.
+struct MapCall {
+    items: Vec<Value>,
+    func: Function,
+    opts: MapOpts,
+}
+
+fn map_call(lua: &Lua, args: (Value, Value, Value)) -> mlua::Result<MapCall> {
+    let (list, func, opts) = args;
+    let list: Table = argcheck::arg(
+        lua,
+        list,
+        argcheck::ArgSpec {
+            fname: MAP,
+            n: 1,
+            expected: "table",
+        },
+    )?;
+    let func: Function = argcheck::arg(
+        lua,
+        func,
+        argcheck::ArgSpec {
+            fname: MAP,
+            n: 2,
+            expected: "function",
+        },
+    )?;
+    let opts = map_opts(opts)?;
+    let items = array_items(&list)?.ok_or_else(|| {
+        mlua::Error::RuntimeError(format!(
+            "{MAP}: argument #1 must be an array, got a table with holes or non-array keys"
+        ))
+    })?;
+    Ok(MapCall { items, func, opts })
+}
+
+async fn run_map(
+    lua: &Lua,
+    limits: &Limits,
+    sentinel: &raise::Sentinel,
+    args: (Value, Value, Value),
+) -> mlua::Result<Value> {
+    let MapCall {
+        items,
+        func,
+        opts: MapOpts { limit, drop_errors },
+    } = map_call(lua, args)?;
+    let window = limit
+        .map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX))
+        .min(limits.cap);
+    let mut slots: Vec<Option<Value>> = vec![None; items.len()];
+    let failed = drive(
+        items,
+        window,
+        |i, item| map_task(func.clone(), item, i + 1, limits.sem.clone()),
+        |i, result| match result {
+            Ok(v) => {
+                slots[i] = Some(v);
+                ControlFlow::Continue(())
+            }
+            Err(e) if !drop_errors => ControlFlow::Break(fail(lua, e)),
+            Err(e) => {
+                raise::recover(lua, &e);
+                ControlFlow::Continue(())
+            }
+        },
+    )
+    .await;
+    if let Some(f) = failed {
+        return outcome(sentinel, f);
+    }
+    let arr = lua.create_table()?;
+    for (n, v) in slots.into_iter().flatten().enumerate() {
+        arr.set(n + 1, v)?;
+    }
+    Ok(Value::Table(arr))
 }
