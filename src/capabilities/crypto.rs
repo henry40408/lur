@@ -66,96 +66,52 @@ fn install_hashes(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
     Ok(())
 }
 
+/// One HMAC function: `(key, msg)` in, raw MAC bytes out.
+fn hmac_fn<D: hmac::EagerHash>(lua: &Lua, fname: &'static str) -> Result<mlua::Function, RunError> {
+    lua.create_function(move |lua, (key, msg): (Value, Value)| {
+        let key: mlua::LuaString = argcheck::arg(
+            lua,
+            key,
+            argcheck::ArgSpec {
+                fname,
+                n: 1,
+                expected: "string",
+            },
+        )?;
+        let msg: mlua::LuaString = argcheck::arg(
+            lua,
+            msg,
+            argcheck::ArgSpec {
+                fname,
+                n: 2,
+                expected: "string",
+            },
+        )?;
+        let mut mac = <Hmac<D> as KeyInit>::new_from_slice(&key.as_bytes())
+            .map_err(|e| Error::runtime(format!("{fname}: {e}")))?;
+        mac.update(&msg.as_bytes());
+        lua.create_string(mac.finalize().into_bytes().as_slice())
+    })
+    .map_err(RunError::Init)
+}
+
 /// `lur.crypto.hmac_sha256` / `hmac_sha512` / `hmac_sha1`.
 fn install_hmac(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
-    let hmac_sha256 = lua
-        .create_function(|lua, (key, msg): (Value, Value)| {
-            let key: mlua::LuaString = argcheck::arg(
-                lua,
-                key,
-                argcheck::ArgSpec {
-                    fname: "lur.crypto.hmac_sha256",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
-            let msg: mlua::LuaString = argcheck::arg(
-                lua,
-                msg,
-                argcheck::ArgSpec {
-                    fname: "lur.crypto.hmac_sha256",
-                    n: 2,
-                    expected: "string",
-                },
-            )?;
-            let mut mac = Hmac::<Sha256>::new_from_slice(&key.as_bytes())
-                .map_err(|e| Error::runtime(format!("lur.crypto.hmac_sha256: {e}")))?;
-            mac.update(&msg.as_bytes());
-            lua.create_string(mac.finalize().into_bytes().as_slice())
-        })
+    crypto
+        .set(
+            "hmac_sha256",
+            hmac_fn::<Sha256>(lua, "lur.crypto.hmac_sha256")?,
+        )
         .map_err(RunError::Init)?;
     crypto
-        .set("hmac_sha256", hmac_sha256)
-        .map_err(RunError::Init)?;
-
-    let hmac_sha512 = lua
-        .create_function(|lua, (key, msg): (Value, Value)| {
-            let key: mlua::LuaString = argcheck::arg(
-                lua,
-                key,
-                argcheck::ArgSpec {
-                    fname: "lur.crypto.hmac_sha512",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
-            let msg: mlua::LuaString = argcheck::arg(
-                lua,
-                msg,
-                argcheck::ArgSpec {
-                    fname: "lur.crypto.hmac_sha512",
-                    n: 2,
-                    expected: "string",
-                },
-            )?;
-            let mut mac = Hmac::<Sha512>::new_from_slice(&key.as_bytes())
-                .map_err(|e| Error::runtime(format!("lur.crypto.hmac_sha512: {e}")))?;
-            mac.update(&msg.as_bytes());
-            lua.create_string(mac.finalize().into_bytes().as_slice())
-        })
+        .set(
+            "hmac_sha512",
+            hmac_fn::<Sha512>(lua, "lur.crypto.hmac_sha512")?,
+        )
         .map_err(RunError::Init)?;
     crypto
-        .set("hmac_sha512", hmac_sha512)
+        .set("hmac_sha1", hmac_fn::<Sha1>(lua, "lur.crypto.hmac_sha1")?)
         .map_err(RunError::Init)?;
-
-    let hmac_sha1 = lua
-        .create_function(|lua, (key, msg): (Value, Value)| {
-            let key: mlua::LuaString = argcheck::arg(
-                lua,
-                key,
-                argcheck::ArgSpec {
-                    fname: "lur.crypto.hmac_sha1",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
-            let msg: mlua::LuaString = argcheck::arg(
-                lua,
-                msg,
-                argcheck::ArgSpec {
-                    fname: "lur.crypto.hmac_sha1",
-                    n: 2,
-                    expected: "string",
-                },
-            )?;
-            let mut mac = Hmac::<Sha1>::new_from_slice(&key.as_bytes())
-                .map_err(|e| Error::runtime(format!("lur.crypto.hmac_sha1: {e}")))?;
-            mac.update(&msg.as_bytes());
-            lua.create_string(mac.finalize().into_bytes().as_slice())
-        })
-        .map_err(RunError::Init)?;
-    crypto.set("hmac_sha1", hmac_sha1).map_err(RunError::Init)?;
-
     Ok(())
 }
 
