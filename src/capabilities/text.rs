@@ -337,6 +337,8 @@ fn text_of(lua: &Lua, value: Value, pos: &str, what: &str) -> mlua::Result<Vec<u
     }
 }
 
+const REPLACER: &str = "lur.text.replacer";
+
 pub fn install(
     lua: &Lua,
     lur: &Table,
@@ -347,154 +349,17 @@ pub fn install(
 
     let replacer = lua
         .create_function(move |lua, (pairs, opts): (Value, Value)| {
-            const F: &str = "lur.text.replacer";
-            let pairs: Table = argcheck::arg(lua, pairs, F, 1, "table")?;
-
-            let (mut mode, mut key) = (Mode::First, None::<String>);
-            match opts {
-                Value::Nil => {}
-                Value::Table(t) => {
-                    for pair in t.pairs::<Value, Value>() {
-                        let (k, v) = pair?;
-                        let Value::String(k) = &k else {
-                            return Err(Error::runtime(format!(
-                                "{F}: opts keys must be strings, got {}",
-                                k.type_name()
-                            )));
-                        };
-                        match &*k.as_bytes() {
-                            b"match" => {
-                                mode = match &v {
-                                    Value::String(s) if &*s.as_bytes() == b"first" => Mode::First,
-                                    Value::String(s) if &*s.as_bytes() == b"longest" => {
-                                        Mode::Longest
-                                    }
-                                    _ => {
-                                        return Err(Error::runtime(format!(
-                                            "{F}: opts.match must be \"first\" or \"longest\""
-                                        )));
-                                    }
-                                };
-                            }
-                            b"key" => match &v {
-                                Value::String(s) if !s.as_bytes().is_empty() => {
-                                    key = Some(s.to_str()?.to_owned());
-                                }
-                                _ => {
-                                    return Err(Error::runtime(format!(
-                                        "{F}: opts.key must be a non-empty string"
-                                    )));
-                                }
-                            },
-                            other => {
-                                return Err(Error::runtime(format!(
-                                    "{F}: unknown option {:?}",
-                                    String::from_utf8_lossy(other)
-                                )));
-                            }
-                        }
-                    }
-                }
-                other => {
-                    return Err(Error::runtime(format!(
-                        "{F}: argument #2 must be table, got {}",
-                        other.type_name()
-                    )));
-                }
-            }
-
-            let count = pairs.raw_len();
-            let limit = store.max_bytes;
-            // Streams the pairs into a trie and stops as soon as it would pass the cap.
-            let charge = |counter: &Arc<AtomicUsize>| -> mlua::Result<Arc<Matcher>> {
-                let over =
-                    |extra: usize| limit != 0 && counter.load(Ordering::Relaxed) + extra > limit;
-                let refuse = || {
-                    Error::runtime(format!(
-                        "{F}: replacer memory limit exceeded ({limit} bytes; raise --replacer-max-bytes)"
-                    ))
-                };
-                let mut builder = Builder::new();
-                let mut collected = false;
-                for i in 1..=count {
-                    let el: Value = pairs.raw_get(i)?;
-                    let Value::Table(el) = el else {
-                        return Err(Error::runtime(format!(
-                            "{F}: pairs[{i}] must be {{old, new}}, got {}",
-                            el.type_name()
-                        )));
-                    };
-                    if el.raw_len() != 2 {
-                        return Err(Error::runtime(format!(
-                            "{F}: pairs[{i}] must be {{old, new}}"
-                        )));
-                    }
-                    let pos = format!("pairs[{i}]");
-                    let old = text_of(lua, el.raw_get(1)?, &pos, "old")?;
-                    let new = text_of(lua, el.raw_get(2)?, &pos, "new")?;
-                    builder.add(&old, &new);
-                    if over(builder.bytes) {
-                        // Unreferenced replacers stay charged until collected.
-                        if collected {
-                            return Err(refuse());
-                        }
-                        collected = true;
-                        lua.gc_collect()?;
-                        lua.gc_collect()?;
-                        if over(builder.bytes) {
-                            return Err(refuse());
-                        }
-                    }
-                }
-                let m = builder.finish(mode, Arc::clone(counter));
-                // Reserve; a refused matcher's Drop releases it again.
-                counter.fetch_add(m.bytes, Ordering::Relaxed);
-                if limit != 0 && counter.load(Ordering::Relaxed) > limit {
-                    return Err(refuse());
-                }
-                Ok(Arc::new(m))
+            let pairs: Table = argcheck::arg(lua, pairs, REPLACER, 1, "table")?;
+            let ReplacerOpts { mode, key } = replacer_opts(opts)?;
+            let request = Request {
+                count: pairs.raw_len(),
+                limit: store.max_bytes,
+                pairs,
+                mode,
             };
-
-            let matcher = if let Some(key) = key {
-                // Look up, build outside the lock, then re-check before registering.
-                let existing = |keyed: &mut HashMap<String, Weak<Matcher>>| {
-                    keyed.retain(|_, w| w.strong_count() > 0);
-                    keyed.get(&key).and_then(Weak::upgrade)
-                };
-                let check = |m: &Arc<Matcher>| -> mlua::Result<()> {
-                    if m.mode != mode || m.news.len() != count {
-                        return Err(Error::runtime(format!(
-                            "{F}: key {key:?} is already used by a replacer with {} pairs and match = \"{}\"",
-                            m.news.len(),
-                            m.mode.name()
-                        )));
-                    }
-                    Ok(())
-                };
-                let found = existing(&mut store.keyed.lock().expect("replacer store poisoned"));
-                if let Some(m) = found {
-                    check(&m)?;
-                    m
-                } else {
-                    let built = charge(&store.shared_bytes)?;
-                    let mut keyed = store.keyed.lock().expect("replacer store poisoned");
-                    if let Some(m) = existing(&mut keyed) {
-                        check(&m)?; // lost a race; drop ours
-                        m
-                    } else {
-                        keyed.insert(key.clone(), Arc::downgrade(&built));
-                        built
-                    }
-                }
-            } else {
-                let local = if let Some(l) = lua.app_data_ref::<LocalBytes>() {
-                    Arc::clone(&l.0)
-                } else {
-                    let c = Arc::new(AtomicUsize::new(0));
-                    lua.set_app_data(LocalBytes(Arc::clone(&c)));
-                    c
-                };
-                charge(&local)?
+            let matcher = match key {
+                Some(key) => keyed_matcher(lua, &store, &request, &key)?,
+                None => local_matcher(lua, &request)?,
             };
             lua.create_userdata(Replacer(matcher, memory_limit))
         })
@@ -503,6 +368,191 @@ pub fn install(
 
     lur.set("text", text).map_err(RunError::Init)?;
     Ok(())
+}
+
+/// Parsed `opts` of `lur.text.replacer`.
+struct ReplacerOpts {
+    mode: Mode,
+    key: Option<String>,
+}
+
+fn replacer_opts(opts: Value) -> mlua::Result<ReplacerOpts> {
+    let mut parsed = ReplacerOpts {
+        mode: Mode::First,
+        key: None,
+    };
+    let t = match opts {
+        Value::Nil => return Ok(parsed),
+        Value::Table(t) => t,
+        other => {
+            return Err(Error::runtime(format!(
+                "{REPLACER}: argument #2 must be table, got {}",
+                other.type_name()
+            )));
+        }
+    };
+    for pair in t.pairs::<Value, Value>() {
+        let (k, v) = pair?;
+        let Value::String(k) = &k else {
+            return Err(Error::runtime(format!(
+                "{REPLACER}: opts keys must be strings, got {}",
+                k.type_name()
+            )));
+        };
+        match &*k.as_bytes() {
+            b"match" => parsed.mode = match_opt(&v)?,
+            b"key" => parsed.key = Some(key_opt(&v)?),
+            other => {
+                return Err(Error::runtime(format!(
+                    "{REPLACER}: unknown option {:?}",
+                    String::from_utf8_lossy(other)
+                )));
+            }
+        }
+    }
+    Ok(parsed)
+}
+
+fn match_opt(v: &Value) -> mlua::Result<Mode> {
+    match v {
+        Value::String(s) if &*s.as_bytes() == b"first" => Ok(Mode::First),
+        Value::String(s) if &*s.as_bytes() == b"longest" => Ok(Mode::Longest),
+        _ => Err(Error::runtime(format!(
+            "{REPLACER}: opts.match must be \"first\" or \"longest\""
+        ))),
+    }
+}
+
+fn key_opt(v: &Value) -> mlua::Result<String> {
+    match v {
+        Value::String(s) if !s.as_bytes().is_empty() => Ok(s.to_str()?.to_owned()),
+        _ => Err(Error::runtime(format!(
+            "{REPLACER}: opts.key must be a non-empty string"
+        ))),
+    }
+}
+
+/// What one `lur.text.replacer` call asks to build.
+struct Request {
+    pairs: Table,
+    count: usize,
+    mode: Mode,
+    /// Byte cap for the counter the matcher is charged to; 0 = unlimited.
+    limit: usize,
+}
+
+/// Streams the pairs into a trie and stops as soon as it would pass the cap.
+fn build_matcher(
+    lua: &Lua,
+    request: &Request,
+    counter: &Arc<AtomicUsize>,
+) -> mlua::Result<Arc<Matcher>> {
+    let Request {
+        pairs,
+        count,
+        mode,
+        limit,
+    } = request;
+    let (count, mode, limit) = (*count, *mode, *limit);
+    let over = |extra: usize| limit != 0 && counter.load(Ordering::Relaxed) + extra > limit;
+    let refuse = || {
+        Error::runtime(format!(
+            "{REPLACER}: replacer memory limit exceeded ({limit} bytes; raise --replacer-max-bytes)"
+        ))
+    };
+    let mut builder = Builder::new();
+    let mut collected = false;
+    for i in 1..=count {
+        let el: Value = pairs.raw_get(i)?;
+        let Value::Table(el) = el else {
+            return Err(Error::runtime(format!(
+                "{REPLACER}: pairs[{i}] must be {{old, new}}, got {}",
+                el.type_name()
+            )));
+        };
+        if el.raw_len() != 2 {
+            return Err(Error::runtime(format!(
+                "{REPLACER}: pairs[{i}] must be {{old, new}}"
+            )));
+        }
+        let pos = format!("pairs[{i}]");
+        let old = text_of(lua, el.raw_get(1)?, &pos, "old")?;
+        let new = text_of(lua, el.raw_get(2)?, &pos, "new")?;
+        builder.add(&old, &new);
+        if over(builder.bytes) {
+            // Unreferenced replacers stay charged until collected.
+            if collected {
+                return Err(refuse());
+            }
+            collected = true;
+            lua.gc_collect()?;
+            lua.gc_collect()?;
+            if over(builder.bytes) {
+                return Err(refuse());
+            }
+        }
+    }
+    let m = builder.finish(mode, Arc::clone(counter));
+    // Reserve; a refused matcher's Drop releases it again.
+    counter.fetch_add(m.bytes, Ordering::Relaxed);
+    if limit != 0 && counter.load(Ordering::Relaxed) > limit {
+        return Err(refuse());
+    }
+    Ok(Arc::new(m))
+}
+
+/// A replacer shared by `key` across VMs: look up, build outside the lock,
+/// then re-check before registering.
+fn keyed_matcher(
+    lua: &Lua,
+    store: &ReplacerStore,
+    request: &Request,
+    key: &str,
+) -> mlua::Result<Arc<Matcher>> {
+    let found = live_matcher(
+        &mut store.keyed.lock().expect("replacer store poisoned"),
+        key,
+    );
+    if let Some(m) = found {
+        check_key_shape(&m, key, request)?;
+        return Ok(m);
+    }
+    let built = build_matcher(lua, request, &store.shared_bytes)?;
+    let mut keyed = store.keyed.lock().expect("replacer store poisoned");
+    if let Some(m) = live_matcher(&mut keyed, key) {
+        check_key_shape(&m, key, request)?; // lost a race; drop ours
+        return Ok(m);
+    }
+    keyed.insert(key.to_owned(), Arc::downgrade(&built));
+    Ok(built)
+}
+
+fn live_matcher(keyed: &mut HashMap<String, Weak<Matcher>>, key: &str) -> Option<Arc<Matcher>> {
+    keyed.retain(|_, w| w.strong_count() > 0);
+    keyed.get(key).and_then(Weak::upgrade)
+}
+
+fn check_key_shape(m: &Matcher, key: &str, request: &Request) -> mlua::Result<()> {
+    if m.mode != request.mode || m.news.len() != request.count {
+        return Err(Error::runtime(format!(
+            "{REPLACER}: key {key:?} is already used by a replacer with {} pairs and match = \"{}\"",
+            m.news.len(),
+            m.mode.name()
+        )));
+    }
+    Ok(())
+}
+
+/// A replacer private to this VM, charged to the VM's own byte counter.
+fn local_matcher(lua: &Lua, request: &Request) -> mlua::Result<Arc<Matcher>> {
+    let local = if let Some(l) = lua.app_data_ref::<LocalBytes>() {
+        Arc::clone(&l.0)
+    } else {
+        let c = Arc::new(AtomicUsize::new(0));
+        lua.set_app_data(LocalBytes(Arc::clone(&c)));
+        c
+    };
+    build_matcher(lua, request, &local)
 }
 
 #[cfg(test)]
