@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792733425171,
+  "lastUpdate": 1792733778971,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -7805,6 +7805,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1411984,
             "range": "± 16989",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f5d30da3f00d838852e4bc752b6245f57a446e9f",
+          "message": "refactor(crypto): replace three hmac closures with a generic hmac_fn (#212)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-23T13:32:33+08:00",
+          "tree_id": "c83a5e874ba5221de09914af68409a0451753442",
+          "url": "https://github.com/henry40408/lur/commit/f5d30da3f00d838852e4bc752b6245f57a446e9f"
+        },
+        "date": 1792733778033,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 279844,
+            "range": "± 2975",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4342,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 146596,
+            "range": "± 519",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 15590787,
+            "range": "± 80362",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 2622185,
+            "range": "± 41827",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1429724,
+            "range": "± 67860",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1564754,
+            "range": "± 18654",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2185721,
+            "range": "± 35336",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1075883,
+            "range": "± 12937",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1202539,
+            "range": "± 13087",
             "unit": "ns/iter"
           }
         ]
