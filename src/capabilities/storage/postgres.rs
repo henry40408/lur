@@ -327,55 +327,23 @@ impl PgBackend {
         new: Option<Vec<u8>>,
         ttl_ms: Option<i64>,
     ) -> mlua::Result<bool> {
+        let pool = &self.pool;
         let now = now_ms();
-        let applied = match (expected, new) {
-            (None, Some(v)) => self.insert_absent("lur.kv.cas", key, v, ttl_ms).await?,
-            (None, None) => {
-                let r = sqlx::query(
-                    "SELECT 1 FROM lur_kv WHERE key = $1 \
-                     AND (expires_at IS NULL OR expires_at > $2)",
-                )
-                .bind(key)
-                .bind(now)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?;
-                r.is_none()
-            }
+        match (expected, new) {
+            (None, Some(v)) => self.insert_absent("lur.kv.cas", key, v, ttl_ms).await,
+            (None, None) => cas_expect_absent(pool, key, now).await,
             (Some(e), Some(v)) => {
-                sqlx::query(
-                    "UPDATE lur_kv SET kind = 0, bytes = $1, num = NULL, \
-                       expires_at = COALESCE($2, expires_at) \
-                     WHERE key = $3 AND kind = 0 AND bytes = $4 \
-                     AND (expires_at IS NULL OR expires_at > $5)",
-                )
-                .bind(v)
-                .bind(expiry_at(now, ttl_ms))
-                .bind(key)
-                .bind(e)
-                .bind(now)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
-                .rows_affected()
-                    == 1
+                let update = CasUpdate {
+                    key,
+                    expected: e,
+                    new: v,
+                    expires_at: expiry_at(now, ttl_ms),
+                    now,
+                };
+                cas_replace(pool, update).await
             }
-            (Some(e), None) => {
-                sqlx::query(
-                    "DELETE FROM lur_kv WHERE key = $1 AND kind = 0 AND bytes = $2 \
-                     AND (expires_at IS NULL OR expires_at > $3)",
-                )
-                .bind(key)
-                .bind(e)
-                .bind(now)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?
-                .rows_affected()
-                    == 1
-            }
-        };
-        Ok(applied)
+            (Some(e), None) => cas_delete(pool, key, e, now).await,
+        }
     }
 
     /// Atomic upsert-add; a non-counter live value yields no row → error. An
@@ -635,6 +603,62 @@ impl PgTransaction {
             let _ = tx.rollback().await;
         }
     }
+}
+
+/// True when no live row exists for `key`.
+async fn cas_expect_absent(pool: &PgPool, key: String, now: i64) -> mlua::Result<bool> {
+    let row = sqlx::query(
+        "SELECT 1 FROM lur_kv WHERE key = $1 \
+         AND (expires_at IS NULL OR expires_at > $2)",
+    )
+    .bind(key)
+    .bind(now)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?;
+    Ok(row.is_none())
+}
+
+struct CasUpdate {
+    key: String,
+    expected: Vec<u8>,
+    new: Vec<u8>,
+    expires_at: Option<i64>,
+    now: i64,
+}
+
+/// Replaces a live bytes value equal to `expected`.
+async fn cas_replace(pool: &PgPool, update: CasUpdate) -> mlua::Result<bool> {
+    let res = sqlx::query(
+        "UPDATE lur_kv SET kind = 0, bytes = $1, num = NULL, \
+           expires_at = COALESCE($2, expires_at) \
+         WHERE key = $3 AND kind = 0 AND bytes = $4 \
+         AND (expires_at IS NULL OR expires_at > $5)",
+    )
+    .bind(update.new)
+    .bind(update.expires_at)
+    .bind(update.key)
+    .bind(update.expected)
+    .bind(update.now)
+    .execute(pool)
+    .await
+    .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?;
+    Ok(res.rows_affected() == 1)
+}
+
+/// Deletes a live bytes value equal to `expected`.
+async fn cas_delete(pool: &PgPool, key: String, expected: Vec<u8>, now: i64) -> mlua::Result<bool> {
+    let res = sqlx::query(
+        "DELETE FROM lur_kv WHERE key = $1 AND kind = 0 AND bytes = $2 \
+         AND (expires_at IS NULL OR expires_at > $3)",
+    )
+    .bind(key)
+    .bind(expected)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| Error::runtime(format!("lur.kv.cas: {e}")))?;
+    Ok(res.rows_affected() == 1)
 }
 
 #[cfg(test)]
