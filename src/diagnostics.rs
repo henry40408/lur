@@ -30,11 +30,7 @@ impl Palette {
 /// Render an mlua error's `Display` against `source`, rustc-style. `chunk_name`
 /// has no `@`. Falls back to `lur: <body>` when no snippet can be rendered.
 pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> String {
-    // Runtime errors carry a traceback; syntax errors don't.
-    let (head, traceback) = match displayed.split_once("\nstack traceback:") {
-        Some((h, t)) => (h, Some(t)),
-        None => (displayed, None),
-    };
+    let (head, traceback) = split_traceback(displayed);
 
     let body = head
         .strip_prefix("runtime error: ")
@@ -50,10 +46,55 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> S
         return format!("lur: {body}");
     };
 
-    let p = Palette::new(color);
-    let (g, e, r) = (p.gutter, p.err, p.reset);
-    use std::fmt::Write as _;
     let mut out = String::new();
+    format_snippet(
+        &mut out,
+        &Snippet {
+            chunk_name,
+            line,
+            col,
+            message: &message,
+            src_line,
+            palette: Palette::new(color),
+        },
+    );
+
+    if let Some(tb) = traceback {
+        push_traceback(&mut out, tb);
+    }
+
+    out.trim_end().to_string()
+}
+
+/// Runtime errors carry a traceback; syntax errors don't.
+fn split_traceback(displayed: &str) -> (&str, Option<&str>) {
+    match displayed.split_once("\nstack traceback:") {
+        Some((head, traceback)) => (head, Some(traceback)),
+        None => (displayed, None),
+    }
+}
+
+struct Snippet<'a> {
+    chunk_name: &'a str,
+    line: usize,
+    col: Option<usize>,
+    message: &'a str,
+    src_line: &'a str,
+    palette: Palette,
+}
+
+/// Append the `error:` header, `-->` location and the source line with its caret.
+fn format_snippet(out: &mut String, snippet: &Snippet) {
+    use std::fmt::Write as _;
+    let Snippet {
+        chunk_name,
+        line,
+        col,
+        message,
+        src_line,
+        palette,
+    } = snippet;
+    let (g, e, r) = (palette.gutter, palette.err, palette.reset);
     let _ = writeln!(out, "{e}error:{r} {message}");
     let pos = match col {
         Some(c) => format!("{chunk_name}:{line}:{c}"),
@@ -65,14 +106,8 @@ pub fn render(source: &str, chunk_name: &str, displayed: &str, color: bool) -> S
     let pad = " ".repeat(gutter.len());
     let _ = writeln!(out, "{g}{pad} |{r}");
     let _ = writeln!(out, "{g}{gutter} |{r} {src_line}");
-    let caret_pad = caret_padding(src_line, col);
+    let caret_pad = caret_padding(src_line, *col);
     let _ = writeln!(out, "{g}{pad} |{r} {caret_pad}{e}^{r}");
-
-    if let Some(tb) = traceback {
-        push_traceback(&mut out, tb);
-    }
-
-    out.trim_end().to_string()
 }
 
 /// Whitespace that puts a caret under `col`, else under the first
