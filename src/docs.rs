@@ -202,16 +202,25 @@ fn wrap_cell(cell: &str, width: usize) -> Vec<String> {
 /// Smallest width a column is shrunk to when fitting a table to the terminal.
 const MIN_COL: usize = 6;
 
-/// Column-aligned table: bold header, dim rule, two-space gutters, last column
-/// unpadded. Every line starts with `prefix` (indent and/or blockquote bar,
-/// `prefix_width` columns wide). With `max_width`, cells wrap so the table fits.
-fn render_table(
-    rows: &[Vec<String>],
-    prefix: &str,
+/// Where and how `render_table` draws: every line starts with `prefix` (indent
+/// and/or blockquote bar, `prefix_width` columns wide). With `max_width`, cells
+/// wrap so the table fits.
+struct TableLayout<'a> {
+    prefix: &'a str,
     prefix_width: usize,
     max_width: Option<usize>,
     color: bool,
-) -> String {
+}
+
+/// Column-aligned table: bold header, dim rule, two-space gutters, last column
+/// unpadded.
+fn render_table(rows: &[Vec<String>], layout: &TableLayout<'_>) -> String {
+    let TableLayout {
+        prefix,
+        prefix_width,
+        max_width,
+        color,
+    } = *layout;
     let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
     let mut widths = vec![0; cols];
     for row in rows {
@@ -599,7 +608,15 @@ impl Renderer {
             let indent = self.margin + self.list_depth * 2;
             (" ".repeat(indent), indent)
         };
-        let table = render_table(&self.rows, &prefix, prefix_width, self.width, self.color);
+        let table = render_table(
+            &self.rows,
+            &TableLayout {
+                prefix: &prefix,
+                prefix_width,
+                max_width: self.width,
+                color: self.color,
+            },
+        );
         self.out.push_str(&table);
         self.rows.clear();
     }
