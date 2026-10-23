@@ -319,11 +319,28 @@ enum Ctx {
     List,
 }
 
+/// Inputs of [`compose_prefix`].
+#[derive(Clone, Copy)]
+struct PrefixSpec<'a> {
+    stack: &'a [Ctx],
+    from: usize,
+    margin: usize,
+    color: bool,
+    bullet: bool,
+}
+
 /// Line prefix for a block inside a blockquote: `margin`, then one bar per
 /// quote and two spaces per list, outermost first. Entries before `from` are
 /// skipped (already on the line); `bullet` swaps the innermost list's indent
 /// for the `- ` marker.
-fn compose_prefix(stack: &[Ctx], from: usize, margin: usize, color: bool, bullet: bool) -> String {
+fn compose_prefix(spec: &PrefixSpec) -> String {
+    let PrefixSpec {
+        stack,
+        from,
+        margin,
+        color,
+        bullet,
+    } = *spec;
     let mut s = String::new();
     if from == 0 {
         s.push_str(&" ".repeat(margin));
@@ -354,7 +371,13 @@ fn prefix_cols(stack: &[Ctx], margin: usize) -> usize {
 
 /// Bar-only line separating two blocks of the same quote.
 fn quote_separator(stack: &[Ctx], margin: usize, color: bool) -> String {
-    let mut s = compose_prefix(stack, 0, margin, color, false);
+    let mut s = compose_prefix(&PrefixSpec {
+        stack,
+        from: 0,
+        margin,
+        color,
+        bullet: false,
+    });
     s.truncate(s.trim_end_matches(' ').len());
     s.push('\n');
     s
@@ -377,7 +400,13 @@ fn start_quote_block(
     if let Some((len, idx)) = open
         && len == out.len()
     {
-        out.push_str(&compose_prefix(stack, idx + 1, margin, color, false));
+        out.push_str(&compose_prefix(&PrefixSpec {
+            stack,
+            from: idx + 1,
+            margin,
+            color,
+            bullet: false,
+        }));
         return;
     }
     if !out.is_empty() && !out.ends_with('\n') {
@@ -386,7 +415,13 @@ fn start_quote_block(
     if !first {
         out.push_str(&quote_separator(stack, margin, color));
     }
-    out.push_str(&compose_prefix(stack, 0, margin, color, false));
+    out.push_str(&compose_prefix(&PrefixSpec {
+        stack,
+        from: 0,
+        margin,
+        color,
+        bullet: false,
+    }));
 }
 
 /// Glamour-style terminal rendering. Without `color`, the structure (heading
@@ -438,7 +473,13 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
                     } else {
                         start_quote_block(&mut out, &stack, margin, color, first, open);
                         // render_table writes the prefix on every line itself.
-                        let p = compose_prefix(&stack, 0, margin, color, false);
+                        let p = compose_prefix(&PrefixSpec {
+                            stack: &stack,
+                            from: 0,
+                            margin,
+                            color,
+                            bullet: false,
+                        });
                         if out.ends_with(&p) {
                             out.truncate(out.len() - p.len());
                         }
@@ -466,7 +507,13 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
             Event::End(TagEnd::Table) => {
                 let (prefix, prefix_width) = if quotes > 0 {
                     (
-                        compose_prefix(&stack, 0, margin, color, false),
+                        compose_prefix(&PrefixSpec {
+                            stack: &stack,
+                            from: 0,
+                            margin,
+                            color,
+                            bullet: false,
+                        }),
                         prefix_cols(&stack, margin),
                     )
                 } else {
@@ -559,7 +606,13 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
                     if prev_loose && !first {
                         out.push_str(&quote_separator(&stack, margin, color));
                     }
-                    out.push_str(&compose_prefix(&stack, 0, margin, color, true));
+                    out.push_str(&compose_prefix(&PrefixSpec {
+                        stack: &stack,
+                        from: 0,
+                        margin,
+                        color,
+                        bullet: true,
+                    }));
                 } else {
                     out.push_str(&" ".repeat(margin + (list_depth.saturating_sub(1)) * 2));
                     out.push_str("- ");
@@ -604,7 +657,13 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
                         if quotes > 0 {
                             if !code_fresh {
                                 out.push('\n');
-                                out.push_str(&compose_prefix(&stack, 0, margin, color, false));
+                                out.push_str(&compose_prefix(&PrefixSpec {
+                                    stack: &stack,
+                                    from: 0,
+                                    margin,
+                                    color,
+                                    bullet: false,
+                                }));
                             }
                             code_fresh = false;
                         } else {
@@ -646,7 +705,13 @@ pub fn render_width(markdown: &str, color: bool, width: Option<usize>) -> String
             Event::SoftBreak | Event::HardBreak => {
                 out.push('\n');
                 if quotes > 0 {
-                    out.push_str(&compose_prefix(&stack, 0, margin, color, false));
+                    out.push_str(&compose_prefix(&PrefixSpec {
+                        stack: &stack,
+                        from: 0,
+                        margin,
+                        color,
+                        bullet: false,
+                    }));
                     if bold_open && !in_cell {
                         out.push_str(st(BOLD));
                     }
