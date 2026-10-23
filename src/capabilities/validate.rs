@@ -839,222 +839,210 @@ fn range_check<T: PartialOrd + std::fmt::Display>(
 
 fn install_constructors(lua: &Lua, v: &Table) -> Result<(), RunError> {
     let init = RunError::Init;
-
-    v.set(
-        "str",
-        lua.create_function(|lua, opts: Value| {
-            const F: &str = "lur.validate.str";
-            let t = opts_of(opts, F, 1, &["pattern", "min_len", "max_len", "default"])?;
-            let min_len = opt_count(t.as_ref(), F, "min_len")?;
-            let max_len = opt_count(t.as_ref(), F, "max_len")?;
-            range_check(F, ("min_len", min_len), ("max_len", max_len))?;
-            let pattern = opt_string(t.as_ref(), F, "pattern")?;
-            if let Some(p) = &pattern {
-                // Reject malformed patterns up front, with string.find's own message.
-                let find: Function = lua.globals().get::<Table>("string")?.get("find")?;
-                if let Err(e) = find.call::<Value>((lua.create_string("")?, p.clone())) {
-                    let msg = validator_message(&e).unwrap_or_else(|()| e.to_string());
-                    return Err(Error::runtime(format!(
-                        "{F}: opts.pattern is not a valid Lua pattern: {msg}"
-                    )));
-                }
-            }
-            let default = opt_string(t.as_ref(), F, "default")?;
-            schema(
-                lua,
-                Node::Str {
-                    pattern,
-                    min_len,
-                    max_len,
-                    default,
-                },
-                F,
-            )
-        })
-        .map_err(init)?,
-    )
-    .map_err(RunError::Init)?;
-
-    v.set(
-        "int",
-        lua.create_function(|lua, opts: Value| {
-            const F: &str = "lur.validate.int";
-            let t = opts_of(opts, F, 1, &["min", "max", "default", "clamp"])?;
-            let min = opt_i64(t.as_ref(), F, "min")?;
-            let max = opt_i64(t.as_ref(), F, "max")?;
-            range_check(F, ("min", min), ("max", max))?;
-            schema(
-                lua,
-                Node::Int {
-                    min,
-                    max,
-                    default: opt_i64(t.as_ref(), F, "default")?,
-                    clamp: opt_bool(t.as_ref(), F, "clamp")?.unwrap_or(false),
-                },
-                F,
-            )
-        })
-        .map_err(RunError::Init)?,
-    )
-    .map_err(RunError::Init)?;
-
-    v.set(
-        "number",
-        lua.create_function(|lua, opts: Value| {
-            const F: &str = "lur.validate.number";
-            let t = opts_of(opts, F, 1, &["min", "max", "default", "clamp"])?;
-            let min = opt_f64(t.as_ref(), F, "min")?;
-            let max = opt_f64(t.as_ref(), F, "max")?;
-            range_check(F, ("min", min), ("max", max))?;
-            schema(
-                lua,
-                Node::Number {
-                    min,
-                    max,
-                    default: opt_f64(t.as_ref(), F, "default")?,
-                    clamp: opt_bool(t.as_ref(), F, "clamp")?.unwrap_or(false),
-                },
-                F,
-            )
-        })
-        .map_err(RunError::Init)?,
-    )
-    .map_err(RunError::Init)?;
-
-    v.set(
-        "bool",
-        lua.create_function(|lua, opts: Value| {
-            const F: &str = "lur.validate.bool";
-            let t = opts_of(opts, F, 1, &["default"])?;
-            schema(
-                lua,
-                Node::Bool {
-                    default: opt_bool(t.as_ref(), F, "default")?,
-                },
-                F,
-            )
-        })
-        .map_err(RunError::Init)?,
-    )
-    .map_err(RunError::Init)?;
-
-    v.set(
-        "one_of",
-        lua.create_function(|lua, values: Value| {
-            const F: &str = "lur.validate.one_of";
-            let Value::Table(t) = values else {
-                return Err(Error::runtime(format!(
-                    "{F}: argument #1 must be table, got {}",
-                    tname(&values)
-                )));
-            };
-            let items = sequence(&t)?.ok_or_else(|| {
-                Error::runtime(format!("{F}: argument #1 must be an array of values"))
-            })?;
-            if items.is_empty() {
-                return Err(Error::runtime(format!(
-                    "{F}: argument #1 must not be empty"
-                )));
-            }
-            let mut lits = Vec::with_capacity(items.len());
-            for item in items {
-                lits.push(match item {
-                    Value::String(s) => Lit::Str(s.as_bytes().to_vec()),
-                    Value::Boolean(b) => Lit::Bool(b),
-                    other => match lua_number(&other) {
-                        Some(n) if !n.is_nan() => Lit::Num(n),
-                        _ => {
-                            return Err(Error::runtime(format!(
-                                "{F}: values must be strings, numbers or booleans, got {}",
-                                tname(&other)
-                            )));
-                        }
-                    },
-                });
-            }
-            schema(lua, Node::OneOf(lits), F)
-        })
-        .map_err(RunError::Init)?,
-    )
-    .map_err(RunError::Init)?;
-
-    v.set(
-        "list",
-        lua.create_function(|lua, (item, opts): (Value, Value)| {
-            const F: &str = "lur.validate.list";
-            let item = to_node(item, F, "argument #1")?;
-            let t = opts_of(opts, F, 2, &["min_items", "max_items"])?;
-            let min_items = opt_count(t.as_ref(), F, "min_items")?;
-            let max_items = opt_count(t.as_ref(), F, "max_items")?;
-            range_check(F, ("min_items", min_items), ("max_items", max_items))?;
-            schema(
-                lua,
-                Node::List {
-                    item,
-                    min_items,
-                    max_items,
-                },
-                F,
-            )
-        })
-        .map_err(RunError::Init)?,
-    )
-    .map_err(RunError::Init)?;
-
-    v.set(
-        "object",
-        lua.create_function(|lua, (fields, opts): (Value, Value)| {
-            const F: &str = "lur.validate.object";
-            let Value::Table(t) = fields else {
-                return Err(Error::runtime(format!(
-                    "{F}: argument #1 must be table, got {}",
-                    tname(&fields)
-                )));
-            };
-            let o = opts_of(opts, F, 2, &["strict"])?;
-            let strict = opt_bool(o.as_ref(), F, "strict")?.unwrap_or(false);
-            let mut list = Vec::new();
-            for pair in t.pairs::<Value, Value>() {
-                let (k, v) = pair?;
-                let Value::String(k) = k else {
-                    return Err(Error::runtime(format!(
-                        "{F}: field names must be strings, got {}",
-                        tname(&k)
-                    )));
-                };
-                let name = k
-                    .to_str()
-                    .map_err(|_e| Error::runtime(format!("{F}: field names must be valid UTF-8")))?
-                    .to_owned();
-                let node = to_node(v, F, &format!("field '{name}'"))?;
-                list.push((name, node));
-            }
-            list.sort_by(|a, b| a.0.cmp(&b.0));
-            schema(
-                lua,
-                Node::Object {
-                    fields: list,
-                    strict,
-                },
-                F,
-            )
-        })
-        .map_err(RunError::Init)?,
-    )
-    .map_err(RunError::Init)?;
-
+    v.set("str", lua.create_function(str_schema).map_err(init)?)
+        .map_err(init)?;
+    v.set("int", lua.create_function(int_schema).map_err(init)?)
+        .map_err(init)?;
+    v.set("number", lua.create_function(number_schema).map_err(init)?)
+        .map_err(init)?;
+    v.set("bool", lua.create_function(bool_schema).map_err(init)?)
+        .map_err(init)?;
+    v.set("one_of", lua.create_function(one_of_schema).map_err(init)?)
+        .map_err(init)?;
+    v.set("list", lua.create_function(list_schema).map_err(init)?)
+        .map_err(init)?;
+    v.set("object", lua.create_function(object_schema).map_err(init)?)
+        .map_err(init)?;
     v.set(
         "optional",
-        lua.create_function(|lua, inner: Value| {
-            const F: &str = "lur.validate.optional";
-            let inner = to_node(inner, F, "argument #1")?;
-            schema(lua, Node::Optional(inner), F)
-        })
-        .map_err(RunError::Init)?,
+        lua.create_function(optional_schema).map_err(init)?,
     )
-    .map_err(RunError::Init)?;
+    .map_err(init)
+}
 
-    Ok(())
+fn str_schema(lua: &Lua, opts: Value) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.str";
+    let t = opts_of(opts, F, 1, &["pattern", "min_len", "max_len", "default"])?;
+    let min_len = opt_count(t.as_ref(), F, "min_len")?;
+    let max_len = opt_count(t.as_ref(), F, "max_len")?;
+    range_check(F, ("min_len", min_len), ("max_len", max_len))?;
+    let pattern = opt_string(t.as_ref(), F, "pattern")?;
+    if let Some(p) = &pattern {
+        check_lua_pattern(lua, p, F)?;
+    }
+    let default = opt_string(t.as_ref(), F, "default")?;
+    schema(
+        lua,
+        Node::Str {
+            pattern,
+            min_len,
+            max_len,
+            default,
+        },
+        F,
+    )
+}
+
+/// Reject malformed patterns up front, with string.find's own message.
+fn check_lua_pattern(lua: &Lua, pattern: &mlua::LuaString, fname: &str) -> mlua::Result<()> {
+    let find: Function = lua.globals().get::<Table>("string")?.get("find")?;
+    let Err(e) = find.call::<Value>((lua.create_string("")?, pattern.clone())) else {
+        return Ok(());
+    };
+    let msg = validator_message(&e).unwrap_or_else(|()| e.to_string());
+    Err(Error::runtime(format!(
+        "{fname}: opts.pattern is not a valid Lua pattern: {msg}"
+    )))
+}
+
+fn int_schema(lua: &Lua, opts: Value) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.int";
+    let t = opts_of(opts, F, 1, &["min", "max", "default", "clamp"])?;
+    let min = opt_i64(t.as_ref(), F, "min")?;
+    let max = opt_i64(t.as_ref(), F, "max")?;
+    range_check(F, ("min", min), ("max", max))?;
+    schema(
+        lua,
+        Node::Int {
+            min,
+            max,
+            default: opt_i64(t.as_ref(), F, "default")?,
+            clamp: opt_bool(t.as_ref(), F, "clamp")?.unwrap_or(false),
+        },
+        F,
+    )
+}
+
+fn number_schema(lua: &Lua, opts: Value) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.number";
+    let t = opts_of(opts, F, 1, &["min", "max", "default", "clamp"])?;
+    let min = opt_f64(t.as_ref(), F, "min")?;
+    let max = opt_f64(t.as_ref(), F, "max")?;
+    range_check(F, ("min", min), ("max", max))?;
+    schema(
+        lua,
+        Node::Number {
+            min,
+            max,
+            default: opt_f64(t.as_ref(), F, "default")?,
+            clamp: opt_bool(t.as_ref(), F, "clamp")?.unwrap_or(false),
+        },
+        F,
+    )
+}
+
+fn bool_schema(lua: &Lua, opts: Value) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.bool";
+    let t = opts_of(opts, F, 1, &["default"])?;
+    schema(
+        lua,
+        Node::Bool {
+            default: opt_bool(t.as_ref(), F, "default")?,
+        },
+        F,
+    )
+}
+
+fn one_of_schema(lua: &Lua, values: Value) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.one_of";
+    let Value::Table(t) = values else {
+        return Err(Error::runtime(format!(
+            "{F}: argument #1 must be table, got {}",
+            tname(&values)
+        )));
+    };
+    let items = sequence(&t)?
+        .ok_or_else(|| Error::runtime(format!("{F}: argument #1 must be an array of values")))?;
+    if items.is_empty() {
+        return Err(Error::runtime(format!(
+            "{F}: argument #1 must not be empty"
+        )));
+    }
+    let lits = items
+        .into_iter()
+        .map(|item| one_of_literal(item, F))
+        .collect::<mlua::Result<Vec<Lit>>>()?;
+    schema(lua, Node::OneOf(lits), F)
+}
+
+fn one_of_literal(item: Value, fname: &str) -> mlua::Result<Lit> {
+    match item {
+        Value::String(s) => Ok(Lit::Str(s.as_bytes().to_vec())),
+        Value::Boolean(b) => Ok(Lit::Bool(b)),
+        other => match lua_number(&other) {
+            Some(n) if !n.is_nan() => Ok(Lit::Num(n)),
+            _ => Err(Error::runtime(format!(
+                "{fname}: values must be strings, numbers or booleans, got {}",
+                tname(&other)
+            ))),
+        },
+    }
+}
+
+fn list_schema(lua: &Lua, (item, opts): (Value, Value)) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.list";
+    let item = to_node(item, F, "argument #1")?;
+    let t = opts_of(opts, F, 2, &["min_items", "max_items"])?;
+    let min_items = opt_count(t.as_ref(), F, "min_items")?;
+    let max_items = opt_count(t.as_ref(), F, "max_items")?;
+    range_check(F, ("min_items", min_items), ("max_items", max_items))?;
+    schema(
+        lua,
+        Node::List {
+            item,
+            min_items,
+            max_items,
+        },
+        F,
+    )
+}
+
+fn object_schema(lua: &Lua, (fields, opts): (Value, Value)) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.object";
+    let Value::Table(t) = fields else {
+        return Err(Error::runtime(format!(
+            "{F}: argument #1 must be table, got {}",
+            tname(&fields)
+        )));
+    };
+    let o = opts_of(opts, F, 2, &["strict"])?;
+    let strict = opt_bool(o.as_ref(), F, "strict")?.unwrap_or(false);
+    let mut list = object_fields(&t, F)?;
+    list.sort_by(|a, b| a.0.cmp(&b.0));
+    schema(
+        lua,
+        Node::Object {
+            fields: list,
+            strict,
+        },
+        F,
+    )
+}
+
+fn object_fields(fields: &Table, fname: &str) -> mlua::Result<Vec<(String, Arc<Node>)>> {
+    let mut list = Vec::new();
+    for pair in fields.clone().pairs::<Value, Value>() {
+        let (k, v) = pair?;
+        let Value::String(k) = k else {
+            return Err(Error::runtime(format!(
+                "{fname}: field names must be strings, got {}",
+                tname(&k)
+            )));
+        };
+        let name = k
+            .to_str()
+            .map_err(|_e| Error::runtime(format!("{fname}: field names must be valid UTF-8")))?
+            .to_owned();
+        let node = to_node(v, fname, &format!("field '{name}'"))?;
+        list.push((name, node));
+    }
+    Ok(list)
+}
+
+fn optional_schema(lua: &Lua, inner: Value) -> mlua::Result<mlua::AnyUserData> {
+    const F: &str = "lur.validate.optional";
+    let inner = to_node(inner, F, "argument #1")?;
+    schema(lua, Node::Optional(inner), F)
 }
 
 // ---------------------------------------------------------------- entry points
