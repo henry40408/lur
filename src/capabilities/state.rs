@@ -1141,51 +1141,69 @@ async fn load(
     job: &LoadJob<'_>,
     guard: Option<LeadGuard>,
 ) -> mlua::Result<(Value, &'static str)> {
-    let LoadJob {
-        store: s,
-        key,
-        func,
-        w,
-    } = *job;
-    let result = match &guard {
-        Some(g) => {
-            let link = Link {
-                store: Arc::as_ptr(s).addr(),
-                key: key.to_vec(),
-                id: g.id,
-                parent: current_link(),
-            };
-            LEADING
-                .scope(Some(Arc::new(link)), func.call_async::<Value>(()))
-                .await
-        }
-        None => func.call_async::<Value>(()).await,
-    };
-    let e = match result {
+    match call_loader(job, guard.as_ref()).await {
         Ok(v) => {
-            s.misses.fetch_add(1, Ordering::Relaxed);
-            let p = match from_lua(&v) {
-                Ok(p) => p,
-                Err(e) => {
-                    if let Some(g) = guard {
-                        g.finish(Shared::Rejected(e.clone()), w);
-                    }
-                    return Err(e);
-                }
-            };
-            match guard {
-                Some(g) => g.finish(Shared::Value(p), w),
-                // A value that cannot fit goes uncached.
-                None => {
-                    if let Some(p) = p {
-                        let _ = s.compare_and_set(key, 0, Some(p), w);
-                    }
-                }
-            }
-            return Ok((v, "miss"));
+            job.store.misses.fetch_add(1, Ordering::Relaxed);
+            publish_loaded(job, guard, &v)?;
+            Ok((v, "miss"))
         }
-        Err(e) => e,
+        Err(e) => publish_failure(lua, job, guard, e),
+    }
+}
+
+/// Call the loader, linked to the leader so a nested `fetch` of the same key
+/// can detect a deadlock.
+async fn call_loader(job: &LoadJob<'_>, guard: Option<&LeadGuard>) -> mlua::Result<Value> {
+    let LoadJob {
+        store, key, func, ..
+    } = *job;
+    let Some(g) = guard else {
+        return func.call_async::<Value>(()).await;
     };
+    let link = Link {
+        store: Arc::as_ptr(store).addr(),
+        key: key.to_vec(),
+        id: g.id,
+        parent: current_link(),
+    };
+    LEADING
+        .scope(Some(Arc::new(link)), func.call_async::<Value>(()))
+        .await
+}
+
+/// The loader returned `v`: hand it to the waiters, or cache it when there is no
+/// leader guard. A value that cannot be stored rejects the waiters and raises.
+fn publish_loaded(job: &LoadJob<'_>, guard: Option<LeadGuard>, v: &Value) -> mlua::Result<()> {
+    let LoadJob { store, key, w, .. } = *job;
+    let p = match from_lua(v) {
+        Ok(p) => p,
+        Err(e) => {
+            if let Some(g) = guard {
+                g.finish(Shared::Rejected(e.clone()), w);
+            }
+            return Err(e);
+        }
+    };
+    match guard {
+        Some(g) => g.finish(Shared::Value(p), w),
+        // A value that cannot fit goes uncached.
+        None => {
+            if let Some(p) = p {
+                let _ = store.compare_and_set(key, 0, Some(p), w);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The loader raised `e`: tell the waiters, unless this VM hit its deadline,
+/// then serve a fallback value or raise.
+fn publish_failure(
+    lua: &Lua,
+    job: &LoadJob<'_>,
+    guard: Option<LeadGuard>,
+    e: mlua::Error,
+) -> mlua::Result<(Value, &'static str)> {
     if let Some(g) = guard {
         if crate::runtime::deadline_passed(lua) {
             // Our own timeout, not the loader's verdict: no outcome.
@@ -1199,9 +1217,9 @@ async fn load(
         } else {
             e.clone()
         };
-        g.finish(Shared::Raised(shared), w);
+        g.finish(Shared::Raised(shared), job.w);
     }
-    fallback(lua, s, key, e)
+    fallback(lua, job.store, job.key, e)
 }
 
 /// A waiter's result from its leader's outcome.
