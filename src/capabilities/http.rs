@@ -80,55 +80,49 @@ pub(crate) struct HttpConfig {
     pub cache: Arc<HttpCache>,
 }
 
-/// The client is built on first use: its rustls setup dominates VM cold start.
+/// What every `lur.http` request function shares. The client is built on first
+/// use: its rustls setup dominates VM cold start.
+#[derive(Clone)]
+struct Shared {
+    cell: Arc<OnceLock<Client>>,
+    policy: Arc<Policy>,
+    cache: Arc<HttpCache>,
+    max_body: usize,
+}
+
+impl Shared {
+    async fn request(&self, lua: &Lua, call: Call<'_>) -> mlua::Result<Table> {
+        let client = ensure_client(&self.cell, &self.policy)?;
+        let ctx = Ctx {
+            client: &client,
+            policy: &self.policy,
+            cache: &self.cache,
+            max_body: self.max_body,
+        };
+        do_request(lua, &ctx, call).await
+    }
+}
+
 pub(crate) fn install(lua: &Lua, lur: &Table, config: HttpConfig) -> Result<(), RunError> {
+    build(lua, lur, config).map_err(RunError::Init)
+}
+
+fn build(lua: &Lua, lur: &Table, config: HttpConfig) -> mlua::Result<()> {
     let HttpConfig {
         policy,
         max_body,
         cache,
     } = config;
-    let cell: Arc<OnceLock<Client>> = Arc::new(OnceLock::new());
-    let http = lua.create_table().map_err(RunError::Init)?;
+    let shared = Shared {
+        cell: Arc::new(OnceLock::new()),
+        policy,
+        cache,
+        max_body,
+    };
+    let http = lua.create_table()?;
 
-    {
-        let cache = Arc::clone(&cache);
-        let clear = lua
-            .create_function(move |_, ()| Ok(cache.clear()))
-            .map_err(RunError::Init)?;
-        http.set("cache_clear", clear).map_err(RunError::Init)?;
-    }
-
-    {
-        let cell = Arc::clone(&cell);
-        let policy = Arc::clone(&policy);
-        let cache = Arc::clone(&cache);
-        let request = lua
-            .create_async_function(
-                move |lua, (method, url, opts): (String, String, Option<Table>)| {
-                    let cell = Arc::clone(&cell);
-                    let policy = Arc::clone(&policy);
-                    let cache = Arc::clone(&cache);
-                    async move {
-                        let client = ensure_client(&cell, &policy)?;
-                        let ctx = Ctx {
-                            client: &client,
-                            policy: &policy,
-                            cache: &cache,
-                            max_body,
-                        };
-                        let call = Call {
-                            method: &method,
-                            url: &url,
-                            opts,
-                        };
-                        do_request(&lua, &ctx, call).await
-                    }
-                },
-            )
-            .map_err(RunError::Init)?;
-        http.set("request", request).map_err(RunError::Init)?;
-    }
-
+    http.set("cache_clear", cache_clear_fn(lua, &shared.cache)?)?;
+    http.set("request", request_fn(lua, &shared)?)?;
     for (name, method) in [
         ("get", "GET"),
         ("post", "POST"),
@@ -137,38 +131,50 @@ pub(crate) fn install(lua: &Lua, lur: &Table, config: HttpConfig) -> Result<(), 
         ("delete", "DELETE"),
         ("head", "HEAD"),
     ] {
-        let cell = Arc::clone(&cell);
-        let policy = Arc::clone(&policy);
-        let cache = Arc::clone(&cache);
-        let method = method.to_string();
-        let f = lua
-            .create_async_function(move |lua, (url, opts): (String, Option<Table>)| {
-                let cell = Arc::clone(&cell);
-                let policy = Arc::clone(&policy);
-                let cache = Arc::clone(&cache);
-                let method = method.clone();
-                async move {
-                    let client = ensure_client(&cell, &policy)?;
-                    let ctx = Ctx {
-                        client: &client,
-                        policy: &policy,
-                        cache: &cache,
-                        max_body,
-                    };
-                    let call = Call {
-                        method: &method,
-                        url: &url,
-                        opts,
-                    };
-                    do_request(&lua, &ctx, call).await
-                }
-            })
-            .map_err(RunError::Init)?;
-        http.set(name, f).map_err(RunError::Init)?;
+        http.set(name, verb_fn(lua, &shared, method)?)?;
     }
 
-    lur.set("http", http).map_err(RunError::Init)?;
+    lur.set("http", http)?;
     Ok(())
+}
+
+fn cache_clear_fn(lua: &Lua, cache: &Arc<HttpCache>) -> mlua::Result<mlua::Function> {
+    let cache = Arc::clone(cache);
+    lua.create_function(move |_, ()| Ok(cache.clear()))
+}
+
+/// `lur.http.request(method, url, opts?)`.
+fn request_fn(lua: &Lua, shared: &Shared) -> mlua::Result<mlua::Function> {
+    let shared = shared.clone();
+    lua.create_async_function(
+        move |lua, (method, url, opts): (String, String, Option<Table>)| {
+            let shared = shared.clone();
+            async move {
+                let call = Call {
+                    method: &method,
+                    url: &url,
+                    opts,
+                };
+                shared.request(&lua, call).await
+            }
+        },
+    )
+}
+
+/// `lur.http.get` / `post` / ...: `request` with the method fixed.
+fn verb_fn(lua: &Lua, shared: &Shared, method: &'static str) -> mlua::Result<mlua::Function> {
+    let shared = shared.clone();
+    lua.create_async_function(move |lua, (url, opts): (String, Option<Table>)| {
+        let shared = shared.clone();
+        async move {
+            let call = Call {
+                method,
+                url: &url,
+                opts,
+            };
+            shared.request(&lua, call).await
+        }
+    })
 }
 
 fn ensure_client(cell: &OnceLock<Client>, policy: &Arc<Policy>) -> mlua::Result<Client> {
