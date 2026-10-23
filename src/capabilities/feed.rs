@@ -199,57 +199,8 @@ fn read_items(t: &Table, fname: &str, skip_invalid: bool) -> mlua::Result<Vec<It
 }
 
 fn read_item(t: &Table, ctx: &str) -> mlua::Result<Item> {
-    let mut categories = Vec::new();
-    match t.get::<Value>("categories")? {
-        Value::Nil => {}
-        Value::Table(list) => {
-            for c in list.sequence_values::<Value>() {
-                match c? {
-                    Value::String(s) => categories.push(
-                        s.to_str()
-                            .map_err(|e| Error::runtime(format!("{ctx}.categories: {e}")))?
-                            .to_string(),
-                    ),
-                    other => {
-                        return Err(Error::runtime(format!(
-                            "{ctx}.categories must contain strings, got {}",
-                            other.type_name()
-                        )));
-                    }
-                }
-            }
-        }
-        other => {
-            return Err(Error::runtime(format!(
-                "{ctx}.categories must be table, got {}",
-                other.type_name()
-            )));
-        }
-    }
-
-    let enclosure = match t.get::<Value>("enclosure")? {
-        Value::Nil => None,
-        Value::Table(e) => {
-            let ectx = format!("{ctx}.enclosure");
-            Some(Enclosure {
-                url: req_str(&e, "url", &ectx)?,
-                mime: opt_str(&e, "type", &ectx)?,
-                length: argcheck::integer_arg(
-                    e.get::<Value>("length")?,
-                    &format!("{ectx}.length"),
-                    1,
-                )
-                .map_err(|err| Error::runtime(err.to_string().replace("argument #1 ", "")))?,
-            })
-        }
-        other => {
-            return Err(Error::runtime(format!(
-                "{ctx}.enclosure must be table, got {}",
-                other.type_name()
-            )));
-        }
-    };
-
+    let categories = read_categories(t, ctx)?;
+    let enclosure = read_enclosure(t, ctx)?;
     Ok(Item {
         title: req_str(t, "title", ctx)?,
         link: opt_str(t, "link", ctx)?,
@@ -262,6 +213,56 @@ fn read_item(t: &Table, ctx: &str) -> mlua::Result<Item> {
         categories,
         enclosure,
     })
+}
+
+fn read_categories(t: &Table, ctx: &str) -> mlua::Result<Vec<String>> {
+    let list = match t.get::<Value>("categories")? {
+        Value::Nil => return Ok(Vec::new()),
+        Value::Table(list) => list,
+        other => {
+            return Err(Error::runtime(format!(
+                "{ctx}.categories must be table, got {}",
+                other.type_name()
+            )));
+        }
+    };
+    let mut categories = Vec::new();
+    for c in list.sequence_values::<Value>() {
+        match c? {
+            Value::String(s) => categories.push(
+                s.to_str()
+                    .map_err(|e| Error::runtime(format!("{ctx}.categories: {e}")))?
+                    .to_string(),
+            ),
+            other => {
+                return Err(Error::runtime(format!(
+                    "{ctx}.categories must contain strings, got {}",
+                    other.type_name()
+                )));
+            }
+        }
+    }
+    Ok(categories)
+}
+
+fn read_enclosure(t: &Table, ctx: &str) -> mlua::Result<Option<Enclosure>> {
+    let e = match t.get::<Value>("enclosure")? {
+        Value::Nil => return Ok(None),
+        Value::Table(e) => e,
+        other => {
+            return Err(Error::runtime(format!(
+                "{ctx}.enclosure must be table, got {}",
+                other.type_name()
+            )));
+        }
+    };
+    let ectx = format!("{ctx}.enclosure");
+    Ok(Some(Enclosure {
+        url: req_str(&e, "url", &ectx)?,
+        mime: opt_str(&e, "type", &ectx)?,
+        length: argcheck::integer_arg(e.get::<Value>("length")?, &format!("{ectx}.length"), 1)
+            .map_err(|err| Error::runtime(err.to_string().replace("argument #1 ", "")))?,
+    }))
 }
 
 // ---- writing ----
