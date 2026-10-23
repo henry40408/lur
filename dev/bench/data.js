@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792602915881,
+  "lastUpdate": 1792719189256,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -6545,6 +6545,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1408812,
             "range": "± 26890",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d8fdbd05001d1b6b9304e24f5cfab73fea8a43af",
+          "message": "refactor(docs): pass compose_prefix inputs as a PrefixSpec struct (#191)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-23T09:29:24+08:00",
+          "tree_id": "616e6e3595ef8ae349fce30e9175e546698c123c",
+          "url": "https://github.com/henry40408/lur/commit/d8fdbd05001d1b6b9304e24f5cfab73fea8a43af"
+        },
+        "date": 1792719188487,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 409456,
+            "range": "± 9330",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5951,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 189176,
+            "range": "± 1041",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 20912326,
+            "range": "± 374451",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3483038,
+            "range": "± 28898",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1905195,
+            "range": "± 21216",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1983061,
+            "range": "± 13366",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2160161,
+            "range": "± 67124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1319785,
+            "range": "± 19980",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1411676,
+            "range": "± 17896",
             "unit": "ns/iter"
           }
         ]
