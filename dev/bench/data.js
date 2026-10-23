@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792738340132,
+  "lastUpdate": 1792739558390,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -8393,6 +8393,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1258861,
             "range": "± 34227",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "64720c7fee48c720f4453742085a97785f72c8a3",
+          "message": "refactor(postgres): split kv_update into helpers (#219)\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-23T15:06:02+08:00",
+          "tree_id": "61b99273d175824b77a477ae8b03c4c00970d0d7",
+          "url": "https://github.com/henry40408/lur/commit/64720c7fee48c720f4453742085a97785f72c8a3"
+        },
+        "date": 1792739557490,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 414809,
+            "range": "± 3027",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 6004,
+            "range": "± 58",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 184095,
+            "range": "± 1553",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 21656525,
+            "range": "± 270428",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3504087,
+            "range": "± 40955",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1918344,
+            "range": "± 48322",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 2015332,
+            "range": "± 47396",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2182646,
+            "range": "± 48428",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1283462,
+            "range": "± 29810",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1370119,
+            "range": "± 47153",
             "unit": "ns/iter"
           }
         ]
