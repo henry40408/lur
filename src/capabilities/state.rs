@@ -1154,213 +1154,248 @@ fn fallback(
 
 /// Install `lur.state` backed by the shared `store`.
 pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), RunError> {
-    let state = lua.create_table().map_err(RunError::Init)?;
+    let state = build(lua, &store).map_err(RunError::Init)?;
+    lur.set("state", state).map_err(RunError::Init)
+}
 
+fn build(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<Table> {
+    let state = lua.create_table()?;
+    state.set("get", get_fn(lua, store)?)?;
+    state.set("set", set_fn(lua, store)?)?;
+    state.set("incr", counter_fn(lua, store, "incr", false)?)?;
+    state.set("decr", counter_fn(lua, store, "decr", true)?)?;
+    state.set("update", update_fn(lua, store)?)?;
+    state.set("cas", cas_fn(lua, store)?)?;
+    state.set("add", add_fn(lua, store)?)?;
+    state.set("ttl", ttl_fn(lua, store)?)?;
+    state.set("fetch", fetch_fn(lua, store)?)?;
+    Ok(state)
+}
+
+fn get_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
-    let get = lua
-        .create_function(move |lua, key: Value| {
-            let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.get", 1, "string")?;
-            reject_reentry()?;
-            let found = s.get(&key.as_bytes());
-            let counter = if found.is_some() { &s.hits } else { &s.misses };
-            counter.fetch_add(1, Ordering::Relaxed);
-            to_lua(lua, found)
-        })
-        .map_err(RunError::Init)?;
-    state.set("get", get).map_err(RunError::Init)?;
+    lua.create_function(move |lua, key: Value| {
+        let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.get", 1, "string")?;
+        reject_reentry()?;
+        let found = s.get(&key.as_bytes());
+        let counter = if found.is_some() { &s.hits } else { &s.misses };
+        counter.fetch_add(1, Ordering::Relaxed);
+        to_lua(lua, found)
+    })
+}
 
+fn set_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
-    let set = lua
-        .create_function(move |lua, (key, value, opts): (Value, Value, Value)| {
-            let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.set", 1, "string")?;
-            reject_reentry()?;
-            let w = write_opts(&opts, "lur.state.set", NoTtl::Clear, false)?;
-            s.set(key.as_bytes().to_vec(), from_lua(&value)?, w)
-                .map_err(|Full| full_err("lur.state.set"))
-        })
-        .map_err(RunError::Init)?;
-    state.set("set", set).map_err(RunError::Init)?;
+    lua.create_function(move |lua, (key, value, opts): (Value, Value, Value)| {
+        let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.set", 1, "string")?;
+        reject_reentry()?;
+        let w = write_opts(&opts, "lur.state.set", NoTtl::Clear, false)?;
+        s.set(key.as_bytes().to_vec(), from_lua(&value)?, w)
+            .map_err(|Full| full_err("lur.state.set"))
+    })
+}
 
-    for (name, negate) in [("incr", false), ("decr", true)] {
-        let s = store.clone();
-        let fname = format!("lur.state.{name}");
-        let f = lua
-            .create_function(move |lua, (key, n, opts): (Value, Value, Value)| {
-                let key: mlua::LuaString = argcheck::arg(lua, key, &fname, 1, "string")?;
-                let n = argcheck::integer_arg(n, &fname, 2)?;
-                reject_reentry()?;
-                let w = write_opts(&opts, &fname, NoTtl::Keep, true)?;
-                let step = n.unwrap_or(1);
-                let delta = if negate {
-                    step.checked_neg().ok_or_else(|| {
-                        mlua::Error::RuntimeError(format!("{fname}: step too large"))
-                    })?
-                } else {
-                    step
-                };
-                s.incr(key.as_bytes().to_vec(), delta, w)
-                    .map_err(|e| match e {
-                        IncrError::NotInteger => mlua::Error::RuntimeError(format!(
-                            "{fname}: existing value is not an integer"
-                        )),
-                        IncrError::Overflow => {
-                            mlua::Error::RuntimeError(format!("{fname}: counter overflow"))
-                        }
-                        IncrError::Full => full_err(&fname),
-                    })
-            })
-            .map_err(RunError::Init)?;
-        state.set(name, f).map_err(RunError::Init)?;
-    }
-
+/// `incr` (or `decr` when `negate`).
+fn counter_fn(
+    lua: &Lua,
+    store: &Arc<StateStore>,
+    name: &str,
+    negate: bool,
+) -> mlua::Result<mlua::Function> {
     let s = store.clone();
-    let update = lua
-        .create_function(move |lua, (key, func, opts): (Value, Value, Value)| {
-            let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.update", 1, "string")?;
-            let func: mlua::Function = argcheck::arg(lua, func, "lur.state.update", 2, "function")?;
-            reject_reentry()?;
-            let w = write_opts(&opts, "lur.state.update", NoTtl::Keep, false)?;
-            let key = key.as_bytes().to_vec();
-            loop {
-                let (old, version) = s.snapshot(&key);
-                let old_lua = to_lua(lua, old)?;
-                // No host lock is held while the transform runs.
-                IN_UPDATE.with(|f| f.set(true));
-                let result = func.call::<Value>(old_lua);
-                IN_UPDATE.with(|f| f.set(false));
-                let new_lua = result?;
-                let new = from_lua(&new_lua)?;
-                if s.compare_and_set(&key, version, new, w)
-                    .map_err(|Full| full_err("lur.state.update"))?
-                {
-                    return Ok(new_lua);
+    let fname = format!("lur.state.{name}");
+    lua.create_function(move |lua, (key, n, opts): (Value, Value, Value)| {
+        let key: mlua::LuaString = argcheck::arg(lua, key, &fname, 1, "string")?;
+        let n = argcheck::integer_arg(n, &fname, 2)?;
+        reject_reentry()?;
+        let w = write_opts(&opts, &fname, NoTtl::Keep, true)?;
+        let step = n.unwrap_or(1);
+        let delta = if negate {
+            step.checked_neg()
+                .ok_or_else(|| mlua::Error::RuntimeError(format!("{fname}: step too large")))?
+        } else {
+            step
+        };
+        s.incr(key.as_bytes().to_vec(), delta, w)
+            .map_err(|e| match e {
+                IncrError::NotInteger => {
+                    mlua::Error::RuntimeError(format!("{fname}: existing value is not an integer"))
                 }
-                // Lost a race; retry from a fresh snapshot.
-            }
-        })
-        .map_err(RunError::Init)?;
-    state.set("update", update).map_err(RunError::Init)?;
-
-    let s = store.clone();
-    let cas = lua
-        .create_function(
-            move |lua, (key, expected, new, opts): (Value, Value, Value, Value)| {
-                let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.cas", 1, "string")?;
-                reject_reentry()?;
-                let w = write_opts(&opts, "lur.state.cas", NoTtl::Keep, false)?;
-                let expected_prim = from_lua(&expected)?;
-                let new_prim = from_lua(&new)?;
-                s.cas_value(&key.as_bytes(), expected_prim.as_ref(), new_prim, w)
-                    .map_err(|Full| full_err("lur.state.cas"))
-            },
-        )
-        .map_err(RunError::Init)?;
-    state.set("cas", cas).map_err(RunError::Init)?;
-
-    let s = store.clone();
-    let add = lua
-        .create_function(move |lua, (key, value, opts): (Value, Value, Value)| {
-            let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.add", 1, "string")?;
-            reject_reentry()?;
-            let w = write_opts(&opts, "lur.state.add", NoTtl::Clear, false)?;
-            let new_prim = from_lua(&value)?;
-            s.cas_value(&key.as_bytes(), None, new_prim, w)
-                .map_err(|Full| full_err("lur.state.add"))
-        })
-        .map_err(RunError::Init)?;
-    state.set("add", add).map_err(RunError::Init)?;
-
-    // `ttl(key) -> ms, exists`, the same shape as `lur.kv.ttl`.
-    let s = store.clone();
-    let ttl = lua
-        .create_function(move |lua, key: Value| {
-            let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.ttl", 1, "string")?;
-            reject_reentry()?;
-            Ok(match s.ttl(&key.as_bytes()) {
-                None => (Value::Nil, false),
-                Some(None) => (Value::Nil, true),
-                Some(Some(ms)) => (Value::Integer(ms), true),
+                IncrError::Overflow => {
+                    mlua::Error::RuntimeError(format!("{fname}: counter overflow"))
+                }
+                IncrError::Full => full_err(&fname),
             })
-        })
-        .map_err(RunError::Init)?;
-    state.set("ttl", ttl).map_err(RunError::Init)?;
+    })
+}
 
-    // `fetch(key, { ttl_ms, stale_ms? }, fn) -> value, "hit" | "miss" | "stale"`.
-    // `fn` runs with no lock held and may await I/O; it is not retried.
+fn update_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
+    let s = store.clone();
+    lua.create_function(move |lua, (key, func, opts): (Value, Value, Value)| {
+        let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.update", 1, "string")?;
+        let func: mlua::Function = argcheck::arg(lua, func, "lur.state.update", 2, "function")?;
+        reject_reentry()?;
+        let w = write_opts(&opts, "lur.state.update", NoTtl::Keep, false)?;
+        let key = key.as_bytes().to_vec();
+        loop {
+            let (old, version) = s.snapshot(&key);
+            let old_lua = to_lua(lua, old)?;
+            // No host lock is held while the transform runs.
+            IN_UPDATE.with(|f| f.set(true));
+            let result = func.call::<Value>(old_lua);
+            IN_UPDATE.with(|f| f.set(false));
+            let new_lua = result?;
+            let new = from_lua(&new_lua)?;
+            if s.compare_and_set(&key, version, new, w)
+                .map_err(|Full| full_err("lur.state.update"))?
+            {
+                return Ok(new_lua);
+            }
+            // Lost a race; retry from a fresh snapshot.
+        }
+    })
+}
+
+fn cas_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
+    let s = store.clone();
+    lua.create_function(
+        move |lua, (key, expected, new, opts): (Value, Value, Value, Value)| {
+            let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.cas", 1, "string")?;
+            reject_reentry()?;
+            let w = write_opts(&opts, "lur.state.cas", NoTtl::Keep, false)?;
+            let expected_prim = from_lua(&expected)?;
+            let new_prim = from_lua(&new)?;
+            s.cas_value(&key.as_bytes(), expected_prim.as_ref(), new_prim, w)
+                .map_err(|Full| full_err("lur.state.cas"))
+        },
+    )
+}
+
+fn add_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
+    let s = store.clone();
+    lua.create_function(move |lua, (key, value, opts): (Value, Value, Value)| {
+        let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.add", 1, "string")?;
+        reject_reentry()?;
+        let w = write_opts(&opts, "lur.state.add", NoTtl::Clear, false)?;
+        let new_prim = from_lua(&value)?;
+        s.cas_value(&key.as_bytes(), None, new_prim, w)
+            .map_err(|Full| full_err("lur.state.add"))
+    })
+}
+
+/// `ttl(key) -> ms, exists`, the same shape as `lur.kv.ttl`.
+fn ttl_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
+    let s = store.clone();
+    lua.create_function(move |lua, key: Value| {
+        let key: mlua::LuaString = argcheck::arg(lua, key, "lur.state.ttl", 1, "string")?;
+        reject_reentry()?;
+        Ok(match s.ttl(&key.as_bytes()) {
+            None => (Value::Nil, false),
+            Some(None) => (Value::Nil, true),
+            Some(Some(ms)) => (Value::Integer(ms), true),
+        })
+    })
+}
+
+/// `fetch(key, { ttl_ms, stale_ms? }, fn) -> value, "hit" | "miss" | "stale"`.
+/// `fn` runs with no lock held and may await I/O; it is not retried.
+fn fetch_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
     let leads = Arc::new(VmLeads::default());
     let vm = Arc::new(VmFlights {
         store: store.clone(),
         leads: leads.clone(),
     });
-    resume::install(lua, &vm).map_err(RunError::Init)?;
+    resume::install(lua, &vm)?;
     lua.set_app_data(vm);
-    let fetch = lua
-        .create_async_function(move |lua, (key, opts, func): (Value, Value, Value)| {
-            let s = s.clone();
-            let leads = leads.clone();
-            async move {
-                const F: &str = "lur.state.fetch";
-                let key: mlua::LuaString = argcheck::arg(&lua, key, F, 1, "string")?;
-                let key = key.as_bytes().to_vec();
-                let Some(opts) = opts_table(&opts, F)? else {
-                    return Err(mlua::Error::RuntimeError(format!(
-                        "{F}: argument #2 must be a table such as {{ ttl_ms = 60000 }}"
-                    )));
-                };
-                let ttl_ms = ms_field(opts, "ttl_ms", F)?.ok_or_else(|| {
-                    mlua::Error::RuntimeError(format!("{F}: opts.ttl_ms is required"))
-                })?;
-                let stale_ms = ms_field(opts, "stale_ms", F)?;
-                let func: mlua::Function = argcheck::arg(&lua, func, F, 3, "function")?;
-                reject_reentry()?;
+    lua.create_async_function(move |lua, (key, opts, func): (Value, Value, Value)| {
+        let s = s.clone();
+        let leads = leads.clone();
+        async move {
+            let args = fetch_args(&lua, key, &opts, func)?;
+            fetch_flight(&lua, &s, &leads, args).await
+        }
+    })
+}
 
-                if let Lookup::Fresh(p) = s.lookup(&key) {
-                    s.hits.fetch_add(1, Ordering::Relaxed);
-                    return Ok((to_lua(&lua, Some(p))?, "hit"));
-                }
-                let w = Write {
-                    expiry: Expiry::After(ttl_ms),
-                    evictable: Some(true),
-                    stale_ms,
+/// Validated arguments of `lur.state.fetch`.
+struct FetchArgs {
+    key: Vec<u8>,
+    ttl_ms: i64,
+    stale_ms: Option<i64>,
+    func: mlua::Function,
+}
+
+fn fetch_args(lua: &Lua, key: Value, opts: &Value, func: Value) -> mlua::Result<FetchArgs> {
+    const F: &str = "lur.state.fetch";
+    let key: mlua::LuaString = argcheck::arg(lua, key, F, 1, "string")?;
+    let key = key.as_bytes().to_vec();
+    let Some(opts) = opts_table(opts, F)? else {
+        return Err(mlua::Error::RuntimeError(format!(
+            "{F}: argument #2 must be a table such as {{ ttl_ms = 60000 }}"
+        )));
+    };
+    let ttl_ms = ms_field(opts, "ttl_ms", F)?
+        .ok_or_else(|| mlua::Error::RuntimeError(format!("{F}: opts.ttl_ms is required")))?;
+    let stale_ms = ms_field(opts, "stale_ms", F)?;
+    let func: mlua::Function = argcheck::arg(lua, func, F, 3, "function")?;
+    reject_reentry()?;
+    Ok(FetchArgs {
+        key,
+        ttl_ms,
+        stale_ms,
+        func,
+    })
+}
+
+async fn fetch_flight(
+    lua: &Lua,
+    s: &Arc<StateStore>,
+    leads: &Arc<VmLeads>,
+    args: FetchArgs,
+) -> mlua::Result<(Value, &'static str)> {
+    let FetchArgs {
+        key,
+        ttl_ms,
+        stale_ms,
+        func,
+    } = args;
+    if let Lookup::Fresh(p) = s.lookup(&key) {
+        s.hits.fetch_add(1, Ordering::Relaxed);
+        return Ok((to_lua(lua, Some(p))?, "hit"));
+    }
+    let w = Write {
+        expiry: Expiry::After(ttl_ms),
+        evictable: Some(true),
+        stale_ms,
+    };
+    // Single-flight: lead, or wait for the leader and share its outcome. A
+    // leader that ends without one hands off: every waiter wakes and goes round
+    // again, and the first to re-join leads.
+    loop {
+        match s.join(&key, leads) {
+            Join::Hit(p) => {
+                s.hits.fetch_add(1, Ordering::Relaxed);
+                return Ok((to_lua(lua, Some(p))?, "hit"));
+            }
+            Join::Lead(guard) => return load(lua, s, &key, &func, w, Some(guard)).await,
+            Join::Inline => return load(lua, s, &key, &func, w, None).await,
+            Join::Wait(mut rx, same_vm, _edges) => {
+                // Bound only by this caller's own timeout.
+                let outcome = if same_vm {
+                    wait_same_vm(lua, leads, &mut rx).await
+                } else {
+                    rx.wait_for(Option::is_some)
+                        .await
+                        .ok()
+                        .and_then(|o| o.clone())
                 };
-                // Single-flight: lead, or wait for the leader and share its
-                // outcome. A leader that ends without one hands off: every
-                // waiter wakes and goes round again, and the first to re-join
-                // leads.
-                loop {
-                    match s.join(&key, &leads) {
-                        Join::Hit(p) => {
-                            s.hits.fetch_add(1, Ordering::Relaxed);
-                            return Ok((to_lua(&lua, Some(p))?, "hit"));
-                        }
-                        Join::Lead(guard) => {
-                            return load(&lua, &s, &key, &func, w, Some(guard)).await;
-                        }
-                        Join::Inline => return load(&lua, &s, &key, &func, w, None).await,
-                        Join::Wait(mut rx, same_vm, _edges) => {
-                            // Bound only by this caller's own timeout.
-                            let outcome = if same_vm {
-                                wait_same_vm(&lua, &leads, &mut rx).await
-                            } else {
-                                rx.wait_for(Option::is_some)
-                                    .await
-                                    .ok()
-                                    .and_then(|o| o.clone())
-                            };
-                            if let Some(shared) = outcome {
-                                return share(&lua, &s, &key, &shared);
-                            }
-                        }
-                    }
+                if let Some(shared) = outcome {
+                    return share(lua, s, &key, &shared);
                 }
             }
-        })
-        .map_err(RunError::Init)?;
-    state.set("fetch", fetch).map_err(RunError::Init)?;
-
-    lur.set("state", state).map_err(RunError::Init)?;
-    Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
