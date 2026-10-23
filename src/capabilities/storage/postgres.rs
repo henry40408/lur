@@ -492,62 +492,10 @@ impl PgBackend {
 
         // Cancellation or an error anywhere in here drops `tx`, which rolls back.
         async {
-            // An expired row reads as absent; a live one keeps its expiry
-            // unless `ttl_ms` replaces it.
-            let (cur, cur_expiry): (Value, Option<i64>) = match sqlx::query(
-                "SELECT kind, bytes, num, expires_at FROM lur_kv WHERE key = $1 \
-                 AND (expires_at IS NULL OR expires_at > $2)",
-            )
-            .bind(&key)
-            .bind(now_ms())
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| map_pg_error("lur.kv.update", &e))?
-            {
-                None => (Value::Nil, None),
-                Some(r) => {
-                    let expiry = r
-                        .try_get::<Option<i64>, usize>(3)
-                        .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
-                    (
-                        Value::String(lua.create_string(kv_row_to_bytes(&r)?)?),
-                        expiry,
-                    )
-                }
-            };
-
+            let (cur, cur_expiry) = read_live_value(&mut tx, lua, &key).await?;
             let new = func.call_async::<Value>(cur).await?;
-
-            match &new {
-                Value::Nil => {
-                    sqlx::query("DELETE FROM lur_kv WHERE key = $1")
-                        .bind(&key)
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(|e| map_pg_error("lur.kv.update", &e))?;
-                }
-                Value::String(s) => {
-                    let expires_at = expiry_at(now_ms(), ttl_ms).or(cur_expiry);
-                    sqlx::query(
-                        "INSERT INTO lur_kv (key, kind, bytes, num, expires_at) \
-                         VALUES ($1, 0, $2, NULL, $3) \
-                         ON CONFLICT (key) DO UPDATE SET kind = 0, bytes = excluded.bytes, \
-                           num = NULL, expires_at = excluded.expires_at",
-                    )
-                    .bind(&key)
-                    .bind(s.as_bytes().to_vec())
-                    .bind(expires_at)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| map_pg_error("lur.kv.update", &e))?;
-                }
-                other => {
-                    return Err(Error::runtime(format!(
-                        "lur.kv.update: transform must return a string or nil, got {}",
-                        other.type_name()
-                    )));
-                }
-            }
+            let expires_at = expiry_at(now_ms(), ttl_ms).or(cur_expiry);
+            write_updated(&mut tx, &key, &new, expires_at).await?;
             tx.commit()
                 .await
                 .map_err(|e| map_pg_error("lur.kv.update: commit", &e))?;
@@ -555,6 +503,71 @@ impl PgBackend {
         }
         .await
     }
+}
+
+/// The live value of `key` and its expiry. An expired row reads as absent; a
+/// live one keeps its expiry unless `ttl_ms` replaces it.
+async fn read_live_value(
+    conn: &mut sqlx::PgConnection,
+    lua: &Lua,
+    key: &str,
+) -> mlua::Result<(Value, Option<i64>)> {
+    let row = sqlx::query(
+        "SELECT kind, bytes, num, expires_at FROM lur_kv WHERE key = $1 \
+         AND (expires_at IS NULL OR expires_at > $2)",
+    )
+    .bind(key)
+    .bind(now_ms())
+    .fetch_optional(conn)
+    .await
+    .map_err(|e| map_pg_error("lur.kv.update", &e))?;
+    let Some(r) = row else {
+        return Ok((Value::Nil, None));
+    };
+    let expiry = r
+        .try_get::<Option<i64>, usize>(3)
+        .map_err(|e| Error::runtime(format!("lur.kv.update: {e}")))?;
+    let value = Value::String(lua.create_string(kv_row_to_bytes(&r)?)?);
+    Ok((value, expiry))
+}
+
+/// Store `new` (a string, or nil to delete) for `key` with `expires_at`.
+async fn write_updated(
+    conn: &mut sqlx::PgConnection,
+    key: &str,
+    new: &Value,
+    expires_at: Option<i64>,
+) -> mlua::Result<()> {
+    match new {
+        Value::Nil => {
+            sqlx::query("DELETE FROM lur_kv WHERE key = $1")
+                .bind(key)
+                .execute(conn)
+                .await
+                .map_err(|e| map_pg_error("lur.kv.update", &e))?;
+        }
+        Value::String(s) => {
+            sqlx::query(
+                "INSERT INTO lur_kv (key, kind, bytes, num, expires_at) \
+                 VALUES ($1, 0, $2, NULL, $3) \
+                 ON CONFLICT (key) DO UPDATE SET kind = 0, bytes = excluded.bytes, \
+                   num = NULL, expires_at = excluded.expires_at",
+            )
+            .bind(key)
+            .bind(s.as_bytes().to_vec())
+            .bind(expires_at)
+            .execute(conn)
+            .await
+            .map_err(|e| map_pg_error("lur.kv.update", &e))?;
+        }
+        other => {
+            return Err(Error::runtime(format!(
+                "lur.kv.update: transform must return a string or nil, got {}",
+                other.type_name()
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Write transaction; calls after commit/rollback error. Dropping it (e.g. on
