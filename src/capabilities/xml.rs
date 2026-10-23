@@ -358,6 +358,47 @@ impl Node {
     }
 }
 
+impl Node {
+    /// `text(path)`: shorthand for `select_one(path):text()`; `nil` when
+    /// nothing matches, `""` when the match has no text.
+    fn text_or_select(&self, lua: &Lua, args: &[Value]) -> mlua::Result<Option<String>> {
+        match args {
+            [] => Ok(Some(self.text())),
+            [arg] if arg.is_nil() => Ok(Some(self.text())),
+            [arg] => {
+                let path = string_arg(lua, arg.clone(), "lur.xml.text")?;
+                Ok(self
+                    .select(&path, "lur.xml.text", true)?
+                    .into_iter()
+                    .next()
+                    .map(|n| n.text()))
+            }
+            more => Err(Error::runtime(format!(
+                "lur.xml.text: expected at most 1 argument, got {}",
+                more.len()
+            ))),
+        }
+    }
+
+    fn attr_value(&self, lua: &Lua, name: Value) -> mlua::Result<Option<String>> {
+        let name = string_arg(lua, name, "lur.xml.attr")?;
+        Ok(self
+            .elem()
+            .attrs
+            .iter()
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| v.clone()))
+    }
+
+    fn attrs_table(&self, lua: &Lua) -> mlua::Result<Table> {
+        let out = lua.create_table()?;
+        for (k, v) in &self.elem().attrs {
+            out.set(k.as_str(), v.as_str())?;
+        }
+        Ok(out)
+    }
+}
+
 impl UserData for Node {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("select", |lua, this, path: Value| {
@@ -371,44 +412,14 @@ impl UserData for Node {
                 .into_iter()
                 .next())
         });
-        // `text(path)`: shorthand for `select_one(path):text()`; `nil` when
-        // nothing matches, `""` when the match has no text.
         methods.add_method("text", |lua, this, args: Variadic<Value>| {
-            match args.len() {
-                0 => Ok(Some(this.text())),
-                1 if args[0].is_nil() => Ok(Some(this.text())),
-                1 => {
-                    let path = string_arg(lua, args[0].clone(), "lur.xml.text")?;
-                    Ok(this
-                        .select(&path, "lur.xml.text", true)?
-                        .into_iter()
-                        .next()
-                        .map(|n| n.text()))
-                }
-                n => Err(Error::runtime(format!(
-                    "lur.xml.text: expected at most 1 argument, got {n}"
-                ))),
-            }
+            this.text_or_select(lua, &args)
         });
         methods.add_method("tag", |_, this, ()| {
             Ok((this.idx != 0).then(|| this.elem().name.clone()))
         });
-        methods.add_method("attr", |lua, this, name: Value| {
-            let name = string_arg(lua, name, "lur.xml.attr")?;
-            Ok(this
-                .elem()
-                .attrs
-                .iter()
-                .find(|(k, _)| *k == name)
-                .map(|(_, v)| v.clone()))
-        });
-        methods.add_method("attrs", |lua, this, ()| {
-            let out = lua.create_table()?;
-            for (k, v) in &this.elem().attrs {
-                out.set(k.as_str(), v.as_str())?;
-            }
-            Ok(out)
-        });
+        methods.add_method("attr", |lua, this, name: Value| this.attr_value(lua, name));
+        methods.add_method("attrs", |lua, this, ()| this.attrs_table(lua));
         methods.add_method("parent", |_, this, ()| {
             Ok(this
                 .elem()
