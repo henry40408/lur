@@ -336,66 +336,84 @@ impl Server {
         addr: SocketAddr,
         shutdown: impl Future<Output = ()> + Send + 'static,
     ) -> std::io::Result<()> {
-        let grace = self.shutdown_grace;
         let server = Arc::new(self);
         let driver = server.clone();
-        driver.rt.block_on(async move {
-            let listener = TcpListener::bind(addr).await?;
-            info!("listening on http://{addr}");
+        driver.rt.block_on(server.serve(addr, shutdown))
+    }
 
-            // Fan shutdown out to the accept loop and every cron loop.
-            let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-            tokio::spawn(async move {
-                shutdown.await;
-                let _ = shutdown_tx.send(true);
-            });
+    async fn serve(
+        self: Arc<Self>,
+        addr: SocketAddr,
+        shutdown: impl Future<Output = ()> + Send + 'static,
+    ) -> std::io::Result<()> {
+        let grace = self.shutdown_grace;
+        let listener = TcpListener::bind(addr).await?;
+        info!("listening on http://{addr}");
 
-            // Connections are watched by `graceful`, which tells idle keep-alive
-            // ones to close on shutdown; cron runs are tracked by `crons`.
-            let graceful = GracefulShutdown::new();
-            let crons = TaskTracker::new();
+        let shutdown_rx = fan_out_shutdown(shutdown);
 
-            for job in &server.cron_jobs {
-                tokio::spawn(cron_loop(
-                    server.clone(),
-                    job.clone(),
-                    shutdown_rx.clone(),
-                    crons.clone(),
-                ));
-            }
+        // Connections are watched by `graceful`, which tells idle keep-alive
+        // ones to close on shutdown; cron runs are tracked by `crons`.
+        let graceful = GracefulShutdown::new();
+        let crons = TaskTracker::new();
 
-            let mut accept_shutdown = shutdown_rx.clone();
-            loop {
-                tokio::select! {
-                    _ = accept_shutdown.changed() => break,
-                    res = listener.accept() => {
-                        let (stream, _) = res?;
-                        let io = TokioIo::new(stream);
-                        let server = server.clone();
-                        let service = service_fn(move |req| {
-                            let server = server.clone();
-                            async move { server.handle(req).await }
-                        });
-                        let conn = graceful.watch(http1::Builder::new().serve_connection(io, service));
-                        tokio::spawn(async move {
-                            if let Err(e) = conn.await {
-                                warn!("connection error: {e}");
-                            }
-                        });
-                    }
+        for job in &self.cron_jobs {
+            tokio::spawn(cron_loop(
+                self.clone(),
+                job.clone(),
+                shutdown_rx.clone(),
+                crons.clone(),
+            ));
+        }
+
+        self.accept_until(&listener, &graceful, shutdown_rx).await?;
+
+        info!("shutting down, draining for up to {}ms", grace.as_millis());
+        crons.close();
+        // Anything still running after the grace period is aborted when the
+        // runtime drops.
+        let _ = tokio::time::timeout(grace, async {
+            tokio::join!(graceful.shutdown(), crons.wait());
+        })
+        .await;
+        Ok(())
+    }
+
+    /// Accept connections until `shutdown` flips.
+    async fn accept_until(
+        self: &Arc<Self>,
+        listener: &TcpListener,
+        graceful: &GracefulShutdown,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> std::io::Result<()> {
+        loop {
+            tokio::select! {
+                _ = shutdown.changed() => return Ok(()),
+                res = listener.accept() => {
+                    let (stream, _) = res?;
+                    self.spawn_connection(stream, graceful);
                 }
             }
+        }
+    }
 
-            info!("shutting down, draining for up to {}ms", grace.as_millis());
-            crons.close();
-            // Anything still running after the grace period is aborted when the
-            // runtime drops.
-            let _ = tokio::time::timeout(grace, async {
-                tokio::join!(graceful.shutdown(), crons.wait());
-            })
-            .await;
-            Ok(())
-        })
+    fn spawn_connection(
+        self: &Arc<Self>,
+        stream: tokio::net::TcpStream,
+        graceful: &GracefulShutdown,
+    ) {
+        let io = TokioIo::new(stream);
+        let server = self.clone();
+        let service = service_fn(move |req| {
+            let server = server.clone();
+            async move { server.handle(req).await }
+        });
+        let conn = graceful.watch(http1::Builder::new().serve_connection(io, service));
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                warn!("connection error: {e}");
+            }
+        });
     }
 
     /// A handler error becomes a logged 500, never a crash.
@@ -678,6 +696,18 @@ async fn cron_loop(
             in_flight.store(false, Ordering::SeqCst);
         });
     }
+}
+
+/// Fan `shutdown` out to the accept loop and every cron loop.
+fn fan_out_shutdown(
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> tokio::sync::watch::Receiver<bool> {
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown.await;
+        let _ = tx.send(true);
+    });
+    rx
 }
 
 async fn wait_for_signal() {
