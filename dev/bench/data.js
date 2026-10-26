@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792762922239,
+  "lastUpdate": 1793002399931,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -9317,6 +9317,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1174826,
             "range": "± 23824",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a00f2079a87d8a9ab3f0ef96bf11390992486377",
+          "message": "chore(deps): bump the cargo group with 4 updates (#244)\n\nBumps the cargo group with 4 updates: [ammonia](https://github.com/rust-ammonia/ammonia), [serde_json](https://github.com/serde-rs/json), [sha2](https://github.com/RustCrypto/hashes) and [tokio](https://github.com/tokio-rs/tokio).\n\n\nUpdates `ammonia` from 4.2.3 to 4.2.4\n- [Release notes](https://github.com/rust-ammonia/ammonia/releases)\n- [Changelog](https://github.com/rust-ammonia/ammonia/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/rust-ammonia/ammonia/compare/v4.2.3...v4.2.4)\n\nUpdates `serde_json` from 1.0.152 to 1.0.154\n- [Release notes](https://github.com/serde-rs/json/releases)\n- [Commits](https://github.com/serde-rs/json/compare/v1.0.152...v1.0.154)\n\nUpdates `sha2` from 0.11.0 to 0.11.1\n- [Commits](https://github.com/RustCrypto/hashes/compare/sha2-v0.11.0...sha2-v0.11.1)\n\nUpdates `tokio` from 1.53.2 to 1.53.3\n- [Release notes](https://github.com/tokio-rs/tokio/releases)\n- [Commits](https://github.com/tokio-rs/tokio/compare/tokio-1.53.2...tokio-1.53.3)\n\n---\nupdated-dependencies:\n- dependency-name: ammonia\n  dependency-version: 4.2.4\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: serde_json\n  dependency-version: 1.0.154\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: sha2\n  dependency-version: 0.11.1\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: tokio\n  dependency-version: 1.53.3\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-26T16:09:17+08:00",
+          "tree_id": "7e88c9ba3f37f63740b744f5fb70edeed6ade6bc",
+          "url": "https://github.com/henry40408/lur/commit/a00f2079a87d8a9ab3f0ef96bf11390992486377"
+        },
+        "date": 1793002399491,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 395926,
+            "range": "± 4733",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5973,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 183691,
+            "range": "± 952",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 19852659,
+            "range": "± 261941",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3605386,
+            "range": "± 28093",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1914847,
+            "range": "± 49612",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 2049031,
+            "range": "± 22833",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2202223,
+            "range": "± 56572",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1346593,
+            "range": "± 20913",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1381321,
+            "range": "± 24535",
             "unit": "ns/iter"
           }
         ]
