@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793002965536,
+  "lastUpdate": 1793004344275,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -9485,6 +9485,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1442178,
             "range": "± 25024",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0e9ae414ab4d7f60d196493989ce4d87ed27932b",
+          "message": "chore(deps): bump taiki-e/install-action (#243)\n\nBumps the github-actions group with 1 update in the / directory: [taiki-e/install-action](https://github.com/taiki-e/install-action).\n\n\nUpdates `taiki-e/install-action` from 2.87.27 to 2.87.29\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/ab6895351a88b908e96a4697860d4ffea5e57dbe...8cca0918f8471c33515202b73f56ab27f2bed283)\n\n---\nupdated-dependencies:\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.87.29\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: github-actions\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-26T16:41:58+08:00",
+          "tree_id": "86b55be1b9fe8d8a9f4fa15293d5af72022563b0",
+          "url": "https://github.com/henry40408/lur/commit/0e9ae414ab4d7f60d196493989ce4d87ed27932b"
+        },
+        "date": 1793004343406,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 412793,
+            "range": "± 7678",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5974,
+            "range": "± 103",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 184524,
+            "range": "± 1655",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 19551618,
+            "range": "± 318562",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3556763,
+            "range": "± 49891",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1938372,
+            "range": "± 13225",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1993161,
+            "range": "± 27623",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2205322,
+            "range": "± 53431",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1295295,
+            "range": "± 20085",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1472707,
+            "range": "± 15648",
             "unit": "ns/iter"
           }
         ]
