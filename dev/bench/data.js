@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793004344275,
+  "lastUpdate": 1793024943025,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -9569,6 +9569,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1472707,
             "range": "± 15648",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2fc736cf34056d82d70600a7fff24ac20bc113b5",
+          "message": "chore(ci): align job names with shared naming convention (#246)\n\n* chore(ci): align job names with shared naming convention\n\nGive every job an explicit name, rename perf to bench and the docker\nimage job to build.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* chore(ci): trigger docker build on v* tags instead of releases\n\nReplace the release: published trigger with a push of v* tags, and\ndetect tag builds via github.ref so image tags and the version stamp\nstay the same.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* ci: add lint-workflow job\n\nRun actionlint on the workflows. Fix the shellcheck findings it reported\nin existing scripts (quote $GITHUB_OUTPUT and URLs, unused loop variable).\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-26T22:22:52+08:00",
+          "tree_id": "8a23bc642bbdfdab6a60ff77198694511f312d59",
+          "url": "https://github.com/henry40408/lur/commit/2fc736cf34056d82d70600a7fff24ac20bc113b5"
+        },
+        "date": 1793024942044,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 367524,
+            "range": "± 7093",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5491,
+            "range": "± 216",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 188143,
+            "range": "± 741",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 19445216,
+            "range": "± 136582",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3332118,
+            "range": "± 39722",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1847150,
+            "range": "± 55772",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1998815,
+            "range": "± 8636",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2229443,
+            "range": "± 36967",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1395924,
+            "range": "± 12841",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1555932,
+            "range": "± 12798",
             "unit": "ns/iter"
           }
         ]
