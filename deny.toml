@@ -12,12 +12,6 @@ version = 2
 # `ignore` holds advisory IDs we've reviewed and consciously accept.
 yanked = "deny"
 ignore = [
-    # ammonia 4.2.3: CSS `url("")` is matched case-sensitively, so `URL("")`
-    # skips URL filtering. Only affects callers that allow `style` and use
-    # `filter_style_properties`; neither is used in sanitize.rs. Fix 4.2.4 is
-    # inside the 168h cooldown until 2026-10-24 03:45 UTC. Remove when upgraded.
-    # Tracked in https://github.com/henry40408/lur/issues/185
-    "RUSTSEC-2026-0373",
     # ctutils 0.4.2 (transitive via digest -> sha2/hmac/sha1/md-5): `Choice`
     # mask generation and `u128` comparisons may branch. lur never calls
     # `ctutils::Choice`; `lur.crypto` compares with `subtle`. Fix 0.4.4+ is
