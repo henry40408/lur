@@ -1009,6 +1009,19 @@ fn reject_reentry() -> mlua::Result<()> {
     Ok(())
 }
 
+/// Argument #1 of every `lur.state` function: the key, as a Lua string.
+fn key_arg(lua: &Lua, key: Value, fname: &str) -> mlua::Result<mlua::LuaString> {
+    argcheck::arg(
+        lua,
+        key,
+        argcheck::ArgSpec {
+            fname,
+            n: 1,
+            expected: "string",
+        },
+    )
+}
+
 fn full_err(fname: &str) -> mlua::Error {
     mlua::Error::RuntimeError(format!(
         "{fname}: state is full and nothing is evictable \
@@ -1262,8 +1275,8 @@ fn fallback(
 
 /// Install `lur.state` backed by the shared `store`.
 pub fn install(lua: &Lua, lur: &Table, store: Arc<StateStore>) -> Result<(), RunError> {
-    let state = build(lua, &store).map_err(RunError::Init)?;
-    lur.set("state", state).map_err(RunError::Init)
+    let state = build(lua, &store)?;
+    lur.set("state", state).map_err(RunError::from)
 }
 
 fn build(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<Table> {
@@ -1283,15 +1296,7 @@ fn build(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<Table> {
 fn get_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
     lua.create_function(move |lua, key: Value| {
-        let key: mlua::LuaString = argcheck::arg(
-            lua,
-            key,
-            argcheck::ArgSpec {
-                fname: "lur.state.get",
-                n: 1,
-                expected: "string",
-            },
-        )?;
+        let key = key_arg(lua, key, "lur.state.get")?;
         reject_reentry()?;
         let found = s.get(&key.as_bytes());
         let counter = if found.is_some() { &s.hits } else { &s.misses };
@@ -1303,15 +1308,7 @@ fn get_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
 fn set_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
     lua.create_function(move |lua, (key, value, opts): (Value, Value, Value)| {
-        let key: mlua::LuaString = argcheck::arg(
-            lua,
-            key,
-            argcheck::ArgSpec {
-                fname: "lur.state.set",
-                n: 1,
-                expected: "string",
-            },
-        )?;
+        let key = key_arg(lua, key, "lur.state.set")?;
         reject_reentry()?;
         let w = write_opts(&opts, "lur.state.set", NoTtl::Clear, false)?;
         s.set(key.as_bytes().to_vec(), from_lua(&value)?, w)
@@ -1329,15 +1326,7 @@ fn counter_fn(
     let s = store.clone();
     let fname = format!("lur.state.{name}");
     lua.create_function(move |lua, (key, n, opts): (Value, Value, Value)| {
-        let key: mlua::LuaString = argcheck::arg(
-            lua,
-            key,
-            argcheck::ArgSpec {
-                fname: &fname,
-                n: 1,
-                expected: "string",
-            },
-        )?;
+        let key = key_arg(lua, key, &fname)?;
         let n = argcheck::integer_arg(n, &fname, 2)?;
         reject_reentry()?;
         let w = write_opts(&opts, &fname, NoTtl::Keep, true)?;
@@ -1364,15 +1353,7 @@ fn counter_fn(
 fn update_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
     lua.create_function(move |lua, (key, func, opts): (Value, Value, Value)| {
-        let key: mlua::LuaString = argcheck::arg(
-            lua,
-            key,
-            argcheck::ArgSpec {
-                fname: "lur.state.update",
-                n: 1,
-                expected: "string",
-            },
-        )?;
+        let key = key_arg(lua, key, "lur.state.update")?;
         let func: mlua::Function = argcheck::arg(
             lua,
             func,
@@ -1408,15 +1389,7 @@ fn cas_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
     lua.create_function(
         move |lua, (key, expected, new, opts): (Value, Value, Value, Value)| {
-            let key: mlua::LuaString = argcheck::arg(
-                lua,
-                key,
-                argcheck::ArgSpec {
-                    fname: "lur.state.cas",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
+            let key = key_arg(lua, key, "lur.state.cas")?;
             reject_reentry()?;
             let w = write_opts(&opts, "lur.state.cas", NoTtl::Keep, false)?;
             let expected_prim = from_lua(&expected)?;
@@ -1430,15 +1403,7 @@ fn cas_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
 fn add_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
     lua.create_function(move |lua, (key, value, opts): (Value, Value, Value)| {
-        let key: mlua::LuaString = argcheck::arg(
-            lua,
-            key,
-            argcheck::ArgSpec {
-                fname: "lur.state.add",
-                n: 1,
-                expected: "string",
-            },
-        )?;
+        let key = key_arg(lua, key, "lur.state.add")?;
         reject_reentry()?;
         let w = write_opts(&opts, "lur.state.add", NoTtl::Clear, false)?;
         let new_prim = from_lua(&value)?;
@@ -1451,15 +1416,7 @@ fn add_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
 fn ttl_fn(lua: &Lua, store: &Arc<StateStore>) -> mlua::Result<mlua::Function> {
     let s = store.clone();
     lua.create_function(move |lua, key: Value| {
-        let key: mlua::LuaString = argcheck::arg(
-            lua,
-            key,
-            argcheck::ArgSpec {
-                fname: "lur.state.ttl",
-                n: 1,
-                expected: "string",
-            },
-        )?;
+        let key = key_arg(lua, key, "lur.state.ttl")?;
         reject_reentry()?;
         Ok(match s.ttl(&key.as_bytes()) {
             None => (Value::Nil, false),
@@ -1500,15 +1457,7 @@ struct FetchArgs {
 
 fn fetch_args(lua: &Lua, key: Value, opts: &Value, func: Value) -> mlua::Result<FetchArgs> {
     const F: &str = "lur.state.fetch";
-    let key: mlua::LuaString = argcheck::arg(
-        lua,
-        key,
-        argcheck::ArgSpec {
-            fname: F,
-            n: 1,
-            expected: "string",
-        },
-    )?;
+    let key = key_arg(lua, key, F)?;
     let key = key.as_bytes().to_vec();
     let Some(opts) = opts_table(opts, F)? else {
         return Err(mlua::Error::RuntimeError(format!(

@@ -275,27 +275,25 @@ pub(crate) fn parse_document(text: String) -> Node {
 }
 
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
-    let html = lua.create_table().map_err(RunError::Init)?;
+    let html = lua.create_table()?;
 
     // Input is often a raw HTTP body, so invalid UTF-8 is replaced, not rejected.
-    let parse = lua
-        .create_function(|lua, text: Value| {
-            let text: mlua::LuaString = argcheck::arg(
-                lua,
-                text,
-                argcheck::ArgSpec {
-                    fname: "lur.html.parse",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
-            let text = String::from_utf8_lossy(&text.as_bytes()).into_owned();
-            Ok(parse_document(text))
-        })
-        .map_err(RunError::Init)?;
-    html.set("parse", parse).map_err(RunError::Init)?;
+    let parse = lua.create_function(|lua, text: Value| {
+        let text: mlua::LuaString = argcheck::arg(
+            lua,
+            text,
+            argcheck::ArgSpec {
+                fname: "lur.html.parse",
+                n: 1,
+                expected: "string",
+            },
+        )?;
+        let text = String::from_utf8_lossy(&text.as_bytes()).into_owned();
+        Ok(parse_document(text))
+    })?;
+    html.set("parse", parse)?;
     sanitize::install(lua, &html)?;
 
-    lur.set("html", html).map_err(RunError::Init)?;
+    lur.set("html", html)?;
     Ok(())
 }

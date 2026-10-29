@@ -12,12 +12,12 @@ use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
-    let cookie = lua.create_table().map_err(RunError::Init)?;
+    let cookie = lua.create_table()?;
 
     install_parse(lua, &cookie)?;
     install_serialize(lua, &cookie)?;
 
-    lur.set("cookie", cookie).map_err(RunError::Init)?;
+    lur.set("cookie", cookie)?;
     Ok(())
 }
 
@@ -59,27 +59,25 @@ pub(crate) fn cookie_pairs(header: &[u8]) -> Vec<(&[u8], &[u8])> {
 }
 
 fn install_parse(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
-    let parse = lua
-        .create_function(|lua, header: Value| {
-            let header: mlua::LuaString = argcheck::arg(
-                lua,
-                header,
-                argcheck::ArgSpec {
-                    fname: "lur.cookie.parse",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
-            let out = lua.create_table()?;
-            let bytes = header.as_bytes();
-            // Later duplicates win.
-            for (name, value) in cookie_pairs(&bytes) {
-                out.set(lua.create_string(name)?, lua.create_string(value)?)?;
-            }
-            Ok(out)
-        })
-        .map_err(RunError::Init)?;
-    cookie.set("parse", parse).map_err(RunError::Init)?;
+    let parse = lua.create_function(|lua, header: Value| {
+        let header: mlua::LuaString = argcheck::arg(
+            lua,
+            header,
+            argcheck::ArgSpec {
+                fname: "lur.cookie.parse",
+                n: 1,
+                expected: "string",
+            },
+        )?;
+        let out = lua.create_table()?;
+        let bytes = header.as_bytes();
+        // Later duplicates win.
+        for (name, value) in cookie_pairs(&bytes) {
+            out.set(lua.create_string(name)?, lua.create_string(value)?)?;
+        }
+        Ok(out)
+    })?;
+    cookie.set("parse", parse)?;
     Ok(())
 }
 
@@ -150,8 +148,8 @@ fn canon_same_site(v: &[u8]) -> Result<&'static str, Error> {
 
 /// Returns one `Set-Cookie` header value (no `Set-Cookie:` prefix).
 fn install_serialize(lua: &Lua, cookie: &Table) -> Result<(), RunError> {
-    let serialize = lua.create_function(serialize).map_err(RunError::Init)?;
-    cookie.set("serialize", serialize).map_err(RunError::Init)?;
+    let serialize = lua.create_function(serialize)?;
+    cookie.set("serialize", serialize)?;
     Ok(())
 }
 

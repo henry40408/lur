@@ -17,36 +17,32 @@ use crate::capabilities::argcheck;
 use crate::runtime::RunError;
 
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
-    let json = lua.create_table().map_err(RunError::Init)?;
+    let json = lua.create_table()?;
 
-    let encode = lua
-        .create_function(|_, value: Value| {
-            let json = lua_to_json(&value)?;
-            serde_json::to_string(&json).map_err(|e| Error::runtime(e.to_string()))
-        })
-        .map_err(RunError::Init)?;
-    json.set("encode", encode).map_err(RunError::Init)?;
+    let encode = lua.create_function(|_, value: Value| {
+        let json = lua_to_json(&value)?;
+        serde_json::to_string(&json).map_err(|e| Error::runtime(e.to_string()))
+    })?;
+    json.set("encode", encode)?;
 
-    let decode = lua
-        .create_function(|lua, (text, opts): (Value, Value)| {
-            let text: mlua::LuaString = argcheck::arg(
-                lua,
-                text,
-                argcheck::ArgSpec {
-                    fname: "lur.json.decode",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
-            let drop_null = parse_decode_opts(lua, opts, "lur.json.decode", 2)?;
-            let parsed: Json = serde_json::from_slice(&text.as_bytes())
-                .map_err(|e| Error::runtime(e.to_string()))?;
-            json_to_lua(lua, &parsed, drop_null)
-        })
-        .map_err(RunError::Init)?;
-    json.set("decode", decode).map_err(RunError::Init)?;
+    let decode = lua.create_function(|lua, (text, opts): (Value, Value)| {
+        let text: mlua::LuaString = argcheck::arg(
+            lua,
+            text,
+            argcheck::ArgSpec {
+                fname: "lur.json.decode",
+                n: 1,
+                expected: "string",
+            },
+        )?;
+        let drop_null = parse_decode_opts(lua, opts, "lur.json.decode", 2)?;
+        let parsed: Json =
+            serde_json::from_slice(&text.as_bytes()).map_err(|e| Error::runtime(e.to_string()))?;
+        json_to_lua(lua, &parsed, drop_null)
+    })?;
+    json.set("decode", decode)?;
 
-    lur.set("json", json).map_err(RunError::Init)?;
+    lur.set("json", json)?;
     Ok(())
 }
 

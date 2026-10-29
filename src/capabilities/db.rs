@@ -19,12 +19,12 @@ pub(crate) fn install(
     db_path: Option<PathBuf>,
 ) -> Result<Shared, RunError> {
     let shared = Shared::new(db_path);
-    let db = lua.create_table().map_err(RunError::Init)?;
+    let db = lua.create_table()?;
 
     {
         let shared = shared.clone();
-        let exec = lua
-            .create_async_function(move |lua, (sql, params): (String, Variadic<Value>)| {
+        let exec =
+            lua.create_async_function(move |lua, (sql, params): (String, Variadic<Value>)| {
                 let shared = shared.clone();
                 async move {
                     let backend = shared.ensure().await?;
@@ -36,35 +36,31 @@ pub(crate) fn install(
                     t.set("last_insert_id", res.last_insert_id)?;
                     Ok(t)
                 }
-            })
-            .map_err(RunError::Init)?;
-        db.set("exec", exec).map_err(RunError::Init)?;
+            })?;
+        db.set("exec", exec)?;
     }
     {
         let shared = shared.clone();
-        let query = lua
-            .create_async_function(move |lua, (sql, params): (String, Variadic<Value>)| {
+        let query =
+            lua.create_async_function(move |lua, (sql, params): (String, Variadic<Value>)| {
                 let shared = shared.clone();
                 async move {
                     let backend = shared.ensure().await?;
                     backend.query(&lua, sql, params.into_iter().collect()).await
                 }
-            })
-            .map_err(RunError::Init)?;
-        db.set("query", query).map_err(RunError::Init)?;
+            })?;
+        db.set("query", query)?;
     }
     {
         let shared = shared.clone();
-        let tx = lua
-            .create_async_function(move |lua, func: Function| {
-                let shared = shared.clone();
-                async move { run_tx(lua, &shared, func).await }
-            })
-            .map_err(RunError::Init)?;
-        db.set("tx", tx).map_err(RunError::Init)?;
+        let tx = lua.create_async_function(move |lua, func: Function| {
+            let shared = shared.clone();
+            async move { run_tx(lua, &shared, func).await }
+        })?;
+        db.set("tx", tx)?;
     }
 
-    lur.set("db", db).map_err(RunError::Init)?;
+    lur.set("db", db)?;
     Ok(shared)
 }
 

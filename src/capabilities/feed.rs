@@ -57,11 +57,11 @@ struct Item {
 }
 
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
-    let feed = lua.create_table().map_err(RunError::Init)?;
+    let feed = lua.create_table()?;
     install_format(lua, &feed, "rss", render_rss)?;
     install_format(lua, &feed, "atom", render_atom)?;
     install_format(lua, &feed, "json", render_json)?;
-    lur.set("feed", feed).map_err(RunError::Init)?;
+    lur.set("feed", feed)?;
     Ok(())
 }
 
@@ -73,34 +73,32 @@ fn install_format(
     name: &'static str,
     render: Render,
 ) -> Result<(), RunError> {
-    let f = lua
-        .create_function(move |lua, (meta, items, opts): (Value, Value, Value)| {
-            let fname = format!("lur.feed.{name}");
-            let meta: Table = argcheck::arg(
-                lua,
-                meta,
-                argcheck::ArgSpec {
-                    fname: &fname,
-                    n: 1,
-                    expected: "table",
-                },
-            )?;
-            let items: Table = argcheck::arg(
-                lua,
-                items,
-                argcheck::ArgSpec {
-                    fname: &fname,
-                    n: 2,
-                    expected: "table",
-                },
-            )?;
-            let skip_invalid = skip_invalid_opt(lua, opts, &fname)?;
-            let meta = read_meta(&meta, &fname)?;
-            let items = read_items(&items, &fname, skip_invalid)?;
-            render(&meta, &items).map_err(|e| Error::runtime(format!("lur.feed.{name}: {e}")))
-        })
-        .map_err(RunError::Init)?;
-    feed.set(name, f).map_err(RunError::Init)?;
+    let f = lua.create_function(move |lua, (meta, items, opts): (Value, Value, Value)| {
+        let fname = format!("lur.feed.{name}");
+        let meta: Table = argcheck::arg(
+            lua,
+            meta,
+            argcheck::ArgSpec {
+                fname: &fname,
+                n: 1,
+                expected: "table",
+            },
+        )?;
+        let items: Table = argcheck::arg(
+            lua,
+            items,
+            argcheck::ArgSpec {
+                fname: &fname,
+                n: 2,
+                expected: "table",
+            },
+        )?;
+        let skip_invalid = skip_invalid_opt(lua, opts, &fname)?;
+        let meta = read_meta(&meta, &fname)?;
+        let items = read_items(&items, &fname, skip_invalid)?;
+        render(&meta, &items).map_err(|e| Error::runtime(format!("lur.feed.{name}: {e}")))
+    })?;
+    feed.set(name, f)?;
     Ok(())
 }
 

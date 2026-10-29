@@ -15,14 +15,10 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
 }
 
 fn install_stdin(lua: &Lua, lur: &Table) -> Result<(), RunError> {
-    let stdin = lua.create_table().map_err(RunError::Init)?;
-    stdin
-        .set("read", stdin_read_fn(lua).map_err(RunError::Init)?)
-        .map_err(RunError::Init)?;
-    stdin
-        .set("lines", stdin_lines_fn(lua).map_err(RunError::Init)?)
-        .map_err(RunError::Init)?;
-    lur.set("stdin", stdin).map_err(RunError::Init)?;
+    let stdin = lua.create_table()?;
+    stdin.set("read", stdin_read_fn(lua)?)?;
+    stdin.set("lines", stdin_lines_fn(lua)?)?;
+    lur.set("stdin", stdin)?;
     Ok(())
 }
 
@@ -89,38 +85,34 @@ fn read_up_to(r: &mut impl Read, n: usize) -> std::io::Result<Vec<u8>> {
 }
 
 fn install_stdout(lua: &Lua, lur: &Table) -> Result<(), RunError> {
-    let stdout = lua.create_table().map_err(RunError::Init)?;
+    let stdout = lua.create_table()?;
 
-    let write = lua
-        .create_function(|lua, data: Value| {
-            let data: mlua::LuaString = argcheck::arg(
-                lua,
-                data,
-                argcheck::ArgSpec {
-                    fname: "lur.stdout.write",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
-            std::io::stdout()
-                .lock()
-                .write_all(&data.as_bytes())
-                .map_err(|e| Error::runtime(e.to_string()))
-        })
-        .map_err(RunError::Init)?;
-    stdout.set("write", write).map_err(RunError::Init)?;
+    let write = lua.create_function(|lua, data: Value| {
+        let data: mlua::LuaString = argcheck::arg(
+            lua,
+            data,
+            argcheck::ArgSpec {
+                fname: "lur.stdout.write",
+                n: 1,
+                expected: "string",
+            },
+        )?;
+        std::io::stdout()
+            .lock()
+            .write_all(&data.as_bytes())
+            .map_err(|e| Error::runtime(e.to_string()))
+    })?;
+    stdout.set("write", write)?;
 
-    let flush = lua
-        .create_function(|_, ()| {
-            std::io::stdout()
-                .lock()
-                .flush()
-                .map_err(|e| Error::runtime(e.to_string()))
-        })
-        .map_err(RunError::Init)?;
-    stdout.set("flush", flush).map_err(RunError::Init)?;
+    let flush = lua.create_function(|_, ()| {
+        std::io::stdout()
+            .lock()
+            .flush()
+            .map_err(|e| Error::runtime(e.to_string()))
+    })?;
+    stdout.set("flush", flush)?;
 
-    lur.set("stdout", stdout).map_err(RunError::Init)?;
+    lur.set("stdout", stdout)?;
     Ok(())
 }
 

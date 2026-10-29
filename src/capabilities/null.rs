@@ -13,10 +13,9 @@ impl UserData for Null {}
 const REGISTRY_KEY: &str = "lur.null";
 
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
-    let null = lua.create_userdata(Null).map_err(RunError::Init)?;
-    lua.set_named_registry_value(REGISTRY_KEY, &null)
-        .map_err(RunError::Init)?;
-    lur.set("null", null).map_err(RunError::Init)?;
+    let null = lua.create_userdata(Null)?;
+    lua.set_named_registry_value(REGISTRY_KEY, &null)?;
+    lur.set("null", null)?;
     Ok(())
 }
 

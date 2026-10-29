@@ -452,31 +452,28 @@ fn string_arg(lua: &Lua, value: Value, fname: &str) -> mlua::Result<String> {
 }
 
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
-    let xml = lua.create_table().map_err(RunError::Init)?;
+    let xml = lua.create_table()?;
 
-    let parse = lua
-        .create_function(|lua, data: Value| {
-            let data: mlua::LuaString = argcheck::arg(
-                lua,
-                data,
-                argcheck::ArgSpec {
-                    fname: "lur.xml.parse",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
-            let text = decode_input(&data.as_bytes())
-                .map_err(|e| Error::runtime(format!("lur.xml.parse: {e}")))?;
-            let doc =
-                Doc::parse(&text).map_err(|e| Error::runtime(format!("lur.xml.parse: {e}")))?;
-            Ok(Node {
-                doc: Arc::new(doc),
-                idx: 0,
-            })
+    let parse = lua.create_function(|lua, data: Value| {
+        let data: mlua::LuaString = argcheck::arg(
+            lua,
+            data,
+            argcheck::ArgSpec {
+                fname: "lur.xml.parse",
+                n: 1,
+                expected: "string",
+            },
+        )?;
+        let text = decode_input(&data.as_bytes())
+            .map_err(|e| Error::runtime(format!("lur.xml.parse: {e}")))?;
+        let doc = Doc::parse(&text).map_err(|e| Error::runtime(format!("lur.xml.parse: {e}")))?;
+        Ok(Node {
+            doc: Arc::new(doc),
+            idx: 0,
         })
-        .map_err(RunError::Init)?;
-    xml.set("parse", parse).map_err(RunError::Init)?;
+    })?;
+    xml.set("parse", parse)?;
 
-    lur.set("xml", xml).map_err(RunError::Init)?;
+    lur.set("xml", xml)?;
     Ok(())
 }

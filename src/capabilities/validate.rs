@@ -1019,26 +1019,15 @@ fn range_check<T: PartialOrd + std::fmt::Display>(
 }
 
 fn install_constructors(lua: &Lua, v: &Table) -> Result<(), RunError> {
-    let init = RunError::Init;
-    v.set("str", lua.create_function(str_schema).map_err(init)?)
-        .map_err(init)?;
-    v.set("int", lua.create_function(int_schema).map_err(init)?)
-        .map_err(init)?;
-    v.set("number", lua.create_function(number_schema).map_err(init)?)
-        .map_err(init)?;
-    v.set("bool", lua.create_function(bool_schema).map_err(init)?)
-        .map_err(init)?;
-    v.set("one_of", lua.create_function(one_of_schema).map_err(init)?)
-        .map_err(init)?;
-    v.set("list", lua.create_function(list_schema).map_err(init)?)
-        .map_err(init)?;
-    v.set("object", lua.create_function(object_schema).map_err(init)?)
-        .map_err(init)?;
-    v.set(
-        "optional",
-        lua.create_function(optional_schema).map_err(init)?,
-    )
-    .map_err(init)
+    v.set("str", lua.create_function(str_schema)?)?;
+    v.set("int", lua.create_function(int_schema)?)?;
+    v.set("number", lua.create_function(number_schema)?)?;
+    v.set("bool", lua.create_function(bool_schema)?)?;
+    v.set("one_of", lua.create_function(one_of_schema)?)?;
+    v.set("list", lua.create_function(list_schema)?)?;
+    v.set("object", lua.create_function(object_schema)?)?;
+    v.set("optional", lua.create_function(optional_schema)?)
+        .map_err(RunError::from)
 }
 
 fn str_schema(lua: &Lua, opts: Value) -> mlua::Result<mlua::AnyUserData> {
@@ -1295,15 +1284,14 @@ pub(crate) fn list_field_names(schema: &Value) -> Option<Vec<String>> {
 
 /// `factory` is the VM's [`raise::factory`].
 pub fn install(lua: &Lua, lur: &Table, factory: &Function) -> Result<(), RunError> {
-    let validate = lua.create_table().map_err(RunError::Init)?;
+    let validate = lua.create_table()?;
     install_constructors(lua, &validate)?;
 
     let find: Function = lua
         .globals()
         .get::<Table>("string")
-        .and_then(|s| s.get("find"))
-        .map_err(RunError::Init)?;
-    let meta = raise::error_meta(lua).map_err(RunError::Init)?;
+        .and_then(|s| s.get("find"))?;
+    let meta = raise::error_meta(lua)?;
 
     // `try`: (true, value) | (false, err). `parse` re-raises the same err.
     let run = move |fname: &'static str| {
@@ -1334,14 +1322,11 @@ pub fn install(lua: &Lua, lur: &Table, factory: &Function) -> Result<(), RunErro
         })
     };
 
-    validate
-        .set("try", run("lur.validate.try").map_err(RunError::Init)?)
-        .map_err(RunError::Init)?;
-    let parse = raise::raising(factory, run("lur.validate.parse").map_err(RunError::Init)?)
-        .map_err(RunError::Init)?;
-    validate.set("parse", parse).map_err(RunError::Init)?;
+    validate.set("try", run("lur.validate.try")?)?;
+    let parse = raise::raising(factory, run("lur.validate.parse")?)?;
+    validate.set("parse", parse)?;
 
-    lur.set("validate", validate).map_err(RunError::Init)?;
+    lur.set("validate", validate)?;
     Ok(())
 }
 

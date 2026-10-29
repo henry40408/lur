@@ -20,7 +20,7 @@ use crate::runtime::RunError;
 const MAX_RANDOM_BYTES: i64 = 1 << 20;
 
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
-    let crypto = lua.create_table().map_err(RunError::Init)?;
+    let crypto = lua.create_table()?;
 
     install_hex(lua, &crypto)?;
     install_hashes(lua, &crypto)?;
@@ -28,7 +28,7 @@ pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
     install_constant_eq(lua, &crypto)?;
     install_random(lua, &crypto)?;
 
-    lur.set("crypto", crypto).map_err(RunError::Init)?;
+    lur.set("crypto", crypto)?;
     Ok(())
 }
 
@@ -46,23 +46,15 @@ fn hash_fn<D: Digest>(lua: &Lua, fname: &'static str) -> Result<mlua::Function, 
         )?;
         lua.create_string(D::digest(data.as_bytes()).as_slice())
     })
-    .map_err(RunError::Init)
+    .map_err(RunError::from)
 }
 
 /// `lur.crypto.sha256` / `sha512` / `sha1` / `md5`.
 fn install_hashes(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
-    crypto
-        .set("sha256", hash_fn::<Sha256>(lua, "lur.crypto.sha256")?)
-        .map_err(RunError::Init)?;
-    crypto
-        .set("sha512", hash_fn::<Sha512>(lua, "lur.crypto.sha512")?)
-        .map_err(RunError::Init)?;
-    crypto
-        .set("sha1", hash_fn::<Sha1>(lua, "lur.crypto.sha1")?)
-        .map_err(RunError::Init)?;
-    crypto
-        .set("md5", hash_fn::<Md5>(lua, "lur.crypto.md5")?)
-        .map_err(RunError::Init)?;
+    crypto.set("sha256", hash_fn::<Sha256>(lua, "lur.crypto.sha256")?)?;
+    crypto.set("sha512", hash_fn::<Sha512>(lua, "lur.crypto.sha512")?)?;
+    crypto.set("sha1", hash_fn::<Sha1>(lua, "lur.crypto.sha1")?)?;
+    crypto.set("md5", hash_fn::<Md5>(lua, "lur.crypto.md5")?)?;
     Ok(())
 }
 
@@ -92,144 +84,126 @@ fn hmac_fn<D: hmac::EagerHash>(lua: &Lua, fname: &'static str) -> Result<mlua::F
         mac.update(&msg.as_bytes());
         lua.create_string(mac.finalize().into_bytes().as_slice())
     })
-    .map_err(RunError::Init)
+    .map_err(RunError::from)
 }
 
 /// `lur.crypto.hmac_sha256` / `hmac_sha512` / `hmac_sha1`.
 fn install_hmac(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
-    crypto
-        .set(
-            "hmac_sha256",
-            hmac_fn::<Sha256>(lua, "lur.crypto.hmac_sha256")?,
-        )
-        .map_err(RunError::Init)?;
-    crypto
-        .set(
-            "hmac_sha512",
-            hmac_fn::<Sha512>(lua, "lur.crypto.hmac_sha512")?,
-        )
-        .map_err(RunError::Init)?;
-    crypto
-        .set("hmac_sha1", hmac_fn::<Sha1>(lua, "lur.crypto.hmac_sha1")?)
-        .map_err(RunError::Init)?;
+    crypto.set(
+        "hmac_sha256",
+        hmac_fn::<Sha256>(lua, "lur.crypto.hmac_sha256")?,
+    )?;
+    crypto.set(
+        "hmac_sha512",
+        hmac_fn::<Sha512>(lua, "lur.crypto.hmac_sha512")?,
+    )?;
+    crypto.set("hmac_sha1", hmac_fn::<Sha1>(lua, "lur.crypto.hmac_sha1")?)?;
     Ok(())
 }
 
 /// `lur.crypto.constant_eq` — timing-safe byte comparison.
 fn install_constant_eq(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
-    let constant_eq = lua
-        .create_function(|lua, (a, b): (Value, Value)| {
-            let a: mlua::LuaString = argcheck::arg(
-                lua,
-                a,
-                argcheck::ArgSpec {
-                    fname: "lur.crypto.constant_eq",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
-            let b: mlua::LuaString = argcheck::arg(
-                lua,
-                b,
-                argcheck::ArgSpec {
-                    fname: "lur.crypto.constant_eq",
-                    n: 2,
-                    expected: "string",
-                },
-            )?;
-            let a = a.as_bytes();
-            let b = b.as_bytes();
-            // Length is not secret; bail before the constant-time content compare.
-            if a.len() != b.len() {
-                return Ok(false);
-            }
-            Ok(bool::from(a.ct_eq(&b)))
-        })
-        .map_err(RunError::Init)?;
-    crypto
-        .set("constant_eq", constant_eq)
-        .map_err(RunError::Init)?;
+    let constant_eq = lua.create_function(|lua, (a, b): (Value, Value)| {
+        let a: mlua::LuaString = argcheck::arg(
+            lua,
+            a,
+            argcheck::ArgSpec {
+                fname: "lur.crypto.constant_eq",
+                n: 1,
+                expected: "string",
+            },
+        )?;
+        let b: mlua::LuaString = argcheck::arg(
+            lua,
+            b,
+            argcheck::ArgSpec {
+                fname: "lur.crypto.constant_eq",
+                n: 2,
+                expected: "string",
+            },
+        )?;
+        let a = a.as_bytes();
+        let b = b.as_bytes();
+        // Length is not secret; bail before the constant-time content compare.
+        if a.len() != b.len() {
+            return Ok(false);
+        }
+        Ok(bool::from(a.ct_eq(&b)))
+    })?;
+    crypto.set("constant_eq", constant_eq)?;
     Ok(())
 }
 
 /// `lur.crypto.random_bytes` — `n` bytes from the OS CSPRNG.
 fn install_random(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
-    let random_bytes = lua
-        .create_function(|lua, n: Value| {
-            let n: i64 = argcheck::arg(
-                lua,
-                n,
-                argcheck::ArgSpec {
-                    fname: "lur.crypto.random_bytes",
-                    n: 1,
-                    expected: "number",
-                },
-            )?;
-            if n <= 0 {
-                return Err(Error::runtime(
-                    "lur.crypto.random_bytes: n must be a positive integer",
-                ));
-            }
-            if n > MAX_RANDOM_BYTES {
-                return Err(Error::runtime(format!(
-                    "lur.crypto.random_bytes: n must be <= {MAX_RANDOM_BYTES}"
-                )));
-            }
-            #[allow(
-                clippy::cast_sign_loss,
-                reason = "n is checked `> 0` and `<= MAX_RANDOM_BYTES` above"
-            )]
-            let mut buf = vec![0u8; n as usize];
-            getrandom::fill(&mut buf)
-                .map_err(|e| Error::runtime(format!("lur.crypto.random_bytes: {e}")))?;
-            lua.create_string(&buf)
-        })
-        .map_err(RunError::Init)?;
-    crypto
-        .set("random_bytes", random_bytes)
-        .map_err(RunError::Init)?;
+    let random_bytes = lua.create_function(|lua, n: Value| {
+        let n: i64 = argcheck::arg(
+            lua,
+            n,
+            argcheck::ArgSpec {
+                fname: "lur.crypto.random_bytes",
+                n: 1,
+                expected: "number",
+            },
+        )?;
+        if n <= 0 {
+            return Err(Error::runtime(
+                "lur.crypto.random_bytes: n must be a positive integer",
+            ));
+        }
+        if n > MAX_RANDOM_BYTES {
+            return Err(Error::runtime(format!(
+                "lur.crypto.random_bytes: n must be <= {MAX_RANDOM_BYTES}"
+            )));
+        }
+        #[allow(
+            clippy::cast_sign_loss,
+            reason = "n is checked `> 0` and `<= MAX_RANDOM_BYTES` above"
+        )]
+        let mut buf = vec![0u8; n as usize];
+        getrandom::fill(&mut buf)
+            .map_err(|e| Error::runtime(format!("lur.crypto.random_bytes: {e}")))?;
+        lua.create_string(&buf)
+    })?;
+    crypto.set("random_bytes", random_bytes)?;
     Ok(())
 }
 
 /// `lur.crypto.hex.encode` / `lur.crypto.hex.decode`.
 fn install_hex(lua: &Lua, crypto: &Table) -> Result<(), RunError> {
-    let hex = lua.create_table().map_err(RunError::Init)?;
+    let hex = lua.create_table()?;
 
-    let encode = lua
-        .create_function(|lua, data: Value| {
-            let data: mlua::LuaString = argcheck::arg(
-                lua,
-                data,
-                argcheck::ArgSpec {
-                    fname: "lur.crypto.hex.encode",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
-            lua.create_string(hex::encode(data.as_bytes()))
-        })
-        .map_err(RunError::Init)?;
-    hex.set("encode", encode).map_err(RunError::Init)?;
+    let encode = lua.create_function(|lua, data: Value| {
+        let data: mlua::LuaString = argcheck::arg(
+            lua,
+            data,
+            argcheck::ArgSpec {
+                fname: "lur.crypto.hex.encode",
+                n: 1,
+                expected: "string",
+            },
+        )?;
+        lua.create_string(hex::encode(data.as_bytes()))
+    })?;
+    hex.set("encode", encode)?;
 
-    let decode = lua
-        .create_function(|lua, text: Value| {
-            let text: mlua::LuaString = argcheck::arg(
-                lua,
-                text,
-                argcheck::ArgSpec {
-                    fname: "lur.crypto.hex.decode",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
-            let bytes = hex::decode(text.as_bytes())
-                .map_err(|e| Error::runtime(format!("lur.crypto.hex.decode: {e}")))?;
-            lua.create_string(&bytes)
-        })
-        .map_err(RunError::Init)?;
-    hex.set("decode", decode).map_err(RunError::Init)?;
+    let decode = lua.create_function(|lua, text: Value| {
+        let text: mlua::LuaString = argcheck::arg(
+            lua,
+            text,
+            argcheck::ArgSpec {
+                fname: "lur.crypto.hex.decode",
+                n: 1,
+                expected: "string",
+            },
+        )?;
+        let bytes = hex::decode(text.as_bytes())
+            .map_err(|e| Error::runtime(format!("lur.crypto.hex.decode: {e}")))?;
+        lua.create_string(&bytes)
+    })?;
+    hex.set("decode", decode)?;
 
     hex.set_readonly(true);
-    crypto.set("hex", hex).map_err(RunError::Init)?;
+    crypto.set("hex", hex)?;
     Ok(())
 }

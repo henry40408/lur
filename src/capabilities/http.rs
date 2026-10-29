@@ -104,7 +104,7 @@ impl Shared {
 }
 
 pub(crate) fn install(lua: &Lua, lur: &Table, config: HttpConfig) -> Result<(), RunError> {
-    build(lua, lur, config).map_err(RunError::Init)
+    build(lua, lur, config).map_err(RunError::from)
 }
 
 fn build(lua: &Lua, lur: &Table, config: HttpConfig) -> mlua::Result<()> {

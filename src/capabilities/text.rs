@@ -353,36 +353,34 @@ pub fn install(
     store: Arc<ReplacerStore>,
     memory_limit: usize,
 ) -> Result<(), RunError> {
-    let text = lua.create_table().map_err(RunError::Init)?;
+    let text = lua.create_table()?;
 
-    let replacer = lua
-        .create_function(move |lua, (pairs, opts): (Value, Value)| {
-            let pairs: Table = argcheck::arg(
-                lua,
-                pairs,
-                argcheck::ArgSpec {
-                    fname: REPLACER,
-                    n: 1,
-                    expected: "table",
-                },
-            )?;
-            let ReplacerOpts { mode, key } = replacer_opts(opts)?;
-            let request = Request {
-                count: pairs.raw_len(),
-                limit: store.max_bytes,
-                pairs,
-                mode,
-            };
-            let matcher = match key {
-                Some(key) => keyed_matcher(lua, &store, &request, &key)?,
-                None => local_matcher(lua, &request)?,
-            };
-            lua.create_userdata(Replacer(matcher, memory_limit))
-        })
-        .map_err(RunError::Init)?;
-    text.set("replacer", replacer).map_err(RunError::Init)?;
+    let replacer = lua.create_function(move |lua, (pairs, opts): (Value, Value)| {
+        let pairs: Table = argcheck::arg(
+            lua,
+            pairs,
+            argcheck::ArgSpec {
+                fname: REPLACER,
+                n: 1,
+                expected: "table",
+            },
+        )?;
+        let ReplacerOpts { mode, key } = replacer_opts(opts)?;
+        let request = Request {
+            count: pairs.raw_len(),
+            limit: store.max_bytes,
+            pairs,
+            mode,
+        };
+        let matcher = match key {
+            Some(key) => keyed_matcher(lua, &store, &request, &key)?,
+            None => local_matcher(lua, &request)?,
+        };
+        lua.create_userdata(Replacer(matcher, memory_limit))
+    })?;
+    text.set("replacer", replacer)?;
 
-    lur.set("text", text).map_err(RunError::Init)?;
+    lur.set("text", text)?;
     Ok(())
 }
 
