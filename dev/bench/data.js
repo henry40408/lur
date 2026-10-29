@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793024943025,
+  "lastUpdate": 1793263502757,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -9653,6 +9653,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1555932,
             "range": "± 12798",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9f04209297c9bf2b0ead28b01354a8dca6eb7652",
+          "message": "refactor: cut capability boilerplate (#247)\n\n* refactor: cut capability boilerplate\n\nConvert mlua::Error into RunError::Init via From instead of ~130\nmap_err calls, share the lur.kv function scaffold in kv_fn, share the\nlur.state key argument check, and generate the Backend/Transaction\nforwarding methods with a macro.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* chore(deps): upgrade pulldown-cmark to 0.13.5\n\nFixes RUSTSEC-2026-0414 (exponential event growth with ENABLE_WIKILINKS).\n0.13.5 was released 2026-10-21 19:45 UTC, past the 168h cooldown.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-29T16:38:31+08:00",
+          "tree_id": "fa139e0005f9239bd718b7dc2aa1cab0d95bf198",
+          "url": "https://github.com/henry40408/lur/commit/9f04209297c9bf2b0ead28b01354a8dca6eb7652"
+        },
+        "date": 1793263502283,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 396508,
+            "range": "± 19889",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5967,
+            "range": "± 69",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 184832,
+            "range": "± 1580",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 21096565,
+            "range": "± 726042",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3610819,
+            "range": "± 48841",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1905548,
+            "range": "± 34178",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 2047159,
+            "range": "± 23654",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2189771,
+            "range": "± 36490",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1291651,
+            "range": "± 18131",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1392328,
+            "range": "± 22830",
             "unit": "ns/iter"
           }
         ]
