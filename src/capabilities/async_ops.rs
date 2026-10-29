@@ -144,8 +144,8 @@ pub fn install(
     factory: &Function,
     max_concurrency: Option<usize>,
 ) -> Result<(), RunError> {
-    let async_tbl = build(lua, factory, max_concurrency).map_err(RunError::Init)?;
-    lur.set("async", async_tbl).map_err(RunError::Init)
+    let async_tbl = build(lua, factory, max_concurrency)?;
+    lur.set("async", async_tbl).map_err(RunError::from)
 }
 
 fn build(lua: &Lua, factory: &Function, max_concurrency: Option<usize>) -> mlua::Result<Table> {

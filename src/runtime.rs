@@ -45,6 +45,14 @@ pub enum RunError {
     AsyncRuntime(#[source] std::io::Error),
 }
 
+/// Lets capability installers use `?` on mlua calls. Script-time errors must
+/// build `RunError::Script` explicitly, never through this conversion.
+impl From<mlua::Error> for RunError {
+    fn from(e: mlua::Error) -> Self {
+        Self::Init(e)
+    }
+}
+
 pub const DEFAULT_MEMORY_LIMIT_BYTES: usize = 256 * 1024 * 1024;
 pub const DEFAULT_MAX_HTTP_BODY_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_SHUTDOWN_GRACE_MS: u64 = 10_000;
@@ -163,14 +171,12 @@ pub(crate) fn build_lua(
     // `getfenv`/`setfenv`/`loadstring` reach the writable global env, bypassing
     // the per-call environment that isolates server requests.
     for name in ["require", "getfenv", "setfenv", "loadstring"] {
-        lua.globals()
-            .set(name, mlua::Value::Nil)
-            .map_err(RunError::Init)?;
+        lua.globals().set(name, mlua::Value::Nil)?;
     }
 
     crate::capabilities::install(&lua, config, serve)?;
 
-    lua.sandbox(true).map_err(RunError::Init)?;
+    lua.sandbox(true)?;
 
     let deadline: Deadline = Arc::new(Mutex::new(None));
     // Read back only by `lur.state.fetch` to tell its leader's own timeout
@@ -185,8 +191,7 @@ pub(crate) fn build_lua(
     );
 
     // Last, so construction/sandbox/injection do not count against the cap.
-    lua.set_memory_limit(config.memory_limit)
-        .map_err(RunError::Init)?;
+    lua.set_memory_limit(config.memory_limit)?;
 
     Ok((lua, deadline))
 }

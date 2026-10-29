@@ -23,15 +23,15 @@ use crate::policy::Policy;
 use crate::runtime::RunError;
 
 pub fn install(lua: &Lua, lur: &Table, policy: Arc<Policy>) -> Result<(), RunError> {
-    let fs = lua.create_table().map_err(RunError::Init)?;
+    let fs = lua.create_table()?;
 
-    let read = read_fn(lua, policy.clone()).map_err(RunError::Init)?;
-    fs.set("read", read).map_err(RunError::Init)?;
+    let read = read_fn(lua, policy.clone())?;
+    fs.set("read", read)?;
 
-    let write = write_fn(lua, policy).map_err(RunError::Init)?;
-    fs.set("write", write).map_err(RunError::Init)?;
+    let write = write_fn(lua, policy)?;
+    fs.set("write", write)?;
 
-    lur.set("fs", fs).map_err(RunError::Init)?;
+    lur.set("fs", fs)?;
     Ok(())
 }
 

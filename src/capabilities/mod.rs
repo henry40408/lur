@@ -45,9 +45,9 @@ pub fn install(
     config: &RuntimeConfig,
     serve_registry: Option<&serve::Registry>,
 ) -> Result<(), RunError> {
-    let lur = lua.create_table().map_err(RunError::Init)?;
+    let lur = lua.create_table()?;
     // One table-raising wrapper factory per VM, shared by every capability.
-    let factory = raise::factory(lua).map_err(RunError::Init)?;
+    let factory = raise::factory(lua)?;
 
     null::install(lua, &lur)?;
     log::install(lua, &lur)?;
@@ -83,7 +83,7 @@ pub fn install(
     text::install(lua, &lur, config.replacers.clone(), config.memory_limit)?;
 
     freeze_children(&lur);
-    lua.globals().set("lur", lur).map_err(RunError::Init)?;
+    lua.globals().set("lur", lur)?;
     Ok(())
 }
 

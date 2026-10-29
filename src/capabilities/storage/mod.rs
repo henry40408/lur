@@ -95,6 +95,22 @@ impl StorageTarget {
     }
 }
 
+/// Generates `async fn`s that forward to whichever variant of a two-variant enum is live.
+macro_rules! forward_async {
+    ($enum:ident { $first:ident, $second:ident } $(
+        $(#[$meta:meta])*
+        fn $name:ident(&self $(, $arg:ident: $ty:ty)*) -> $ret:ty;
+    )*) => {$(
+        $(#[$meta])*
+        pub(crate) async fn $name(&self $(, $arg: $ty)*) -> $ret {
+            match self {
+                $enum::$first(inner) => inner.$name($($arg),*).await,
+                $enum::$second(inner) => inner.$name($($arg),*).await,
+            }
+        }
+    )*};
+}
+
 #[derive(Clone)]
 pub(crate) enum Backend {
     Sqlite(SqliteBackend),
@@ -102,30 +118,6 @@ pub(crate) enum Backend {
 }
 
 impl Backend {
-    pub(crate) async fn exec(
-        &self,
-        lua: &Lua,
-        sql: String,
-        params: Vec<Value>,
-    ) -> mlua::Result<ExecResult> {
-        match self {
-            Backend::Sqlite(b) => b.exec(lua, sql, params).await,
-            Backend::Postgres(b) => b.exec(lua, sql, params).await,
-        }
-    }
-
-    pub(crate) async fn query(
-        &self,
-        lua: &Lua,
-        sql: String,
-        params: Vec<Value>,
-    ) -> mlua::Result<Table> {
-        match self {
-            Backend::Sqlite(b) => b.query(lua, sql, params).await,
-            Backend::Postgres(b) => b.query(lua, sql, params).await,
-        }
-    }
-
     pub(crate) async fn begin(&self) -> mlua::Result<Transaction> {
         match self {
             Backend::Sqlite(b) => Ok(Transaction::Sqlite(b.begin().await?)),
@@ -133,97 +125,40 @@ impl Backend {
         }
     }
 
-    pub(crate) async fn kv_get(&self, lua: &Lua, key: String) -> mlua::Result<Value> {
-        match self {
-            Backend::Sqlite(b) => b.kv_get(lua, key).await,
-            Backend::Postgres(b) => b.kv_get(lua, key).await,
-        }
-    }
+    forward_async! {
+        Backend { Sqlite, Postgres }
 
-    pub(crate) async fn kv_set(
-        &self,
-        key: String,
-        value: Vec<u8>,
-        ttl_ms: Option<i64>,
-    ) -> mlua::Result<()> {
-        match self {
-            Backend::Sqlite(b) => b.kv_set(key, value, ttl_ms).await,
-            Backend::Postgres(b) => b.kv_set(key, value, ttl_ms).await,
-        }
-    }
-
-    pub(crate) async fn kv_delete(&self, key: String) -> mlua::Result<()> {
-        match self {
-            Backend::Sqlite(b) => b.kv_delete(key).await,
-            Backend::Postgres(b) => b.kv_delete(key).await,
-        }
-    }
-
-    pub(crate) async fn kv_add(
-        &self,
-        key: String,
-        value: Vec<u8>,
-        ttl_ms: Option<i64>,
-    ) -> mlua::Result<bool> {
-        match self {
-            Backend::Sqlite(b) => b.kv_add(key, value, ttl_ms).await,
-            Backend::Postgres(b) => b.kv_add(key, value, ttl_ms).await,
-        }
-    }
-
-    pub(crate) async fn kv_cas(
-        &self,
-        key: String,
-        expected: Option<Vec<u8>>,
-        new: Option<Vec<u8>>,
-        ttl_ms: Option<i64>,
-    ) -> mlua::Result<bool> {
-        match self {
-            Backend::Sqlite(b) => b.kv_cas(key, expected, new, ttl_ms).await,
-            Backend::Postgres(b) => b.kv_cas(key, expected, new, ttl_ms).await,
-        }
-    }
-
-    pub(crate) async fn kv_incr(
-        &self,
-        voice: &'static str,
-        key: String,
-        delta: i64,
-        ttl: Option<Ttl>,
-    ) -> mlua::Result<i64> {
-        match self {
-            Backend::Sqlite(b) => b.kv_incr(voice, key, delta, ttl).await,
-            Backend::Postgres(b) => b.kv_incr(voice, key, delta, ttl).await,
-        }
-    }
-
-    /// `false` when the key is absent or already expired.
-    pub(crate) async fn kv_expire(&self, key: String, ttl_ms: i64) -> mlua::Result<bool> {
-        match self {
-            Backend::Sqlite(b) => b.kv_expire(key, ttl_ms).await,
-            Backend::Postgres(b) => b.kv_expire(key, ttl_ms).await,
-        }
-    }
-
-    /// `None`: absent/expired. `Some(None)`: no expiry. `Some(Some(ms))`: remaining.
-    pub(crate) async fn kv_ttl(&self, key: String) -> mlua::Result<Option<Option<i64>>> {
-        match self {
-            Backend::Sqlite(b) => b.kv_ttl(key).await,
-            Backend::Postgres(b) => b.kv_ttl(key).await,
-        }
-    }
-
-    pub(crate) async fn kv_update(
-        &self,
-        lua: &Lua,
-        key: String,
-        func: Function,
-        ttl_ms: Option<i64>,
-    ) -> mlua::Result<Value> {
-        match self {
-            Backend::Sqlite(b) => b.kv_update(lua, key, func, ttl_ms).await,
-            Backend::Postgres(b) => b.kv_update(lua, key, func, ttl_ms).await,
-        }
+        fn exec(&self, lua: &Lua, sql: String, params: Vec<Value>) -> mlua::Result<ExecResult>;
+        fn query(&self, lua: &Lua, sql: String, params: Vec<Value>) -> mlua::Result<Table>;
+        fn kv_get(&self, lua: &Lua, key: String) -> mlua::Result<Value>;
+        fn kv_set(&self, key: String, value: Vec<u8>, ttl_ms: Option<i64>) -> mlua::Result<()>;
+        fn kv_delete(&self, key: String) -> mlua::Result<()>;
+        fn kv_add(&self, key: String, value: Vec<u8>, ttl_ms: Option<i64>) -> mlua::Result<bool>;
+        fn kv_cas(
+            &self,
+            key: String,
+            expected: Option<Vec<u8>>,
+            new: Option<Vec<u8>>,
+            ttl_ms: Option<i64>
+        ) -> mlua::Result<bool>;
+        fn kv_incr(
+            &self,
+            voice: &'static str,
+            key: String,
+            delta: i64,
+            ttl: Option<Ttl>
+        ) -> mlua::Result<i64>;
+        /// `false` when the key is absent or already expired.
+        fn kv_expire(&self, key: String, ttl_ms: i64) -> mlua::Result<bool>;
+        /// `None`: absent/expired. `Some(None)`: no expiry. `Some(Some(ms))`: remaining.
+        fn kv_ttl(&self, key: String) -> mlua::Result<Option<Option<i64>>>;
+        fn kv_update(
+            &self,
+            lua: &Lua,
+            key: String,
+            func: Function,
+            ttl_ms: Option<i64>
+        ) -> mlua::Result<Value>;
     }
 }
 
@@ -242,42 +177,13 @@ pub(crate) enum Transaction {
 }
 
 impl Transaction {
-    pub(crate) async fn exec(
-        &self,
-        lua: &Lua,
-        sql: String,
-        params: Vec<Value>,
-    ) -> mlua::Result<ExecResult> {
-        match self {
-            Transaction::Sqlite(t) => t.exec(lua, sql, params).await,
-            Transaction::Postgres(t) => t.exec(lua, sql, params).await,
-        }
-    }
+    forward_async! {
+        Transaction { Sqlite, Postgres }
 
-    pub(crate) async fn query(
-        &self,
-        lua: &Lua,
-        sql: String,
-        params: Vec<Value>,
-    ) -> mlua::Result<Table> {
-        match self {
-            Transaction::Sqlite(t) => t.query(lua, sql, params).await,
-            Transaction::Postgres(t) => t.query(lua, sql, params).await,
-        }
-    }
-
-    pub(crate) async fn commit(&self) -> mlua::Result<()> {
-        match self {
-            Transaction::Sqlite(t) => t.commit().await,
-            Transaction::Postgres(t) => t.commit().await,
-        }
-    }
-
-    pub(crate) async fn rollback(&self) {
-        match self {
-            Transaction::Sqlite(t) => t.rollback().await,
-            Transaction::Postgres(t) => t.rollback().await,
-        }
+        fn exec(&self, lua: &Lua, sql: String, params: Vec<Value>) -> mlua::Result<ExecResult>;
+        fn query(&self, lua: &Lua, sql: String, params: Vec<Value>) -> mlua::Result<Table>;
+        fn commit(&self) -> mlua::Result<()>;
+        fn rollback(&self) -> ();
     }
 }
 

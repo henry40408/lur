@@ -167,20 +167,11 @@ pub fn install(
     factory: &Function,
     registry: Option<&Registry>,
 ) -> Result<(), RunError> {
-    let serve = lua.create_table().map_err(RunError::Init)?;
-    serve
-        .set(
-            "abort",
-            abort_fn(lua, lur, factory, registry).map_err(RunError::Init)?,
-        )
-        .map_err(RunError::Init)?;
-    serve
-        .set("http", http_fn(lua, registry).map_err(RunError::Init)?)
-        .map_err(RunError::Init)?;
-    serve
-        .set("cron", cron_fn(lua, registry).map_err(RunError::Init)?)
-        .map_err(RunError::Init)?;
-    lur.set("serve", serve).map_err(RunError::Init)?;
+    let serve = lua.create_table()?;
+    serve.set("abort", abort_fn(lua, lur, factory, registry)?)?;
+    serve.set("http", http_fn(lua, registry)?)?;
+    serve.set("cron", cron_fn(lua, registry)?)?;
+    lur.set("serve", serve)?;
     Ok(())
 }
 

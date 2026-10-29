@@ -26,63 +26,59 @@ use crate::runtime::RunError;
 const SNIFF_BYTES: usize = 1024;
 
 pub fn install(lua: &Lua, lur: &Table) -> Result<(), RunError> {
-    let charset = lua.create_table().map_err(RunError::Init)?;
+    let charset = lua.create_table()?;
 
-    let decode = lua
-        .create_function(|lua, (data, hint): (Value, Option<String>)| {
-            let data: mlua::LuaString = argcheck::arg(
-                lua,
-                data,
-                argcheck::ArgSpec {
-                    fname: "lur.charset.decode",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
-            let bytes = data.as_bytes();
-            let enc = match hint.as_deref().and_then(label_of) {
-                Some(label) => Some(lookup("lur.charset.decode", label)?),
-                None => None,
-            };
-            lua.create_string(decode_bytes(&bytes, enc).as_bytes())
-        })
-        .map_err(RunError::Init)?;
-    charset.set("decode", decode).map_err(RunError::Init)?;
+    let decode = lua.create_function(|lua, (data, hint): (Value, Option<String>)| {
+        let data: mlua::LuaString = argcheck::arg(
+            lua,
+            data,
+            argcheck::ArgSpec {
+                fname: "lur.charset.decode",
+                n: 1,
+                expected: "string",
+            },
+        )?;
+        let bytes = data.as_bytes();
+        let enc = match hint.as_deref().and_then(label_of) {
+            Some(label) => Some(lookup("lur.charset.decode", label)?),
+            None => None,
+        };
+        lua.create_string(decode_bytes(&bytes, enc).as_bytes())
+    })?;
+    charset.set("decode", decode)?;
 
-    let encode = lua
-        .create_function(|lua, (text, label): (Value, String)| {
-            let text: mlua::LuaString = argcheck::arg(
-                lua,
-                text,
-                argcheck::ArgSpec {
-                    fname: "lur.charset.encode",
-                    n: 1,
-                    expected: "string",
-                },
-            )?;
-            let text = std::str::from_utf8(&text.as_bytes())
-                .map_err(|e| {
-                    Error::runtime(format!(
-                        "lur.charset.encode: input is not valid UTF-8 ({e})"
-                    ))
-                })?
-                .to_owned();
-            let enc = lookup("lur.charset.encode", &label)?;
-            // encoding_rs would silently emit UTF-8 for UTF-16 targets.
-            if enc.output_encoding() != enc {
-                return Err(Error::runtime(format!(
-                    "lur.charset.encode: cannot encode to {}",
-                    enc.name()
-                )));
-            }
-            // Unmappable characters become `&#NNN;` references.
-            let (bytes, _, _) = enc.encode(&text);
-            lua.create_string(&*bytes)
-        })
-        .map_err(RunError::Init)?;
-    charset.set("encode", encode).map_err(RunError::Init)?;
+    let encode = lua.create_function(|lua, (text, label): (Value, String)| {
+        let text: mlua::LuaString = argcheck::arg(
+            lua,
+            text,
+            argcheck::ArgSpec {
+                fname: "lur.charset.encode",
+                n: 1,
+                expected: "string",
+            },
+        )?;
+        let text = std::str::from_utf8(&text.as_bytes())
+            .map_err(|e| {
+                Error::runtime(format!(
+                    "lur.charset.encode: input is not valid UTF-8 ({e})"
+                ))
+            })?
+            .to_owned();
+        let enc = lookup("lur.charset.encode", &label)?;
+        // encoding_rs would silently emit UTF-8 for UTF-16 targets.
+        if enc.output_encoding() != enc {
+            return Err(Error::runtime(format!(
+                "lur.charset.encode: cannot encode to {}",
+                enc.name()
+            )));
+        }
+        // Unmappable characters become `&#NNN;` references.
+        let (bytes, _, _) = enc.encode(&text);
+        lua.create_string(&*bytes)
+    })?;
+    charset.set("encode", encode)?;
 
-    lur.set("charset", charset).map_err(RunError::Init)?;
+    lur.set("charset", charset)?;
     Ok(())
 }
 

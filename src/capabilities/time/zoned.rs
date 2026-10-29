@@ -176,7 +176,7 @@ fn parse_lenient(text: &str, zone: Zone) -> Result<i64, String> {
 }
 
 pub fn install(lua: &Lua, time: &Table) -> Result<(), RunError> {
-    build(lua, time).map_err(RunError::Init)
+    build(lua, time).map_err(RunError::from)
 }
 
 fn build(lua: &Lua, time: &Table) -> mlua::Result<()> {
