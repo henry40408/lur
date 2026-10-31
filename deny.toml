@@ -11,15 +11,7 @@ version = 2
 # Deny crates with a known security advisory (RUSTSEC) or that have been yanked.
 # `ignore` holds advisory IDs we've reviewed and consciously accept.
 yanked = "deny"
-ignore = [
-    # ctutils 0.4.2 (transitive via digest -> sha2/hmac/sha1/md-5): `Choice`
-    # mask generation and `u128` comparisons may branch. lur never calls
-    # `ctutils::Choice`; `lur.crypto` compares with `subtle`. Fix 0.4.4+ is
-    # inside the 168h cooldown until 2026-10-30 04:02 UTC (0.4.5). Remove when
-    # upgraded.
-    # Tracked in https://github.com/henry40408/lur/issues/231
-    "RUSTSEC-2026-0385",
-]
+ignore = []
 
 [licenses]
 version = 2
