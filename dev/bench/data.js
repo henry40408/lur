@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793414586300,
+  "lastUpdate": 1793521138540,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -9821,6 +9821,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1442594,
             "range": "± 52215",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "720d1dbe4c7cbbc4206abf991f2324f4b6fcd957",
+          "message": "chore(deps): bump the github-actions group with 3 updates (#249)\n\nBumps the github-actions group with 3 updates: [Swatinem/rust-cache](https://github.com/swatinem/rust-cache), [taiki-e/install-action](https://github.com/taiki-e/install-action) and [docker/login-action](https://github.com/docker/login-action).\n\n\nUpdates `Swatinem/rust-cache` from 2.9.2 to 2.9.3\n- [Release notes](https://github.com/swatinem/rust-cache/releases)\n- [Changelog](https://github.com/Swatinem/rust-cache/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/swatinem/rust-cache/compare/6323deb102c322ba6fcbdcafc7e3dddab59af2b6...d1527c8f67ef9af357290475d4af4b0fab8f12e0)\n\nUpdates `taiki-e/install-action` from 2.87.29 to 2.87.31\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/8cca0918f8471c33515202b73f56ab27f2bed283...1e29709c0ec63babbe8f266397a465f29a825f91)\n\nUpdates `docker/login-action` from 4.6.0 to 4.7.0\n- [Release notes](https://github.com/docker/login-action/releases)\n- [Commits](https://github.com/docker/login-action/compare/dbcb813823bdd20940b903addbd779551569679f...81c6f93d4bc991e510b342a00b419b3bb4efc5c6)\n\n---\nupdated-dependencies:\n- dependency-name: Swatinem/rust-cache\n  dependency-version: 2.9.3\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: github-actions\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.87.31\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: github-actions\n- dependency-name: docker/login-action\n  dependency-version: 4.7.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: github-actions\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-01T16:14:33+08:00",
+          "tree_id": "61b3194de742508e1bedcb6633cb99272053f014",
+          "url": "https://github.com/henry40408/lur/commit/720d1dbe4c7cbbc4206abf991f2324f4b6fcd957"
+        },
+        "date": 1793521137906,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 323467,
+            "range": "± 6610",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 4465,
+            "range": "± 71",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 413564,
+            "range": "± 20914",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 20474485,
+            "range": "± 337002",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3145518,
+            "range": "± 38805",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1880187,
+            "range": "± 50122",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1893721,
+            "range": "± 45126",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2118064,
+            "range": "± 30614",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1608726,
+            "range": "± 30275",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 2007130,
+            "range": "± 49663",
             "unit": "ns/iter"
           }
         ]
