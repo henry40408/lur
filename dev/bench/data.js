@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793521138540,
+  "lastUpdate": 1794073803253,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -9905,6 +9905,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 2007130,
             "range": "± 49663",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "71506231320b7338b2ae436d39b71c743563e2c1",
+          "message": "chore(deps): bump the cargo group with 4 updates (#252)\n\nBumps the cargo group with 4 updates: [encoding_rs](https://github.com/hsivonen/encoding_rs), [pulldown-cmark](https://github.com/raphlinus/pulldown-cmark), [unicode-width](https://github.com/unicode-rs/unicode-width) and [rustix](https://github.com/bytecodealliance/rustix).\n\n\nUpdates `encoding_rs` from 0.8.42 to 0.8.44\n- [Commits](https://github.com/hsivonen/encoding_rs/compare/v0.8.42...v0.8.44)\n\nUpdates `pulldown-cmark` from 0.13.5 to 0.13.6\n- [Release notes](https://github.com/raphlinus/pulldown-cmark/releases)\n- [Commits](https://github.com/raphlinus/pulldown-cmark/compare/v0.13.5...v0.13.6)\n\nUpdates `unicode-width` from 0.2.2 to 0.2.3\n- [Commits](https://github.com/unicode-rs/unicode-width/compare/v0.2.2...v0.2.3)\n\nUpdates `rustix` from 1.1.5 to 1.1.6\n- [Release notes](https://github.com/bytecodealliance/rustix/releases)\n- [Changelog](https://github.com/bytecodealliance/rustix/blob/main/CHANGES.md)\n- [Commits](https://github.com/bytecodealliance/rustix/compare/v1.1.5...v1.1.6)\n\n---\nupdated-dependencies:\n- dependency-name: encoding_rs\n  dependency-version: 0.8.44\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: pulldown-cmark\n  dependency-version: 0.13.6\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: unicode-width\n  dependency-version: 0.2.3\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n- dependency-name: rustix\n  dependency-version: 1.1.6\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: cargo\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-08T01:44:56+08:00",
+          "tree_id": "bf218ffe77c575425ab65d9870634ab4f1a3e063",
+          "url": "https://github.com/henry40408/lur/commit/71506231320b7338b2ae436d39b71c743563e2c1"
+        },
+        "date": 1794073802260,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 175640,
+            "range": "± 3501",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3095,
+            "range": "± 82",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 256129,
+            "range": "± 9925",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 14145897,
+            "range": "± 126631",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 2129624,
+            "range": "± 97310",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1284499,
+            "range": "± 17223",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1318420,
+            "range": "± 36329",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2091185,
+            "range": "± 31454",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1080889,
+            "range": "± 8245",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1403075,
+            "range": "± 34125",
             "unit": "ns/iter"
           }
         ]
