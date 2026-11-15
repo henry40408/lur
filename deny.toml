@@ -11,7 +11,15 @@ version = 2
 # Deny crates with a known security advisory (RUSTSEC) or that have been yanked.
 # `ignore` holds advisory IDs we've reviewed and consciously accept.
 yanked = "deny"
-ignore = []
+ignore = [
+    # ammonia: mXSS needs `math`/`mi`/`svg` allowed; lur uses `Builder::default()`,
+    # whose allowlist has none of them. Fixed in 4.2.5; upgrade after its cooldown.
+    "RUSTSEC-2026-0533",
+    # libsqlite3-sys: only exposed when opening a DB file (and its -wal) written by an
+    # untrusted party; lur opens only the operator-supplied `--db` path. sqlx-sqlite 0.9.0
+    # pins libsqlite3-sys <0.38, so the fixed >=0.39 can't be adopted yet.
+    "RUSTSEC-2026-0459",
+]
 
 [licenses]
 version = 2
