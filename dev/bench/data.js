@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794074997478,
+  "lastUpdate": 1794741292739,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -10073,6 +10073,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 1594151,
             "range": "± 22652",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "2316687+henry40408@users.noreply.github.com",
+            "name": "Heng-Yi Wu",
+            "username": "henry40408"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7a896659ad738fa4b8e70c4e71049d21cb8f555c",
+          "message": "chore(deps): ignore RUSTSEC-2026-0533 and RUSTSEC-2026-0459 (#257)\n\nNeither is reachable in lur, and neither can be fixed by an upgrade yet.\nTracked in #256.\n\nCo-authored-by: Claude Sonnet 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-15T19:11:03+08:00",
+          "tree_id": "4eb3e8b67deeaaa6370dab4dcc65c4b3ff8ff44e",
+          "url": "https://github.com/henry40408/lur/commit/7a896659ad738fa4b8e70c4e71049d21cb8f555c"
+        },
+        "date": 1794741291722,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 348221,
+            "range": "± 14246",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 5376,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 392044,
+            "range": "± 1923",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 21782652,
+            "range": "± 303224",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 3353671,
+            "range": "± 17133",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1901002,
+            "range": "± 33025",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 2151639,
+            "range": "± 17725",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2169211,
+            "range": "± 26989",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1659587,
+            "range": "± 11842",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 2027103,
+            "range": "± 32282",
             "unit": "ns/iter"
           }
         ]
