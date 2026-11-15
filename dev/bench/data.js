@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794741292739,
+  "lastUpdate": 1794743433104,
   "repoUrl": "https://github.com/henry40408/lur",
   "entries": {
     "lur criterion": [
@@ -10157,6 +10157,90 @@ window.BENCHMARK_DATA = {
             "name": "coroutine_resume_10k",
             "value": 2027103,
             "range": "± 32282",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ba0adab5313734812eae5cdf22148155d59df116",
+          "message": "chore(deps): bump toml (#255)\n\nBumps the cargo group with 1 update: [toml](https://github.com/toml-rs/toml).\n\n\nUpdates `toml` from 1.1.8+spec-1.1.0 to 1.2.1+spec-1.1.0\n- [Commits](https://github.com/toml-rs/toml/compare/toml-v1.1.8...toml-v1.2.1)\n\n---\nupdated-dependencies:\n- dependency-name: toml\n  dependency-version: 1.2.1+spec-1.1.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nCo-authored-by: Heng-Yi Wu <2316687+henry40408@users.noreply.github.com>",
+          "timestamp": "2026-11-15T19:45:17+08:00",
+          "tree_id": "844ba6aa99642c072f269168228ef79a66719159",
+          "url": "https://github.com/henry40408/lur/commit/ba0adab5313734812eae5cdf22148155d59df116"
+        },
+        "date": 1794743432700,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "vm_cold_start",
+            "value": 180536,
+            "range": "± 5667",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "trivial_script",
+            "value": 3088,
+            "range": "± 181",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compute_loop_hook_overhead",
+            "value": 260104,
+            "range": "± 18830",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_map_20k_limit_64",
+            "value": 13695740,
+            "range": "± 882597",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_all_small_x1000",
+            "value": 2113938,
+            "range": "± 109595",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "async_race_small_x1000",
+            "value": 1257827,
+            "range": "± 53090",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_hit_x1000",
+            "value": 1344810,
+            "range": "± 20304",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "state_fetch_concurrent_miss_x16",
+            "value": 2124629,
+            "range": "± 29266",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_wrap_generator_10k",
+            "value": 1096292,
+            "range": "± 28017",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "coroutine_resume_10k",
+            "value": 1416868,
+            "range": "± 91400",
             "unit": "ns/iter"
           }
         ]
