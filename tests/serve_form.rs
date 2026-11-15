@@ -20,9 +20,7 @@ fn serve(source: &str) -> Server {
 }
 
 fn post_ct(s: &Server, path: &str, ct: Option<&str>, body: &str) -> Response {
-    let headers = ct
-        .map(|c| vec![("Content-Type".to_owned(), c.to_owned())])
-        .unwrap_or_default();
+    let headers = ct.map_or_default(|c| vec![("Content-Type".to_owned(), c.to_owned())]);
     s.dispatch_raw(&RawRequest {
         method: "POST".into(),
         path: path.into(),
@@ -145,9 +143,7 @@ fn form_wrong_content_type_is_a_script_error() {
             .dispatch_raw(&RawRequest {
                 method: "POST".into(),
                 path: "/f".into(),
-                headers: ct
-                    .map(|c| vec![("content-type".to_owned(), c.to_owned())])
-                    .unwrap_or_default(),
+                headers: ct.map_or_default(|c| vec![("content-type".to_owned(), c.to_owned())]),
                 body: b"a=1".to_vec(),
                 ..Default::default()
             })

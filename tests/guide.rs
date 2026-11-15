@@ -122,8 +122,7 @@ fn serve_examples_answer_requests() {
                     path: path.into(),
                     query: query.into(),
                     headers: ctype
-                        .map(|c| vec![("content-type".to_owned(), c.to_owned())])
-                        .unwrap_or_default(),
+                        .map_or_default(|c| vec![("content-type".to_owned(), c.to_owned())]),
                     body: body.as_bytes().to_vec(),
                 })
                 .unwrap_or_else(|e| panic!("{method} {path} failed: {e}"))

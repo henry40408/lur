@@ -167,13 +167,12 @@ impl Node {
 
     fn attrs(&self, lua: &Lua) -> mlua::Result<Table> {
         let pairs: Vec<(String, String)> = self.with_element(|_, el| {
-            el.map(|e| {
+            el.map_or_default(|e| {
                 e.value()
                     .attrs()
                     .map(|(k, v)| (k.to_owned(), v.to_owned()))
                     .collect()
             })
-            .unwrap_or_default()
         })?;
         let out = lua.create_table()?;
         for (k, v) in pairs {
