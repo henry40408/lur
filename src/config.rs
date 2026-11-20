@@ -65,12 +65,11 @@ impl Config {
             allow
                 .and_then(|a| a.get(key))
                 .and_then(|v| v.as_array())
-                .map(|a| {
+                .map_or_default(|a| {
                     a.iter()
                         .filter_map(|x| x.as_str().map(String::from))
                         .collect()
                 })
-                .unwrap_or_default()
         };
 
         Ok(Self {

@@ -1580,8 +1580,7 @@ fn response_from(values: MultiValue) -> Result<Response, RunError> {
     let body = table
         .get::<Option<mlua::LuaString>>("body")
         .map_err(RunError::Script)?
-        .map(|s| s.as_bytes().to_vec())
-        .unwrap_or_default();
+        .map_or_default(|s| s.as_bytes().to_vec());
     let headers = match table.get::<Value>("headers").map_err(RunError::Script)? {
         Value::Nil => Vec::new(),
         Value::Table(t) => headers_from(&t).map_err(RunError::Script)?,

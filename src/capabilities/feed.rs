@@ -270,13 +270,11 @@ fn timestamp(ms: i64) -> Result<DateTime<Utc>, String> {
 }
 
 fn rfc3339(ms: i64) -> String {
-    timestamp(ms)
-        .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-        .unwrap_or_default()
+    timestamp(ms).map_or_default(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
 fn rfc2822(ms: i64) -> String {
-    timestamp(ms).map(|d| d.to_rfc2822()).unwrap_or_default()
+    timestamp(ms).map_or_default(|d| d.to_rfc2822())
 }
 
 /// Drop characters XML 1.0 forbids; scraped content often has them. quick-xml

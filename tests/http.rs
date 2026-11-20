@@ -119,8 +119,7 @@ fn http_form_opt_encodes_sorted_and_sets_content_type() {
         let ct = req
             .headers
             .get("content-type")
-            .map(|v| v.to_str().unwrap().to_owned())
-            .unwrap_or_default();
+            .map_or_default(|v| v.to_str().unwrap().to_owned());
         let body = String::from_utf8_lossy(&req.body).into_owned();
         ResponseTemplate::new(200).set_body_string(format!("{ct}|{body}"))
     });
